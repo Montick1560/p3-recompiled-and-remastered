@@ -1391,8 +1391,16 @@ fn write_output_files(
         std::fs::write(output_dir.join(filename), content)?;
     }
 
-    // Write support files
-    std::fs::write(output_dir.join("funcs.h"), &batch_output.funcs_h)?;
+    // Write support files. funcs.h also declares HLE import names: generated
+    // code calls them verbatim (emit_call_hle), and only PRX modules have a
+    // non-empty imports[] — for ET_EXEC the appended string is empty, keeping
+    // Patapon's funcs.h byte-identical (issue #52 Gate B).
+    let funcs_h = format!(
+        "{}{}",
+        batch_output.funcs_h,
+        psp_emitter::batch::emit_hle_import_decls(&analysis.imports)
+    );
+    std::fs::write(output_dir.join("funcs.h"), funcs_h)?;
     std::fs::write(output_dir.join("mid_entries.cpp"), mid_entries_cpp)?;
     std::fs::write(
         output_dir.join("dispatch.cpp"),

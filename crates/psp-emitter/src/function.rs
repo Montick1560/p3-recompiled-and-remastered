@@ -1308,18 +1308,26 @@ fn emit_op(
             gen.emit_gpr_write(*rd, &format!("(int32_t)(int16_t)({rt_s})"));
         }
         MipsOp::Clz { rd, rs } => {
-            let rs_s = gen.emit_gpr_read(*rs);
-            let rd_s = gen.emit_gpr_read(*rd);
-            gen.emit_raw(&format!(
-                "{rd_s} = ({rs_s} == 0) ? 32 : __builtin_clz((uint32_t)({rs_s}));"
-            ));
+            // EMIT-12: $zero destination is architecturally discarded; only
+            // data decoded as code produces `clz $zero` (PRX binary_scan
+            // regions, issue #52) and `0 = ...` would not compile.
+            if *rd != Reg::Zero {
+                let rs_s = gen.emit_gpr_read(*rs);
+                let rd_s = gen.emit_gpr_read(*rd);
+                gen.emit_raw(&format!(
+                    "{rd_s} = ({rs_s} == 0) ? 32 : __builtin_clz((uint32_t)({rs_s}));"
+                ));
+            }
         }
         MipsOp::Clo { rd, rs } => {
-            let rs_s = gen.emit_gpr_read(*rs);
-            let rd_s = gen.emit_gpr_read(*rd);
-            gen.emit_raw(&format!(
-                "{rd_s} = (~({rs_s}) == 0) ? 32 : __builtin_clz((uint32_t)(~({rs_s})));"
-            ));
+            // EMIT-12: see Clz above.
+            if *rd != Reg::Zero {
+                let rs_s = gen.emit_gpr_read(*rs);
+                let rd_s = gen.emit_gpr_read(*rd);
+                gen.emit_raw(&format!(
+                    "{rd_s} = (~({rs_s}) == 0) ? 32 : __builtin_clz((uint32_t)(~({rs_s})));"
+                ));
+            }
         }
         MipsOp::Min { rd, rs, rt } => {
             let rs_s = gen.emit_gpr_read(*rs);

@@ -251,6 +251,13 @@ fn detect_mid_entries_from_xrefs(
         if func_starts.contains(&to_addr) {
             continue;
         }
+        // Instruction addresses are 4-aligned; an unaligned xref target is
+        // data noise (e.g. a RAW_SCAN word that happens to look like a code
+        // pointer), and the emitter could never label it (issue #52 Gate A:
+        // one such target at 0x08B3124E broke the parent's mid-entry switch).
+        if to_addr % 4 != 0 {
+            continue;
+        }
 
         let pos = sorted_funcs.partition_point(|(s, _, _)| *s <= to_addr);
         if pos == 0 {
