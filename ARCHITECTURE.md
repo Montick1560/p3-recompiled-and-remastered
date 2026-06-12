@@ -54,7 +54,7 @@ All under `crates/`:
 | `mid_entries.cpp` | Mid-function entry point wrappers |
 | `funcs.h` | Forward declarations for all generated functions |
 | `include/recomp.h` | `recomp_context` struct, register aliases, memory macros, `RECOMP_LOOKUP` declaration |
-| `CMakeLists.txt` | Generated build fragment — globs `batch_*.cpp` only |
+| `CMakeLists.txt` | Generated build fragment — globs `batch_*.cpp` only; defines `{module_name}_recomp` plus the stable alias `psp::recomp` |
 | `recompile_report.json` | Silent-path audit: counts, decode errors, unresolved NIDs, unhandled relocations, dispatch-target audit, dedup renames (schema in `crates/psp-cli/src/report.rs`; usage in DEBUGGING.md "#37") |
 | `fingerprint.json` | Build fingerprint: content hash of the codegen-determining Rust sources + analysis.json hash + `cross_mid` flag + counts. Verified at runtime CMake configure by `runtime/cmake/check_fingerprint.py` — stale output/ fails configure (recipe in `crates/psp-cli/src/fingerprint.rs`; usage in DEBUGGING.md "#36") |
 | `include/recomp_fingerprint.h` | Generated header with the fingerprint hash/flag/timestamp; `runtime/src/main.cpp` prints it as the first boot line |
@@ -63,6 +63,18 @@ Every recompiled function has the signature
 `void(uint8_t* rdram, recomp_context* ctx)` (`FuncPtr` in `recomp.h`). The FPU register file in
 `recomp_context` exposes `float f[32]` and `uint32_t fi[32]` as aliasing views of the same
 storage via an anonymous union.
+
+### Runtime ↔ output contract (issue #47 Phase 1)
+
+The runtime selects its output directory through the CMake cache variable
+`PSPRECOMP_OUTPUT_DIR` (default `../output`, validated at configure time alongside the
+issue #36 fingerprint check) and links the stable target `psp::recomp` — an ALIAS the
+generated `CMakeLists.txt` defines for `{module_name}_recomp`. The runtime therefore
+never hardcodes a game's module name or output path; building against another game is
+`cmake -B build-<game> -S runtime -DPSPRECOMP_OUTPUT_DIR=/abs/path/<game>_output`.
+Runtime hooks that wrap specific guest functions resolve them through the dispatch table
+at boot (`RECOMP_LOOKUP` against the pristine table) instead of `extern FUN_*`
+declarations, so no game-specific symbols are required at link time.
 
 ## Runtime Subsystems
 
