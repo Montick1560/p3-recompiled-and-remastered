@@ -129,13 +129,37 @@ void lw_lock_blocking(uint8_t* rdram, recomp_context* ctx,
     psp_thread_note_wait(tag);
 
     const bool timed = (timeout_ptr != 0);
+
+    // Tiny-timeout rounding: PPSSPP __KernelWaitLwMutex (sceKernelMutex.cpp
+    // lines 857-863) rounds very short timeouts up before scheduling the wait
+    // timer so the hardware-observable minimum granularity is preserved.
+    uint32_t raw_us = timed ? psp_mem_read<uint32_t>(rdram, timeout_ptr) : 0;
+    if (timed) {
+        if (raw_us <= 3)
+            raw_us = 25;
+        else if (raw_us <= 249)
+            raw_us = 250;
+    }
     auto deadline = std::chrono::steady_clock::now() +
-        std::chrono::microseconds(
-            timed ? psp_mem_read<uint32_t>(rdram, timeout_ptr) : 0);
+        std::chrono::microseconds(raw_us);
 
     int32_t err = 0;
     for (;;) {
         if (lw_fast_lock(rdram, wa, count, &err)) {
+            // Write remaining time back through the timeout pointer on
+            // successful acquisition — matches PPSSPP's
+            // __KernelUnlockLwMutexForThread (sceKernelMutex.cpp lines
+            // 726-731) which unconditionally writes cyclesLeft->us on
+            // both the acquire and timeout completion paths.
+            if (timed) {
+                auto remaining = deadline - std::chrono::steady_clock::now();
+                uint32_t us_left = (remaining.count() > 0)
+                    ? static_cast<uint32_t>(
+                          std::chrono::duration_cast<std::chrono::microseconds>(
+                              remaining).count())
+                    : 0u;
+                psp_mem_write<uint32_t>(rdram, timeout_ptr, us_left);
+            }
             ctx->r[2] = SCE_OK;
             break;
         }
@@ -171,12 +195,19 @@ void lw_lock_blocking(uint8_t* rdram, recomp_context* ctx,
 
 // sceKernelCreateLwMutex(workarea, name, attr, initialCount, optionsPtr).
 // The 5th argument arrives in t0 (r8): PSP syscall stubs pass up to 8 args
-// in $a0-$t3. Options are size-checked-and-ignored (PPSSPP parity).
+// in $a0-$t3.
+//
+// optionsPtr handling: PPSSPP (sceKernelMutex.cpp line 701-705) reads the
+// size word at optionsPtr and emits WARN_LOG_REPORT if size > 4; it does NOT
+// read or act on any remaining option bytes. We match that behavior: if
+// optionsPtr is non-zero we read the size word and ignore the options block
+// entirely (no warning log in our HLE since we have no sceKernel log channel).
 void hle_sceKernelCreateLwMutex(uint8_t* rdram, recomp_context* ctx) {
     uint32_t wa = static_cast<uint32_t>(ctx->r[4]);
     uint32_t name_ptr = static_cast<uint32_t>(ctx->r[5]);
     uint32_t attr = static_cast<uint32_t>(ctx->r[6]);
     int32_t init_count = ctx->r[7];
+    uint32_t options_ptr = static_cast<uint32_t>(ctx->r[8]);  // $t0
 
     if (name_ptr == 0) {
         ctx->r[2] = SCE_KERNEL_ERROR_ERROR;
@@ -190,6 +221,11 @@ void hle_sceKernelCreateLwMutex(uint8_t* rdram, recomp_context* ctx) {
         ((attr & PSP_MUTEX_ATTR_RECURSIVE) == 0 && init_count > 1)) {
         ctx->r[2] = SCE_KERNEL_ERROR_ILLEGAL_COUNT;
         return;
+    }
+
+    // Read (and discard) the options size word — matches PPSSPP lines 701-705.
+    if (options_ptr != 0) {
+        (void)psp_mem_read<uint32_t>(rdram, options_ptr);
     }
 
     std::unique_lock<std::mutex> lock(g_lw_mtx);
