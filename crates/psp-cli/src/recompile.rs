@@ -122,14 +122,25 @@ pub(crate) fn prepare_emission(
     let segment_bytes = decode_segment_bytes(&analysis);
     tracing::info!("Decoded {} segments", segment_bytes.len());
 
+    // Curated per-game force entries come from the --config manifest
+    // (games/<id>/game.toml [recompile], issue #46) — empty without one.
+    let force_entries = config.force_entries()?;
+    let force_entries_cross_mid = config.force_entries_cross_mid()?;
+    let force_mid_entries = config.force_mid_entries()?;
+
     // Enhanced function discovery: three-pass scan replaces vtable_miss_addresses.txt sidecar
-    let discovery = enhance_function_discovery(&mut analysis, &segment_bytes);
+    let discovery = enhance_function_discovery(
+        &mut analysis,
+        &segment_bytes,
+        &force_entries,
+        &force_entries_cross_mid,
+    );
     tracing::info!("Total functions after enhancement: {}", analysis.functions.len());
 
     // Force-inject mid-entries that Ghidra missed but are confirmed call targets
-    // observed as repeated LOOKUP_MISS in the runtime. Mirrors FORCE_ENTRIES but
+    // observed as repeated LOOKUP_MISS in the runtime. Mirrors force_entries but
     // for mid-function entry points inside an existing parent function.
-    inject_force_mid_entries(&mut analysis);
+    inject_force_mid_entries(&mut analysis, &force_mid_entries);
 
     // PSPRECOMP_CROSS_MID=1: coalesce Ghidra-over-split shared-frame siblings,
     // then run systematic cross-function mid-jump recovery (D2+D3a, 19G/19H).
@@ -271,6 +282,23 @@ pub fn run_recompile(
         psp_emitter::emit_module_header(&module_facts),
     )
     .with_context(|| format!("Failed to write {}", inc_dir.join("recomp_module.h").display()))?;
+
+    // Generated per-game choices header (issue #46, #47 Phase 4): the
+    // manifest's runtime-relevant keys. Emitted with generic no-op defaults
+    // when recompile ran without --config — the runtime never parses TOML.
+    let game_choices = psp_emitter::GameChoices {
+        game_id: prep.config.game_id().to_string(),
+        boot_path: prep.config.boot_path().to_string(),
+        heap_override: prep.config.heap_override()?,
+        asset_layer_bnd: prep.config.asset_layer_is_bnd()?,
+    };
+    std::fs::write(
+        inc_dir.join("recomp_game_config.h"),
+        psp_emitter::emit_game_config_header(&game_choices),
+    )
+    .with_context(|| {
+        format!("Failed to write {}", inc_dir.join("recomp_game_config.h").display())
+    })?;
 
     // Emit mid-entry wrappers
     let parent_name_map = build_parent_name_map(&prep.analysis.functions);
@@ -452,6 +480,8 @@ fn segment_range(segment_bytes: &[(u32, Vec<u8>)]) -> (u32, u32) {
 fn enhance_function_discovery(
     analysis: &mut AnalysisJson,
     segment_bytes: &[(u32, Vec<u8>)],
+    force_entries: &[u32],
+    force_entries_cross_mid: &[u32],
 ) -> DiscoveryCounts {
     // Fix stale heuristic placeholder sizes (vtable_miss / binary_scan) to their
     // true extent BEFORE the discovery passes run. Otherwise the gap-start and
@@ -502,31 +532,19 @@ fn enhance_function_discovery(
     let (seg_start, seg_end) = segment_range(segment_bytes);
 
     // Force-inject addresses that Ghidra merged into larger functions.
-    // These are confirmed valid function starts via PPSSPP behavioral oracle
-    // but fail is_inside_function because Ghidra's function boundary is too wide.
-    const FORCE_ENTRIES: &[u32] = &[
-        0x0887E6C0, // GE display list builder; blocks all PRIM submission (quick-19)
-    ];
-
-    // D2 (19G/19H): vtable-adapter thunks in the Ghidra gap 0x088273FC..0x08827480.
-    // No xref of any kind; reached only by `j 0x08827470` inside the
-    // RAW_SCAN-recovered FUN_08858C48 (and `j 0x0882744C` inside FUN_08858C40).
-    // Each is a tiny `lw t9,0(a0); lw t9,0x34(t9); jr t9` vtable+0x34 dispatch.
-    // Without a function entry they LOOKUP_MISS -> noop_stub, dropping the
-    // loadinggroup inflate-destination allocator dispatch — which keeps the
-    // BROKEN decompressor at 0x089D7xxx from running. Recovering them makes it
-    // run and stall at the D3 inflate-heap wall (regression below D1 baseline),
-    // so they are gated behind the same env as the cross-function pass and only
-    // active together with D3a. (See the cross-function pass comment + 19H.)
-    const FORCE_ENTRIES_D2: &[u32] = &[
-        0x08827470, // no-arg vtable+0x34 dispatch (j-target of FUN_08858C48)
-        0x0882744C, // with-args variant (j-target of FUN_08858C40)
-    ];
+    // These are confirmed valid function starts (e.g. via PPSSPP behavioral
+    // oracle) but fail is_inside_function because Ghidra's function boundary
+    // is too wide. Curated PER GAME in the --config manifest
+    // (games/<id>/game.toml [recompile] force_entries /
+    // force_entries_cross_mid — issue #46); empty without a manifest. The
+    // cross-mid list is only active under PSPRECOMP_CROSS_MID=1 (it pairs
+    // with the cross-function mid-jump pass — see games/patapon/game.toml
+    // for the D2/19G/19H rationale on Patapon's entries).
     let cross_mid_on = std::env::var("PSPRECOMP_CROSS_MID").as_deref() == Ok("1");
 
     // Pass 0: Force entries (bypass is_inside_function for known-critical addresses)
-    let force_iter = FORCE_ENTRIES.iter().chain(
-        if cross_mid_on { FORCE_ENTRIES_D2.iter() } else { [].iter() },
+    let force_iter = force_entries.iter().chain(
+        if cross_mid_on { force_entries_cross_mid.iter() } else { [].iter() },
     );
     for &addr in force_iter {
         if addr >= seg_start
@@ -696,39 +714,13 @@ fn enhance_function_discovery(
 
 /// Force-inject mid-entry addresses that Ghidra's analysis missed but the
 /// runtime observes as repeated `LOOKUP_MISS` hits. Each pair is
-/// `(mid_entry_addr, parent_addr)`. The parent must already exist in
-/// `analysis.functions`; otherwise the entry is silently skipped. Existing
-/// `mid_entries` with the same address are not duplicated.
-fn inject_force_mid_entries(analysis: &mut AnalysisJson) {
-    const FORCE_MID_ENTRIES: &[(u32, u32)] = &[
-        // Mid-entry inside FUN_08827E7C, tail-called from FUN_08827F7C via
-        // RECOMP_LOOKUP(0x08827F44). 121 hits/run observed pre-fix.
-        (0x08827F44, 0x08827E7C),
-        // Vtable-referenced mid-entries inside FUN_08827E7C (the thread-lock
-        // acquire/release helper reached through FUN_0895B410's object vtable).
-        // analysis.json records DATA xrefs for both — they are stored as
-        // function pointers in the vtable at 0x08A44480 (slot +12 -> 0x08827EA0,
-        // slot +48 -> 0x08827EB0) — but the older analysis pass left them out of
-        // `mid_entries`. Without the mid-entry stub, an indirect vtable call to
-        // 0x08827EA0 LOOKUP_MISSes -> noop_stub: the helper body never runs, the
-        // caller's stack frame is left unbalanced (48-byte leak observed), and
-        // the callee-saved registers r16/r17 the caller restores from its frame
-        // come back corrupted. That corruption lands in FUN_0885FE90's state-2
-        // body: r16 (the asset manager) and r17 (the asset object) are garbage
-        // when it calls the by-name resolver FUN_088623E0, so every loadinggroup
-        // asset request (systemdata/systemlocalizedata/LogoData/titledata) fails
-        // and boot stalls before any draw. (D1, doc 19F.)
-        (0x08827EA0, 0x08827E7C),
-        (0x08827EB0, 0x08827E7C),
-        // Mid-entry 0x08827F9C inside FUN_08827F7C. The coalesce pass merges
-        // FUN_08827F7C into its owner FUN_08827E7C; the existing-mid re-point
-        // there carries this parent to the owner, so the owner's prologue switch
-        // gains `case 0x08827F9C`. The runtime band-aid hle_mid_08827F9C must
-        // therefore call FUN_08827E7C (see psp_hle_kernel_memory.cpp). Without
-        // this entry the band-aid's entry_point=0x08827F9C falls through.
-        (0x08827F9C, 0x08827F7C),
-    ];
-
+/// `(mid_entry_addr, parent_addr)`, curated per game in the --config
+/// manifest (`[recompile] force_mid_entries`, issue #46 — see
+/// games/patapon/game.toml for the rationale on Patapon's pairs). The parent
+/// must already exist in `analysis.functions`; otherwise the entry is
+/// skipped with a warning. Existing `mid_entries` with the same address are
+/// not duplicated.
+fn inject_force_mid_entries(analysis: &mut AnalysisJson, force_mid_entries: &[(u32, u32)]) {
     let existing: HashSet<u32> = analysis
         .mid_entries
         .iter()
@@ -742,13 +734,13 @@ fn inject_force_mid_entries(analysis: &mut AnalysisJson) {
         .collect();
 
     let mut injected = 0usize;
-    for &(entry, parent) in FORCE_MID_ENTRIES {
+    for &(entry, parent) in force_mid_entries {
         if existing.contains(&entry) {
             continue;
         }
         if !parents.contains(&parent) {
             tracing::warn!(
-                "FORCE_MID_ENTRIES: parent 0x{:08X} not in functions list; \
+                "force_mid_entries: parent 0x{:08X} not in functions list; \
                  skipping mid-entry 0x{:08X}",
                 parent,
                 entry,

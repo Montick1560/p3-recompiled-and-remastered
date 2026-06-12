@@ -44,7 +44,8 @@ or GUI interaction unless explicitly noted.
 ```bash
 # Rust pipeline
 cargo build --release && cargo test --release
-PSPRECOMP_CROSS_MID=1 cargo run --release -- recompile analysis.json -o output
+PSPRECOMP_CROSS_MID=1 cargo run --release -- recompile analysis.json \
+    --config games/patapon/game.toml -o output
 
 # Runtime (Release for verification, Debug for lldb)
 cmake -B runtime/build -S runtime && cmake --build runtime/build -j$(sysctl -n hw.ncpu)
@@ -406,12 +407,15 @@ cargo run --release -- analyze --ghidra-dir $(brew --prefix ghidra)/libexec \
 jq --slurpfile fresh /tmp/fresh-analysis.json \
     '.module = $fresh[0].module | .imports = $fresh[0].imports' \
     analysis.json > analysis-upgraded.json && mv analysis-upgraded.json analysis.json
-PSPRECOMP_CROSS_MID=1 cargo run --release -- recompile analysis.json -o output \
+PSPRECOMP_CROSS_MID=1 cargo run --release -- recompile analysis.json \
+    --config games/patapon/game.toml -o output \
     --expect-functions 14104 --expect-mid-entries 2022
 ```
 
-(Long-term fix: re-express the 524 vtable_miss addresses as curated per-game data —
-manifest `force_entries`, #47 Phase 4 — so a fresh analyze becomes sufficient.)
+(The manifest `force_entries` mechanism (#47 Phase 4) can carry the 524 vtable_miss
+addresses as curated per-game data, but the grafted baseline remains the documented
+Patapon path until issue #54 — fresh-analyze output currently fails to compile on an
+emitter goto-label bug — is fixed.)
 
 **The graft is mandatory, not just preferred:** recompiling the *fresh* (non-grafted)
 Patapon analysis currently emits code that does not compile — `FUN_08827E7C` in
@@ -456,7 +460,8 @@ Authoritative schema doc: module header of `crates/psp-cli/src/report.rs`.
 ### Count assertions (--expect flags)
 
 ```bash
-PSPRECOMP_CROSS_MID=1 cargo run --release -- recompile analysis.json -o output \
+PSPRECOMP_CROSS_MID=1 cargo run --release -- recompile analysis.json \
+    --config games/patapon/game.toml -o output \
     --expect-functions 14104 --expect-mid-entries 2022   # Patapon baseline
 ```
 

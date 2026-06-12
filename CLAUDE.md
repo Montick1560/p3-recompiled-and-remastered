@@ -11,7 +11,7 @@ PSP static recompiler: Rust analysis/decode/emit pipeline produces C++17 output;
 
 ```
 psprecomp analyze --ghidra-dir <ghidra-install>/libexec BOOT.BIN -> analysis.json
-psprecomp recompile analysis.json -o output -> output/ (C++17: batch_*.cpp, dispatch.cpp, data_sections.cpp, etc.)
+psprecomp recompile analysis.json --config games/<id>/game.toml -o output -> output/ (C++17: batch_*.cpp, dispatch.cpp, data_sections.cpp, etc.)
 cmake -B runtime/build -S runtime && cmake --build runtime/build -> psprecomp_runtime
 ```
 
@@ -80,7 +80,7 @@ These decisions are accumulated from 18+ completed plans. Violating them causes 
 cargo build --release
 cargo run --release -- analyze --ghidra-dir <ghidra-install>/libexec BOOT.BIN
 # e.g. on macOS with Homebrew: --ghidra-dir $(brew --prefix ghidra)/libexec
-cargo run --release -- recompile analysis.json -o output
+cargo run --release -- recompile analysis.json --config games/patapon/game.toml -o output
 cargo test
 
 # C++ runtime (Release)

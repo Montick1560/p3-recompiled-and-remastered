@@ -42,7 +42,9 @@ enum Commands {
         /// Output directory for generated C++ project (default: output/)
         #[arg(short, long, default_value = "output")]
         output: std::path::PathBuf,
-        /// Optional TOML game config for stubs, skips, patches
+        /// Per-game manifest (games/<id>/game.toml): force entries, stubs,
+        /// skips, patches + [game]/[boot]/[module]/[runtime] choices emitted
+        /// into recomp_game_config.h. Optional; absent = generic defaults.
         #[arg(long)]
         config: Option<std::path::PathBuf>,
         /// Functions per .cpp file (default: 50)
@@ -67,8 +69,8 @@ enum Commands {
         /// What to dump: functions | imports | relocations | segments | mid_entries
         #[arg(long, conflicts_with = "target")]
         what: Option<String>,
-        /// Optional TOML game config (stubs, skips, patches) — pass the same
-        /// config used for recompile so the dumped C++ matches the batch output
+        /// Per-game manifest (games/<id>/game.toml) — pass the same
+        /// manifest used for recompile so the dumped C++ matches the batch output
         #[arg(long)]
         config: Option<std::path::PathBuf>,
     },

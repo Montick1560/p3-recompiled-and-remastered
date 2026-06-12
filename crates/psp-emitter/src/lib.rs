@@ -21,6 +21,7 @@ pub mod call_resolver;
 pub mod mid_entry;
 pub mod batch;
 pub mod module_header;
+pub mod game_config_header;
 pub mod syscall_table;
 #[cfg(test)]
 mod tests;
@@ -33,4 +34,5 @@ pub use init_array::emit_psp_call_constructors;
 pub use cmake::emit_cmake_lists;
 pub use batch::emit_function_batches;
 pub use module_header::{emit_module_header, ModuleFacts};
+pub use game_config_header::{emit_game_config_header, GameChoices};
 pub use syscall_table::emit_syscall_table;

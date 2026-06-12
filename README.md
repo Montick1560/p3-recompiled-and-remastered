@@ -143,8 +143,10 @@ cargo test
 # 2. Analyze the binary -> analysis.json (requires Ghidra + ghidra-allegrex; once per binary)
 cargo run --release -- analyze --ghidra-dir "$(brew --prefix ghidra)/libexec" BOOT.BIN
 
-# 3. Generate C++ source from analysis.json (PSPRECOMP_CROSS_MID=1 is required)
-PSPRECOMP_CROSS_MID=1 cargo run --release -- recompile analysis.json -o output
+# 3. Generate C++ source from analysis.json (PSPRECOMP_CROSS_MID=1 is required;
+#    --config selects the per-game manifest — Patapon's carries its force entries)
+PSPRECOMP_CROSS_MID=1 cargo run --release -- recompile analysis.json \
+    --config games/patapon/game.toml -o output
 
 # 4. Build the runtime
 cmake -B runtime/build -S runtime && cmake --build runtime/build -j$(sysctl -n hw.ncpu)
