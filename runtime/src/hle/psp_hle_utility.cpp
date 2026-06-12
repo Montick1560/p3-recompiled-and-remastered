@@ -629,7 +629,9 @@ static void hle_sceKernelGetModuleIdByAddress(
     uint8_t* rdram, recomp_context* ctx
 ) {
     uint32_t addr = static_cast<uint32_t>(ctx->r[4]);
-    // Boot module text range (generated facts, #47 P2)
+    // If this ever gains a real UNKNOWN_MODULE branch: PPSSPP matches by memory
+    // block (RECOMP_SEG0_VADDR..+MEMSZ), NOT the text range — data/.bss addresses
+    // must still resolve to the module UID (sceKernelModule.cpp:2388).
     constexpr uint32_t TEXT_START = RECOMP_MODULE_TEXT_START;
     constexpr uint32_t TEXT_END = TEXT_START + RECOMP_MODULE_TEXT_SIZE;
     if (addr >= TEXT_START && addr < TEXT_END) {
