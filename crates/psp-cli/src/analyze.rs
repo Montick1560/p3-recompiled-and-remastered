@@ -33,6 +33,11 @@ pub fn run_ghidra_analysis(binary: &Path, ghidra_dir: &Path, output: &Path) -> R
         .to_owned();
     let headless = ghidra_dir.join("support/analyzeHeadless");
 
+    // Ghidra aborts if the project parent directory doesn't exist (e.g. a
+    // fresh boot cleared /tmp) — create it instead of failing cryptically.
+    std::fs::create_dir_all("/tmp/ghidra_projects")
+        .context("Failed to create /tmp/ghidra_projects")?;
+
     let status = Command::new(&headless)
         .args([
             "/tmp/ghidra_projects",
