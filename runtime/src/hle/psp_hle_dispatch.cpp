@@ -342,17 +342,21 @@ static int g_unimpl_slot_count = 0;
 
 static void hle_unimpl_call(int slot, uint8_t* rdram, recomp_context* ctx) {
     (void)rdram;
-    (void)ctx;
     HleUnimplSlot& s = g_unimpl_slots[slot];
     if (!s.logged) {
         s.logged = true;
         std::fprintf(stderr,
             "[HLE] UNIMPLEMENTED import %s called "
-            "(NID 0x%08X, module %s, stub 0x%08X) — behaving as a no-op\n",
+            "(NID 0x%08X, module %s, stub 0x%08X) — no-op returning 0\n",
             s.stub->func_name, s.stub->nid, s.stub->module_name,
             s.stub->stub_addr);
     }
-    // Mirror the raw stub body ("jr $ra; nop"): no register effects.
+    // Deterministic return: v0 = 0 (SCE_OK). The raw stub body
+    // ("jr $ra; nop") leaves whatever was in r2 — every caller that
+    // consumes the result then branches on garbage (e.g. .hack//Link's
+    // main wait loop branching on sceKernelGetThreadCurrentPriority,
+    // L5 investigation). 0 is the least-surprise PSP success value.
+    ctx->r[2] = SCE_OK;
 }
 
 template <int N>
@@ -372,15 +376,15 @@ static constexpr auto g_unimpl_wrappers =
 // Shared overflow fallback: still loud, just not per-stub-identified.
 static void hle_unimpl_overflow(uint8_t* rdram, recomp_context* ctx) {
     (void)rdram;
-    (void)ctx;
     static bool logged = false;
     if (!logged) {
         logged = true;
         std::fprintf(stderr,
             "[HLE] UNIMPLEMENTED import called (slot table overflowed at %d; "
-            "raise HLE_UNIMPL_MAX_SLOTS to identify it) — behaving as a no-op\n",
+            "raise HLE_UNIMPL_MAX_SLOTS to identify it) — no-op returning 0\n",
             HLE_UNIMPL_MAX_SLOTS);
     }
+    ctx->r[2] = SCE_OK;  // deterministic v0, same as hle_unimpl_call
 }
 
 /// Allocate a loud unimplemented-stub wrapper bound to `stub`.
