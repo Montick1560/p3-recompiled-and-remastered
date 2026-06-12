@@ -164,7 +164,7 @@ fn run_hle_entry_scan(
     } else {
         // ELF (like Patapon): discover via the consolidated .lib.stub walker.
         // seg_data_vecs holds the loaded segment bytes; bases come from the
-        // (rebased, once T5 lands) segment vaddrs.
+        // rebased segment vaddrs (ET_EXEC rebases by 0, i.e. linked addresses).
         let seg_bases: Vec<u32> = segments.iter().map(|s| s.p_vaddr).collect();
         hle_entry_scanner::discover_import_stubs_for_elf(
             elf_obj,
@@ -238,9 +238,10 @@ pub fn run_analyze(
     output: &std::path::PathBuf,
     ghidra_dir: Option<&std::path::PathBuf>,
     nid_db: &std::path::PathBuf,
+    load_base_override: Option<u32>,
 ) -> Result<()> {
     use base64::engine::general_purpose::STANDARD as B64;
-    use psp_parser::{elf, imports, nid, prx, reloc};
+    use psp_parser::{elf, nid, prx};
 
     tracing::info!("Analyzing {}", binary.display());
 
@@ -248,94 +249,52 @@ pub fn run_analyze(
     let raw_data = std::fs::read(binary)
         .with_context(|| format!("Cannot read {}", binary.display()))?;
 
-    // 2. Parse ELF/PRX
+    // 2. Parse ELF/PRX; compute the load base exactly once (plan D3)
     let elf_obj = elf::parse_elf(&raw_data)?;
     let is_prx = prx::is_prx(&elf_obj);
     tracing::info!("Binary type: {}", if is_prx { "PRX" } else { "ELF" });
+    let load_base = crate::prx_load::compute_load_base(is_prx, load_base_override);
+    if is_prx {
+        tracing::info!("PRX load base: 0x{load_base:08X}");
+    }
 
-    // 3. Extract segments (BSS zeroed to p_memsz)
-    let segments = elf::extract_segments(&raw_data, &elf_obj);
+    // 3. Extract segments (BSS zeroed to p_memsz) and rebase them. Heap base,
+    // seg_bases, JSON segment records, and the HLE scan all derive from the
+    // rebased p_vaddr values (no-op for ET_EXEC: load_base == 0).
+    let mut segments = elf::extract_segments(&raw_data, &elf_obj);
+    elf::rebase_segments(&mut segments, load_base);
     let heap_base = elf::calculate_heap_base(&segments);
     tracing::info!("Heap base: 0x{heap_base:08X}");
 
     // 4. Parse and apply relocations (PRX only)
     let (mut seg_data_vecs, seg_bases): (Vec<Vec<u8>>, Vec<u32>) =
         segments.iter().map(|s| (s.data.clone(), s.p_vaddr)).unzip();
-    let mut all_reloc_entries = vec![];
-
-    if is_prx {
-        let tables = prx::find_reloc_tables(&elf_obj);
-        let type_b: Vec<&str> = tables
-            .iter()
-            .filter(|t| t.format == prx::RelocFormat::TypeB)
-            .map(|t| t.source.as_str())
-            .collect();
-        if !type_b.is_empty() {
-            bail!(
-                "Type-B (0x700000A1) packed relocations not yet supported (found in {}); \
-                 see .planning/research/52-prx-format-spec.md §5",
-                type_b.join(", ")
-            );
-        }
-        // Apply per table (PPSSPP applies each reloc section independently —
-        // HI16 pairing must not scan across table boundaries).
-        let mut reloc_stats = reloc::RelocStats::default();
-        for t in &tables {
-            let end = t
-                .file_offset
-                .checked_add(t.size)
-                .filter(|&end| end <= raw_data.len())
-                .with_context(|| {
-                    format!(
-                        "reloc table {} out of file bounds: offset 0x{:X} + size 0x{:X} \
-                         exceeds file size 0x{:X}",
-                        t.source,
-                        t.file_offset,
-                        t.size,
-                        raw_data.len()
-                    )
-                })?;
-            let entries = reloc::parse_type_a_entries(&raw_data[t.file_offset..end])
-                .with_context(|| format!("parsing reloc table {}", t.source))?;
-            reloc_stats.absorb(
-                reloc::apply_relocations(&mut seg_data_vecs, &seg_bases, &entries)
-                    .with_context(|| format!("applying reloc table {}", t.source))?,
-            );
-            all_reloc_entries.extend(entries);
-        }
-        tracing::info!(
-            "Applied {} relocations from {} tables ({} skipped, {} unhandled types — \
-             see warnings above)",
-            reloc_stats.handled,
-            tables.len(),
-            reloc_stats.skipped_bad,
-            reloc_stats.unhandled.len(),
-        );
-    }
-
-    // 5. Parse NIDs and import stubs
-    let nid_map = nid::load_nid_database(nid_db)
-        .with_context(|| format!("Cannot load NID DB from {}", nid_db.display()))?;
-    let import_stubs = if is_prx {
-        // D6: parse module info and imports from the (relocated) image so all
-        // pointer fields are final. load_base threading lands with T5; until
-        // then PRX segments are base-0 and the image is self-consistent.
-        let image = psp_parser::image::LoadedImage::new(&seg_bases, &seg_data_vecs);
-        let mi_va =
-            prx::locate_module_info_va(&elf_obj, 0).context("PRX module info location failed")?;
-        let mi = prx::parse_module_info(&image, mi_va)
-            .with_context(|| format!("PRX import parsing failed (module info at 0x{mi_va:08X})"))?;
-        tracing::info!(
-            "SceModuleInfo '{}' at 0x{mi_va:08X}: gp=0x{:08X}, libstub 0x{:08X}..0x{:08X}",
-            mi.name,
-            mi.gp,
-            mi.libstub,
-            mi.libstub_end
-        );
-        imports::parse_import_stubs(&image, &mi, &nid_map)
-            .with_context(|| format!("PRX import parsing failed (module info at 0x{mi_va:08X})"))?
+    let all_reloc_entries = if is_prx {
+        crate::prx_load::apply_prx_relocations(
+            &raw_data,
+            &elf_obj,
+            &mut seg_data_vecs,
+            &seg_bases,
+        )?
     } else {
         vec![]
+    };
+
+    // 5. Parse NIDs and import stubs (D6: from the relocated image, so every
+    // pointer field is final; D8: hard error — never a silent empty imports[])
+    let nid_map = nid::load_nid_database(nid_db)
+        .with_context(|| format!("Cannot load NID DB from {}", nid_db.display()))?;
+    let (import_stubs, prx_module_info) = if is_prx {
+        let (stubs, mi) = crate::prx_load::parse_prx_imports(
+            &elf_obj,
+            load_base,
+            &seg_bases,
+            &seg_data_vecs,
+            &nid_map,
+        )?;
+        (stubs, Some(mi))
+    } else {
+        (vec![], None)
     };
     tracing::info!("Resolved {} import stubs", import_stubs.len());
 
@@ -378,6 +337,23 @@ pub fn run_analyze(
     let constructors: Vec<String> =
         serde_json::from_value(ghidra_data["constructors"].clone())
             .unwrap_or_default();
+
+    // 8.1. Merge fixes (plan T5 item 7; both idempotent no-ops on Patapon):
+    // rename the module-start function to "entry" (the runtime hard-links the
+    // symbol), and drop jal_target artifacts outside the loaded image.
+    let entry_va = load_base.wrapping_add(elf_obj.header.e_entry as u32);
+    crate::prx_load::rename_entry_function(&mut functions, entry_va);
+    let image_start = segments.iter().map(|s| s.p_vaddr).min().unwrap_or(0);
+    let image_end = segments
+        .iter()
+        .map(|s| s.p_vaddr.saturating_add(s.p_memsz))
+        .max()
+        .unwrap_or(0);
+    let dropped =
+        crate::prx_load::drop_out_of_image_jal_targets(&mut functions, image_start, image_end);
+    if dropped > 0 {
+        tracing::info!("Dropped {dropped} out-of-image jal_target artifact(s)");
+    }
 
     // 8.5. HLE entry point discovery
     // Scan decoded instructions near import stub call sites for function
@@ -453,6 +429,14 @@ pub fn run_analyze(
         binary_path: binary.display().to_string(),
         module_name,
         heap_base: format!("0x{heap_base:08X}"),
+        // PRX provenance (plan T5 item 8): absent for ET_EXEC (skip_serializing_if)
+        // so the Patapon analysis.json stays byte-identical.
+        prx: prx_module_info.map(|mi| JsonPrxInfo {
+            load_base: format!("0x{load_base:08X}"),
+            module_name: mi.name.clone(),
+            gp: format!("0x{:08X}", mi.gp),
+            entry: format!("0x{entry_va:08X}"),
+        }),
         functions,
         imports: import_stubs
             .iter()

@@ -12,6 +12,10 @@ pub struct AnalysisJson {
     pub module_name: String,
     /// Hex string, e.g. "0x08AE0000"
     pub heap_base: String,
+    /// PRX provenance — present only for relocatable (e_type 0xFFA0) modules.
+    /// Absent (not null) for ET_EXEC so their output stays byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prx: Option<JsonPrxInfo>,
     pub functions: Vec<JsonFunction>,
     pub imports: Vec<JsonImport>,
     pub relocations: Vec<JsonReloc>,
@@ -19,6 +23,22 @@ pub struct AnalysisJson {
     pub constructors: Vec<String>,
     pub mid_entries: Vec<JsonMidEntry>,
     pub segments: Vec<JsonSegment>,
+}
+
+/// PRX load provenance: how a relocatable module was rebased (issue #52 T5).
+///
+/// All fields are hex strings per the schema convention.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonPrxInfo {
+    /// Load base the module was rebased to, e.g. "0x08804000".
+    pub load_base: String,
+    /// SceModuleInfo name (e.g. "hacklink") — the in-binary module name, not
+    /// the top-level `module_name` file stem.
+    pub module_name: String,
+    /// Post-relocation $gp value from SceModuleInfo.
+    pub gp: String,
+    /// Module entry point: load_base + e_entry.
+    pub entry: String,
 }
 
 /// A function detected by Ghidra or cross-validation.
@@ -100,6 +120,7 @@ mod tests {
             binary_path: "BOOT.BIN".into(),
             module_name: "patapon".into(),
             heap_base: "0x08AE0000".into(),
+            prx: None,
             functions: vec![JsonFunction {
                 name: "FUN_08804000".into(),
                 address: "0x08804000".into(),
@@ -120,5 +141,44 @@ mod tests {
         let back: AnalysisJson = serde_json::from_str(&s).unwrap();
         assert_eq!(back.module_name, "patapon");
         assert_eq!(back.functions[0].address, "0x08804000");
+    }
+
+    #[test]
+    fn prx_none_is_absent_from_serialized_output() {
+        // ET_EXEC byte-identity (plan D7): the key must be absent, not null.
+        let json = AnalysisJson {
+            binary_path: "BOOT.BIN".into(),
+            module_name: "patapon".into(),
+            heap_base: "0x08AE0000".into(),
+            prx: None,
+            functions: vec![],
+            imports: vec![],
+            relocations: vec![],
+            xrefs: vec![],
+            constructors: vec![],
+            mid_entries: vec![],
+            segments: vec![],
+        };
+        let s = serde_json::to_string(&json).unwrap();
+        assert!(!s.contains("prx"), "prx key must be absent for ET_EXEC: {s}");
+        // Old files (no prx key) deserialize via #[serde(default)].
+        let back: AnalysisJson = serde_json::from_str(&s).unwrap();
+        assert!(back.prx.is_none());
+    }
+
+    #[test]
+    fn prx_some_round_trips_all_hex_fields() {
+        let prx = JsonPrxInfo {
+            load_base: "0x08804000".into(),
+            module_name: "examplemod".into(),
+            gp: "0x08C85BD0".into(),
+            entry: "0x08BC3D98".into(),
+        };
+        let s = serde_json::to_string(&prx).unwrap();
+        let back: JsonPrxInfo = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.load_base, "0x08804000");
+        assert_eq!(back.module_name, "examplemod");
+        assert_eq!(back.gp, "0x08C85BD0");
+        assert_eq!(back.entry, "0x08BC3D98");
     }
 }

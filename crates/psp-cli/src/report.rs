@@ -380,6 +380,7 @@ mod tests {
             binary_path: "BOOT.BIN".into(),
             module_name: "test".into(),
             heap_base: "0x08AE0000".into(),
+            prx: None,
             functions: vec![func(0x0880_4000, "FUN_08804000")],
             imports: vec![],
             relocations: vec![],

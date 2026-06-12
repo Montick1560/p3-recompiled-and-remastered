@@ -3,6 +3,7 @@ mod config;
 mod dump;
 mod fingerprint;
 mod hle_entry_scanner;
+mod prx_load;
 mod recompile;
 mod report;
 
@@ -30,6 +31,9 @@ enum Commands {
         /// Path to ppsspp_niddb.xml
         #[arg(long, default_value = "data/niddb/ppsspp_niddb.xml")]
         nid_db: std::path::PathBuf,
+        /// Override the PRX load base (hex, default 0x08804000). Ignored for ET_EXEC.
+        #[arg(long, value_parser = parse_hex_u32)]
+        load_base: Option<u32>,
     },
     /// Recompile analysis.json to a C++17 project in the output directory
     Recompile {
@@ -70,17 +74,23 @@ enum Commands {
     },
 }
 
+/// Parse a hex u32 like "0x08804000" or "8804000" (clap value_parser).
+fn parse_hex_u32(s: &str) -> Result<u32, String> {
+    let t = s.trim().trim_start_matches("0x").trim_start_matches("0X");
+    u32::from_str_radix(t, 16).map_err(|e| format!("invalid hex address {s:?}: {e}"))
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Analyze { binary, output, ghidra_dir, nid_db } => {
+        Commands::Analyze { binary, output, ghidra_dir, nid_db, load_base } => {
             tracing_subscriber::fmt()
                 .with_env_filter(
                     tracing_subscriber::EnvFilter::from_default_env()
                         .add_directive(tracing::Level::INFO.into()),
                 )
                 .init();
-            crate::analyze::run_analyze(&binary, &output, ghidra_dir.as_ref(), &nid_db)?;
+            crate::analyze::run_analyze(&binary, &output, ghidra_dir.as_ref(), &nid_db, load_base)?;
         }
         Commands::Recompile {
             analysis, output, config, batch_size, expect_functions, expect_mid_entries,

@@ -77,6 +77,53 @@ pub fn extract_segments(data: &[u8], elf: &goblin::elf::Elf) -> Vec<Segment> {
         .collect()
 }
 
+/// Add `load_base` to every segment's `p_vaddr` (no-op when 0).
+///
+/// Relocatable PRX modules are linked at 0 and rebased to the PSP user-module
+/// load base (`crate::prx::PSP_USER_MODULE_BASE` by default) at load time;
+/// ET_EXEC binaries load where linked and pass `load_base == 0`. Everything
+/// downstream (heap base, relocation bases, JSON segment records, the HLE
+/// scan) derives from the rebased `p_vaddr` values automatically.
+pub fn rebase_segments(segments: &mut [Segment], load_base: u32) {
+    if load_base == 0 {
+        return;
+    }
+    for seg in segments {
+        seg.p_vaddr = seg.p_vaddr.wrapping_add(load_base);
+    }
+}
+
+#[cfg(test)]
+mod rebase_tests {
+    use super::*;
+
+    fn seg(p_vaddr: u32) -> Segment {
+        Segment {
+            p_vaddr,
+            p_filesz: 16,
+            p_memsz: 32,
+            p_flags: 5,
+            p_type: goblin::elf::program_header::PT_LOAD,
+            data: vec![0; 32],
+        }
+    }
+
+    #[test]
+    fn rebase_adds_load_base_to_every_vaddr() {
+        let mut segs = [seg(0), seg(0x1000)];
+        rebase_segments(&mut segs, 0x0880_4000);
+        assert_eq!(segs[0].p_vaddr, 0x0880_4000);
+        assert_eq!(segs[1].p_vaddr, 0x0880_5000);
+    }
+
+    #[test]
+    fn rebase_zero_is_a_noop() {
+        let mut segs = [seg(0x0880_4000)];
+        rebase_segments(&mut segs, 0);
+        assert_eq!(segs[0].p_vaddr, 0x0880_4000);
+    }
+}
+
 /// Calculate heap base as max(segment end addresses) rounded up to 64KB.
 ///
 /// ASSERT: heap_base > every segment's p_vaddr + p_memsz (V1 pitfall #8).
