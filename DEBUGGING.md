@@ -700,3 +700,16 @@ tables (0 skipped / 0 unhandled), module `hacklink`, gp 0x08C89BD0, 243 import s
 files pass `clang++ -std=c++17 -fsyntax-only`. Patapon: fresh analyze output byte-identical
 to a master-built run (modulo `binary_path`); gate 12/12; recompile baseline
 (14,104/2,022/283 under `PSPRECOMP_CROSS_MID=1`) unchanged.
+
+## #57 — byte-reproducible recompile output (emitter-change byte-diff gate)
+
+Two recompiles of the same analysis.json with the same binary produce a byte-identical
+output directory — `diff -r out1 out2` shows ONLY the three timestamp lines
+(`generated_at` in fingerprint.json + recompile_report.json, `RECOMP_FINGERPRINT_TIMESTAMP`
+in include/recomp_fingerprint.h). This holds under `PSPRECOMP_CROSS_MID=1` too: the
+coalesce pass registers absorbed-sibling mid-entries sorted by address (it previously
+iterated a HashMap, scrambling the wrapper order in mid_entries.cpp / funcs.h /
+dispatch.cpp on every run). Byte-diff against a master-built output is therefore a valid
+emitter regression gate with no sort-normalization needed; any other residual diff is a
+real behavior change. Regression test:
+`coalesce_mid_entry_registration_is_deterministic_and_sorted` (crates/psp-cli/src/recompile.rs).

@@ -1215,23 +1215,29 @@ fn coalesce_split_frame_siblings(
         }
     }
     // Register each absorbed sibling start as a mid-entry of its owner (dedup).
+    // Collected then sorted by mid-entry address before pushing: `absorbed` is
+    // a HashMap whose iteration order changes run-to-run, and the order of
+    // `analysis.mid_entries` flows verbatim into mid_entries.cpp, the funcs.h
+    // wrapper declarations, and dispatch.cpp — sorting keeps the output
+    // directory byte-reproducible (issue #57, matching the rayon batch
+    // sort-by-address convention).
     let existing_mids: HashSet<u32> = analysis
         .mid_entries
         .iter()
         .filter_map(|me| parse_hex_u32(&me.addr))
         .collect();
-    let mut new_mid_count = 0usize;
-    for (&owner, (_, members)) in &absorbed {
-        for &m in members {
-            if existing_mids.contains(&m) {
-                continue;
-            }
-            analysis.mid_entries.push(JsonMidEntry {
-                addr: format!("0x{:08X}", m),
-                parent_addr: format!("0x{:08X}", owner),
-            });
-            new_mid_count += 1;
-        }
+    let mut new_mids: Vec<(u32, u32)> = absorbed
+        .iter()
+        .flat_map(|(&owner, (_, members))| members.iter().map(move |&m| (m, owner)))
+        .filter(|(m, _)| !existing_mids.contains(m))
+        .collect();
+    new_mids.sort_by_key(|&(m, _)| m);
+    let new_mid_count = new_mids.len();
+    for &(m, owner) in &new_mids {
+        analysis.mid_entries.push(JsonMidEntry {
+            addr: format!("0x{:08X}", m),
+            parent_addr: format!("0x{:08X}", owner),
+        });
     }
 
     let total_siblings: usize = absorbed.values().map(|(_, m)| m.len()).sum();
@@ -1609,6 +1615,84 @@ mod tests {
             &HashMap::new(),
             false,
         )
+    }
+
+    /// Synthetic coalesce input: `pairs` frame owners, each immediately
+    /// followed by a contiguous no-prologue sibling that
+    /// `coalesce_split_frame_siblings` absorbs (registering one mid-entry per
+    /// pair). Layout per pair (stride 0x40, gap padded with nops):
+    /// owner = `addiu sp,sp,-16; jr ra; addiu sp,sp,16` (12 bytes, frame owner)
+    /// sibling at owner+12 = `jr ra; nop` (8 bytes, no prologue).
+    fn coalesce_fixture(pairs: u32) -> (AnalysisJson, Vec<(u32, Vec<u8>)>) {
+        let base = 0x0880_4000u32;
+        let stride = 0x40u32;
+        let mut analysis = analysis_with_module(None);
+        let mut words = vec![0u32; (pairs * stride / 4) as usize];
+        for i in 0..pairs {
+            let owner = base + i * stride;
+            let w = ((i * stride) / 4) as usize;
+            words[w] = 0x27BD_FFF0; // addiu sp, sp, -16  (frame prologue)
+            words[w + 1] = 0x03E0_0008; // jr ra
+            words[w + 2] = 0x27BD_0010; // addiu sp, sp, 16 (delay slot)
+            words[w + 3] = 0x03E0_0008; // sibling: jr ra
+            words[w + 4] = 0; // nop (delay slot)
+            for (addr, size) in [(owner, 12u64), (owner + 12, 8u64)] {
+                analysis.functions.push(JsonFunction {
+                    name: format!("FUN_{addr:08X}"),
+                    address: format!("0x{addr:08X}"),
+                    size,
+                    is_external: false,
+                    is_thunk: false,
+                    source: "ghidra".into(),
+                });
+            }
+        }
+        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        (analysis, vec![(base, bytes)])
+    }
+
+    /// Run the coalesce pass and emit every artifact whose bytes depend on
+    /// `analysis.mid_entries` order: mid_entries.cpp, the funcs.h wrapper
+    /// forward-declaration block, and dispatch.cpp.
+    fn coalesce_and_emit(
+        analysis: &mut AnalysisJson,
+        segs: &[(u32, Vec<u8>)],
+        pairs: usize,
+    ) -> (String, String, String) {
+        let owners = coalesce_split_frame_siblings(analysis, segs, &[]);
+        assert_eq!(owners.len(), pairs, "every owner must absorb its sibling");
+        assert_eq!(analysis.mid_entries.len(), pairs);
+        let parent_map = build_parent_name_map(&analysis.functions);
+        let (mid_cpp, fwd) = emit_mid_entry_wrappers(&analysis.mid_entries, &parent_map);
+        let dispatch = emit_dispatch_table(
+            &analysis.functions, &analysis.mid_entries, "boot", &HashMap::new(),
+        );
+        (mid_cpp, fwd, dispatch)
+    }
+
+    /// Issue #57: the coalesce pass collected new mid-entries by iterating a
+    /// HashMap, so mid_entries.cpp / funcs.h / dispatch.cpp wrapper order
+    /// changed run-to-run. Two emissions over the same input must be
+    /// byte-identical, and registration must follow address order.
+    #[test]
+    fn coalesce_mid_entry_registration_is_deterministic_and_sorted() {
+        const PAIRS: u32 = 12;
+        let (analysis, segs) = coalesce_fixture(PAIRS);
+
+        let mut a = analysis.clone();
+        let mut b = analysis;
+        let run_a = coalesce_and_emit(&mut a, &segs, PAIRS as usize);
+        let run_b = coalesce_and_emit(&mut b, &segs, PAIRS as usize);
+
+        let addrs: Vec<u32> =
+            a.mid_entries.iter().filter_map(|m| parse_hex_u32(&m.addr)).collect();
+        let mut sorted = addrs.clone();
+        sorted.sort_unstable();
+        assert_eq!(addrs, sorted, "mid-entries must be registered in address order");
+
+        assert_eq!(run_a.0, run_b.0, "mid_entries.cpp must be byte-reproducible");
+        assert_eq!(run_a.1, run_b.1, "funcs.h wrapper decls must be byte-reproducible");
+        assert_eq!(run_a.2, run_b.2, "dispatch.cpp must be byte-reproducible");
     }
 
     #[test]
