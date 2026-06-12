@@ -16,24 +16,102 @@
 
 // Forward declarations
 void psp_dlmalloc_set_arena(uint32_t base, uint32_t size);
-extern RECOMP_FUNC void FUN_08827E7C(uint8_t* rdram, recomp_context* ctx);
+
+// ---- Guest-function resolution (issue #47 Phase 1) ----
+// The hooks in this file wrap specific Patapon guest functions. They used
+// to name them as link-time extern declarations of generated FUN_* symbols,
+// which made the runtime unlinkable against any other game's output. The
+// originals are now resolved through the dispatch table instead:
+// psp_hle_kernel_memory_resolve_guest_funcs() runs immediately after
+// psp_init_dispatch_table() — while the table is PRISTINE — so each slot
+// captures the original generated function, exactly what the extern used
+// to bind to. Resolving any later would capture the hook wrappers
+// registered below (self-recursion) or main.cpp's own hooks (double
+// layering). A slot stays nullptr when the address is absent from this
+// game's dispatch table; call_guest() then warns once and no-ops.
+//
 // NOTE: FUN_08827F7C is coalesced into its frame owner FUN_08827E7C (the
 // emitter's Option-A coalesce pass), so it no longer exists as a standalone
-// symbol. 0x08827F7C and its mid-entry 0x08827F9C are now mid-entries of
+// function. 0x08827F7C and its mid-entry 0x08827F9C are now mid-entries of
 // FUN_08827E7C; call the owner with the appropriate entry_point instead.
-extern RECOMP_FUNC void FUN_08827a50(uint8_t* rdram, recomp_context* ctx);
-extern RECOMP_FUNC void FUN_088623e0(uint8_t* rdram, recomp_context* ctx);
-extern RECOMP_FUNC void FUN_0885eee8(uint8_t* rdram, recomp_context* ctx);
-extern RECOMP_FUNC void FUN_0885fe90(uint8_t* rdram, recomp_context* ctx);
+static FuncPtr s_FUN_08827E7C = nullptr;  // vtable dispatch trampoline (owner)
+static FuncPtr s_FUN_08827A50 = nullptr;  // vtable-dispatch allocator
+static FuncPtr s_FUN_088623E0 = nullptr;  // GE gatekeeper
+static FuncPtr s_FUN_0885EEE8 = nullptr;  // pool initializer
+static FuncPtr s_FUN_0885FE90 = nullptr;  // per-asset object state machine
 // Asset registry lookup + the next function (used as its upper code bound) — to
 // scope the strncpy r17 band-aid so it does NOT fire for the lookup's strncpy.
-extern RECOMP_FUNC void FUN_0896a6a4(uint8_t* rdram, recomp_context* ctx);
-extern RECOMP_FUNC void FUN_0896aa60(uint8_t* rdram, recomp_context* ctx);
+static FuncPtr s_FUN_0896A6A4 = nullptr;
+static FuncPtr s_FUN_0896AA60 = nullptr;
 // Subsystem-list push (FUN_089b4cec): a0=list(+0xa864), a1=&payload. Diagnostic
 // wrapper gated by PSPRECOMP_PUSH_TRACE captures construction-time node/links.
-extern RECOMP_FUNC void FUN_089b4cec(uint8_t* rdram, recomp_context* ctx);
+static FuncPtr s_FUN_089B4CEC = nullptr;
 // Subsystem-list+pool ctor (FUN_089b4420): a0=list-obj base; sentinel=a0+0x314.
-extern RECOMP_FUNC void FUN_089b4420(uint8_t* rdram, recomp_context* ctx);
+static FuncPtr s_FUN_089B4420 = nullptr;
+static FuncPtr s_FUN_089B4B68 = nullptr;  // list-iterator != comparison
+static FuncPtr s_FUN_08822D5C = nullptr;  // strncpy (called just before GE_GATE)
+static FuncPtr s_FUN_089B4DF0 = nullptr;  // engine frame tick ([DF0_PROBE])
+static FuncPtr s_FUN_089B440C = nullptr;  // std::list "set end" ([END_PROBE])
+static FuncPtr s_FUN_0885EFC8 = nullptr;  // loadinggroup driver ([CTX_PROBE])
+static FuncPtr s_FUN_088601C4 = nullptr;  // GE-finish completion cb ([CTX_PROBE])
+
+void psp_hle_kernel_memory_resolve_guest_funcs() {
+    struct Slot { FuncPtr* slot; uint32_t addr; };
+    static constexpr size_t k_slot_count = 15;
+    const Slot slots[k_slot_count] = {
+        { &s_FUN_08827E7C, 0x08827E7CU },
+        { &s_FUN_08827A50, 0x08827A50U },
+        { &s_FUN_088623E0, 0x088623E0U },
+        { &s_FUN_0885EEE8, 0x0885EEE8U },
+        { &s_FUN_0885FE90, 0x0885FE90U },
+        { &s_FUN_0896A6A4, 0x0896A6A4U },
+        { &s_FUN_0896AA60, 0x0896AA60U },
+        { &s_FUN_089B4CEC, 0x089B4CECU },
+        { &s_FUN_089B4420, 0x089B4420U },
+        { &s_FUN_089B4B68, 0x089B4B68U },
+        { &s_FUN_08822D5C, 0x08822D5CU },
+        { &s_FUN_089B4DF0, 0x089B4DF0U },
+        { &s_FUN_089B440C, 0x089B440CU },
+        { &s_FUN_0885EFC8, 0x0885EFC8U },
+        { &s_FUN_088601C4, 0x088601C4U },
+    };
+    size_t missing = 0;
+    for (const Slot& s : slots) {
+        *s.slot = psp_dispatch_probe_lookup(s.addr);
+        if (*s.slot == nullptr) {
+            missing++;
+            std::fprintf(stderr,
+                "[HLE] kernel-memory hook target 0x%08X absent from this "
+                "game's dispatch table — its hook will no-op\n", s.addr);
+        }
+    }
+    if (missing > 0) {
+        std::fprintf(stderr,
+            "[HLE] kernel-memory hooks: %zu/%zu wrapped guest fns missing "
+            "(these hooks are Patapon-specific; see issue #47)\n",
+            missing, k_slot_count);
+    }
+}
+
+/// Call a resolved guest function. When the slot is nullptr (address was
+/// absent from the dispatch table at resolve time), warn once per address
+/// and return without calling — the hook degrades to a transparent no-op.
+static void call_guest(FuncPtr fn, uint32_t addr,
+                       uint8_t* rdram, recomp_context* ctx) {
+    if (fn != nullptr) {
+        fn(rdram, ctx);
+        return;
+    }
+    static std::mutex warn_mutex;
+    {
+        std::lock_guard<std::mutex> lock(warn_mutex);
+        static std::unordered_set<uint32_t> warned;
+        if (!warned.insert(addr).second) return;
+    }
+    std::fprintf(stderr,
+        "[HLE] inert hook called: guest fn 0x%08X was never resolved\n",
+        addr);
+}
 extern thread_local uint32_t g_prev_func_addr;  // caller of last-dispatched fn
 extern thread_local uint32_t g_last_func_addr;  // last-dispatched fn addr
 extern thread_local uint32_t g_func_ring[32];   // ring of recent fn-entry addrs
@@ -812,7 +890,7 @@ static void hle_vtable_alloc(uint8_t* rdram, recomp_context* ctx) {
 
     // Allocator context has a valid vtable — fall through to the real
     // recompiled implementation.
-    FUN_08827a50(rdram, ctx);
+    call_guest(s_FUN_08827A50, 0x08827A50U, rdram, ctx);
 
 }
 
@@ -820,7 +898,7 @@ static void hle_vtable_alloc(uint8_t* rdram, recomp_context* ctx) {
 /// Sets entry_point so the parent dispatches to L_08827EA0.
 static void hle_mid_08827EA0(uint8_t* rdram, recomp_context* ctx) {
     ctx->entry_point = 0x08827EA0U;
-    FUN_08827E7C(rdram, ctx);
+    call_guest(s_FUN_08827E7C, 0x08827E7CU, rdram, ctx);
     ctx->entry_point = 0;
 }
 
@@ -828,7 +906,7 @@ static void hle_mid_08827EA0(uint8_t* rdram, recomp_context* ctx) {
 /// Sets entry_point so the parent dispatches to L_08827EB0 (function body).
 static void hle_mid_08827EB0(uint8_t* rdram, recomp_context* ctx) {
     ctx->entry_point = 0x08827EB0U;
-    FUN_08827E7C(rdram, ctx);
+    call_guest(s_FUN_08827E7C, 0x08827E7CU, rdram, ctx);
     ctx->entry_point = 0;
 }
 
@@ -836,7 +914,7 @@ static void hle_mid_08827EB0(uint8_t* rdram, recomp_context* ctx) {
 /// (FUN_08827F7C was merged into it). Dispatch to the owner via entry_point.
 static void hle_mid_08827F9C(uint8_t* rdram, recomp_context* ctx) {
     ctx->entry_point = 0x08827F9CU;
-    FUN_08827E7C(rdram, ctx);
+    call_guest(s_FUN_08827E7C, 0x08827E7CU, rdram, ctx);
     ctx->entry_point = 0;
 }
 
@@ -847,8 +925,7 @@ static void hle_mid_08827F9C(uint8_t* rdram, recomp_context* ctx) {
 // The list at obj+0xa864 should have 4 items. If the comparison
 // is called >100 times without returning "equal", the list is
 // corrupt (likely circular). Force "equal" to break the loop.
-extern RECOMP_FUNC void FUN_089b4b68(
-    uint8_t* rdram, recomp_context* ctx);
+// (Original FUN_089b4b68 resolved into s_FUN_089B4B68 at boot — #47 P1.)
 
 static void hle_list_iter_compare(
     uint8_t* rdram, recomp_context* ctx
@@ -927,12 +1004,12 @@ static void hle_list_iter_compare(
                     bad ? " <<< BAD (end hi-bits stripped)" : "");
             if (bad) fired_bad = true;
         }
-        FUN_089b4b68(rdram, ctx);
+        call_guest(s_FUN_089B4B68, 0x089B4B68U, rdram, ctx);
         return;
     }
 
     // Call the real function
-    FUN_089b4b68(rdram, ctx);
+    call_guest(s_FUN_089B4B68, 0x089B4B68U, rdram, ctx);
 
     if (ctx->r[2] == 0) {
         // Equal (loop would end) — reset counter
@@ -1007,7 +1084,7 @@ static void hle_list_iter_compare(
             ctx->r[2] = 0;
         } else {
             // Re-run the comparison now that the list is repaired
-            FUN_089b4b68(rdram, ctx);
+            call_guest(s_FUN_089B4B68, 0x089B4B68U, rdram, ctx);
         }
         iter_count = 0;
     } else {
@@ -1124,11 +1201,11 @@ static void hle_list_iter_compare(
 // the count, and the free-pool head. Gated by PSPRECOMP_PUSH_TRACE.
 static void hle_listctor_trace(uint8_t* rdram, recomp_context* ctx) {
     if (std::getenv("PSPRECOMP_PUSH_TRACE") == nullptr) {
-        FUN_089b4420(rdram, ctx);
+        call_guest(s_FUN_089B4420, 0x089B4420U, rdram, ctx);
         return;
     }
     uint32_t obj = static_cast<uint32_t>(ctx->r[4]);
-    FUN_089b4420(rdram, ctx);
+    call_guest(s_FUN_089B4420, 0x089B4420U, rdram, ctx);
     uint32_t sentinel = obj + 0x314u;
     uint32_t node_block = psp_mem_read<uint32_t>(rdram, obj + 0);
     uint32_t s_next = psp_mem_read<uint32_t>(rdram, sentinel + 0);
@@ -1143,7 +1220,7 @@ static void hle_listctor_trace(uint8_t* rdram, recomp_context* ctx) {
 
 static void hle_push_trace(uint8_t* rdram, recomp_context* ctx) {
     if (std::getenv("PSPRECOMP_PUSH_TRACE") == nullptr) {
-        FUN_089b4cec(rdram, ctx);
+        call_guest(s_FUN_089B4CEC, 0x089B4CECU, rdram, ctx);
         return;
     }
     uint32_t list = static_cast<uint32_t>(ctx->r[4]);
@@ -1160,7 +1237,7 @@ static void hle_push_trace(uint8_t* rdram, recomp_context* ctx) {
         "[PUSH_TRACE] list=0x%08X PRE next=0x%08X prev=0x%08X count=%u "
         "poolHeadPtr=0x%08X firstFree=0x%08X payload=0x%08X\n",
         list, pre_next, pre_prev, pre_count, pool_head_ptr, first_free, payload);
-    FUN_089b4cec(rdram, ctx);
+    call_guest(s_FUN_089B4CEC, 0x089B4CECU, rdram, ctx);
     uint32_t post_next = psp_mem_read<uint32_t>(rdram, list + 0);
     uint32_t post_prev = psp_mem_read<uint32_t>(rdram, list + 4);
     uint32_t post_count = psp_mem_read<uint32_t>(rdram, list + 0xc);
@@ -1291,7 +1368,7 @@ void hle_debug_088623E0(uint8_t* rdram, recomp_context* ctx) {
     }
 
     // Forward to real function
-    FUN_088623e0(rdram, ctx);
+    call_guest(s_FUN_088623E0, 0x088623E0U, rdram, ctx);
 }
 
 /// Debug hook for FUN_0885EEE8 — pool initializer.
@@ -1306,10 +1383,8 @@ static void hle_debug_0885EEE8(uint8_t* rdram, recomp_context* ctx) {
         "[POOL_INIT#%d] base=0x%08X caller=0x%08X%s\n",
         call_no, base, g_last_func_addr,
         suspicious ? " *** SUSPICIOUS BASE (missing 0x08800000?) ***" : "");
-    FUN_0885eee8(rdram, ctx);
+    call_guest(s_FUN_0885EEE8, 0x0885EEE8U, rdram, ctx);
 }
-
-extern RECOMP_FUNC void FUN_08822d5c(uint8_t* rdram, recomp_context* ctx);
 
 /// Debug hook + module-base fix for FUN_0885FE90 — object state machine.
 /// Logs the object pointer passed in r4 (stored as r17 inside).
@@ -1535,7 +1610,7 @@ static void hle_debug_0885FE90(uint8_t* rdram, recomp_context* ctx) {
     }
 
     uint32_t sp_before_fe90 = static_cast<uint32_t>(ctx->r[29]);
-    FUN_0885fe90(rdram, ctx);
+    call_guest(s_FUN_0885FE90, 0x0885FE90U, rdram, ctx);
     if (std::getenv("PSPRECOMP_CTX_PROBE") != nullptr) {
         uint32_t sp_after_fe90 = static_cast<uint32_t>(ctx->r[29]);
         if (sp_after_fe90 != sp_before_fe90) {
@@ -1588,9 +1663,12 @@ static void hle_debug_08822D5C(uint8_t* rdram, recomp_context* ctx) {
     // FIX: scope the band-aid to NOT fire when the caller is the registry lookup.
     void* caller = __builtin_return_address(0);
     uintptr_t cp  = reinterpret_cast<uintptr_t>(caller);
-    uintptr_t lk0 = reinterpret_cast<uintptr_t>(&FUN_0896a6a4);
-    uintptr_t lk1 = reinterpret_cast<uintptr_t>(&FUN_0896aa60);
-    bool from_lookup = (lk1 > lk0) && (cp >= lk0) && (cp < lk1);
+    // Host code-range of the registry lookup: [FUN_0896A6A4, FUN_0896AA60).
+    // Uses the boot-resolved originals (#47 P1) — same host addresses the
+    // former extern symbols had. nullptr (foreign game) disables the scope.
+    uintptr_t lk0 = reinterpret_cast<uintptr_t>(s_FUN_0896A6A4);
+    uintptr_t lk1 = reinterpret_cast<uintptr_t>(s_FUN_0896AA60);
+    bool from_lookup = (lk0 != 0) && (lk1 > lk0) && (cp >= lk0) && (cp < lk1);
 
     uint32_t r17 = static_cast<uint32_t>(ctx->r[17]);
     int call_no  = ++g_strncpy_call_count;
@@ -1623,13 +1701,12 @@ static void hle_debug_08822D5C(uint8_t* rdram, recomp_context* ctx) {
             static_cast<uint32_t>(ctx->r[5]), static_cast<uint32_t>(ctx->r[6]),
             from_lookup ? 1 : 0);
     }
-    FUN_08822d5c(rdram, ctx);
+    call_guest(s_FUN_08822D5C, 0x08822D5CU, rdram, ctx);
 }
 
 // [DF0_PROBE] env PSPRECOMP_DF0_PROBE: log every entry into the engine frame-tick
 // FUN_089b4df0 — capture a0 (engine ptr arg) and *a0 (engine base, -> r19).
 // Detects the re-entrant call whose engine ptr is truncated to 0 (the gate).
-extern RECOMP_FUNC void FUN_089b4df0(uint8_t* rdram, recomp_context* ctx);
 static void hle_df0_probe(uint8_t* rdram, recomp_context* ctx) {
     if (std::getenv("PSPRECOMP_DF0_PROBE") != nullptr) {
         static thread_local int df0_n = 0;
@@ -1644,14 +1721,13 @@ static void hle_df0_probe(uint8_t* rdram, recomp_context* ctx) {
             static_cast<uint32_t>(ctx->r[29]),
             static_cast<uint32_t>(ctx->r[31]), g_prev_func_addr);
     }
-    FUN_089b4df0(rdram, ctx);
+    call_guest(s_FUN_089B4DF0, 0x089B4DF0U, rdram, ctx);
 }
 
 // [END_PROBE] env PSPRECOMP_END_PROBE: wrap FUN_089b440c (*r4 = r5, the std::list
 // "set end" op). When r5 (the end value) has its high bits stripped (< 0x08000000),
 // dump the caller (g_prev_func_addr) — that is the function that computed a
 // truncated engine_base+0xa864 (the gate). Logs the first few hits then is quiet.
-extern RECOMP_FUNC void FUN_089b440c(uint8_t* rdram, recomp_context* ctx);
 static void hle_end_probe(uint8_t* rdram, recomp_context* ctx) {
     if (std::getenv("PSPRECOMP_END_PROBE") != nullptr) {
         uint32_t v = static_cast<uint32_t>(ctx->r[5]);
@@ -1672,7 +1748,7 @@ static void hle_end_probe(uint8_t* rdram, recomp_context* ctx) {
             std::fprintf(stderr, "\n");
         }
     }
-    FUN_089b440c(rdram, ctx);
+    call_guest(s_FUN_089B440C, 0x089B440CU, rdram, ctx);
 }
 
 // [CTX_PROBE] env PSPRECOMP_CTX_PROBE: confirm the thread/ctx model on the
@@ -1681,9 +1757,6 @@ static void hle_end_probe(uint8_t* rdram, recomp_context* ctx) {
 // recomp_context pointer the function was handed — and whether that ctx is the
 // current thread's OWN ctx (&g_current->ctx). A "ctx != own" hit is the
 // per-thread-ctx-model violation (a callback running on the wrong thread/ctx).
-extern RECOMP_FUNC void FUN_0885efc8(uint8_t* rdram, recomp_context* ctx);
-extern RECOMP_FUNC void FUN_088601c4(uint8_t* rdram, recomp_context* ctx);
-
 static void ctx_probe_log(const char* tag, uint8_t* rdram, recomp_context* ctx) {
     if (std::getenv("PSPRECOMP_CTX_PROBE") == nullptr) return;
     PspThread* t = psp_get_current_thread();
@@ -1707,11 +1780,11 @@ static void ctx_probe_log(const char* tag, uint8_t* rdram, recomp_context* ctx) 
 
 static void hle_ctx_probe_efc8(uint8_t* rdram, recomp_context* ctx) {
     ctx_probe_log("EFC8", rdram, ctx);
-    FUN_0885efc8(rdram, ctx);
+    call_guest(s_FUN_0885EFC8, 0x0885EFC8U, rdram, ctx);
 }
 static void hle_ctx_probe_601c4(uint8_t* rdram, recomp_context* ctx) {
     ctx_probe_log("601C4", rdram, ctx);
-    FUN_088601c4(rdram, ctx);
+    call_guest(s_FUN_088601C4, 0x088601C4U, rdram, ctx);
 }
 
 void psp_crt_override_init() {

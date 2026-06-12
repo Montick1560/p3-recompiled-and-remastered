@@ -132,6 +132,18 @@ void psp_hle_syscall(uint8_t* rdram, recomp_context* ctx, uint32_t code);
 /// Override a dispatch table entry (provided by generated dispatch.cpp).
 extern void psp_dispatch_register(uint32_t vaddr, FuncPtr fn);
 
+/// Resolve a guest address against the dispatch table WITHOUT the
+/// LOOKUP_MISS machinery: returns nullptr when absent (no log, no STRICT
+/// abort, no miss counters). Boot-time only — not thread-safe (#47 P1).
+extern FuncPtr psp_dispatch_probe_lookup(uint32_t vaddr);
+
+/// Resolve the guest functions wrapped by the kernel-memory hooks against
+/// the PRISTINE dispatch table. MUST be called immediately after
+/// psp_init_dispatch_table(), before any psp_dispatch_register override —
+/// later resolution would capture hook wrappers instead of the original
+/// generated functions (#47 P1; replaces link-time extern FUN_* refs).
+void psp_hle_kernel_memory_resolve_guest_funcs();
+
 /// Override the game's dlmalloc allocator (FUN_0881E558, FUN_0881E7A8)
 /// with a native bump allocator. Must be called after psp_hle_init().
 void psp_dlmalloc_override_init();

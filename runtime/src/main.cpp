@@ -128,6 +128,13 @@ int main(int argc, char* argv[]) {
     psp_init_dispatch_table();
     std::fprintf(stderr, "[RT] Dispatch table initialized\n");
 
+    // 3a. Resolve the kernel-memory hooks' wrapped guest functions against
+    //     the PRISTINE dispatch table (issue #47 Phase 1 — replaces the
+    //     former link-time extern FUN_* references). Must run before any
+    //     psp_dispatch_register override below or in psp_*_override_init,
+    //     or the slots would capture wrappers instead of the originals.
+    psp_hle_kernel_memory_resolve_guest_funcs();
+
     // 3b. Initialize I/O subsystem (disc0 path mapping)
     //     PSPRECOMP_DISC0 env var overrides default ./disc0 path
     const char* disc0_env = std::getenv("PSPRECOMP_DISC0");

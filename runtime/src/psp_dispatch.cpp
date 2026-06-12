@@ -255,10 +255,32 @@ static void psp_dump_lookup_misses() {
         sorted.size());
 }
 
+// [#47 P1] Probe mode: psp_dispatch_probe_lookup() resolves an address
+// WITHOUT engaging the miss machinery — no log, no counters, no STRICT
+// abort — and yields nullptr when the address is absent. Used at boot
+// (single-threaded, right after psp_init_dispatch_table()) to resolve the
+// guest functions that runtime hooks wrap, replacing the former link-time
+// `extern FUN_*` references into the generated output. Not thread-safe by
+// design; boot-time only.
+static bool g_probe_lookup = false;
+
+FuncPtr psp_dispatch_probe_lookup(uint32_t vaddr) {
+    g_probe_lookup = true;
+    FuncPtr fn = RECOMP_LOOKUP(vaddr);
+    g_probe_lookup = false;
+    return fn;
+}
+
 /// Called by RECOMP_LOOKUP (in dispatch.cpp) when an address is not in the
 /// dispatch table. Logs each unique miss on first hit and returns a noop
 /// stub or aborts if PSPRECOMP_STRICT=1.
 FuncPtr psp_on_lookup_miss(uint32_t vaddr) {
+    // Probe mode (#47 P1): report "absent" to psp_dispatch_probe_lookup
+    // without any side effects.
+    if (g_probe_lookup) {
+        return nullptr;
+    }
+
     // One-time check for STRICT mode environment variable
     if (!g_strict_checked) {
         const char* env = std::getenv("PSPRECOMP_STRICT");
