@@ -9,30 +9,8 @@
 //! files. This prevents C++ compilation errors when mid-entry wrappers and their
 //! parent functions are in different batch files (Pitfall 4 in RESEARCH.md).
 use rayon::prelude::*;
-use psp_parser::analysis_json::{JsonFunction, JsonImport};
+use psp_parser::analysis_json::JsonFunction;
 use crate::sanitize::sanitize_identifier;
-
-/// Forward declarations for HLE import stubs called by name from generated code.
-///
-/// `emit_call_hle` lowers a `jal` to an import stub as `{name}(rdram, ctx);`
-/// using the NID-resolved name verbatim — without these declarations a PRX
-/// module's batches (the only ones with non-empty `imports[]`, issue #52)
-/// fail to compile. The runtime provides the implementations. Returns an
-/// empty string for empty input, so ET_EXEC outputs stay byte-identical.
-pub fn emit_hle_import_decls(imports: &[JsonImport]) -> String {
-    if imports.is_empty() {
-        return String::new();
-    }
-    let mut names: Vec<&str> = imports.iter().map(|i| i.name.as_str()).collect();
-    names.sort_unstable();
-    names.dedup();
-    let mut h = String::with_capacity(names.len() * 64 + 80);
-    h.push_str("\n// HLE import stub declarations (runtime provides implementations)\n");
-    for name in names {
-        h.push_str(&format!("void {name}(uint8_t* rdram, recomp_context* ctx);\n"));
-    }
-    h
-}
 
 /// Result of a batch emission run.
 pub struct BatchOutput {
@@ -185,29 +163,6 @@ mod tests {
         assert!(result.funcs_h.contains("FUN_08804000"));
         assert!(result.funcs_h.contains("FUN_08810000"));
         assert!(result.funcs_h.contains("#pragma once"));
-    }
-
-    #[test]
-    fn hle_import_decls_empty_for_et_exec_and_deduped_for_prx() {
-        // ET_EXEC (Patapon): imports[] is empty — funcs.h must be unchanged.
-        assert_eq!(emit_hle_import_decls(&[]), "");
-        let imp = |name: &str, addr: &str| JsonImport {
-            nid: "0x12345678".into(),
-            stub_addr: addr.into(),
-            name: name.into(),
-            module_name: "sceFoo".into(),
-        };
-        let decls = emit_hle_import_decls(&[
-            imp("sceKernelLockLwMutex", "0x08BE0600"),
-            imp("NID_0x049D3ECE", "0x08BE0608"),
-            imp("sceKernelLockLwMutex", "0x08BE0610"), // dup name: one decl
-        ]);
-        assert_eq!(
-            decls.matches("sceKernelLockLwMutex(uint8_t* rdram").count(),
-            1,
-            "duplicate import names must be declared once: {decls}"
-        );
-        assert!(decls.contains("void NID_0x049D3ECE(uint8_t* rdram, recomp_context* ctx);"));
     }
 
     #[test]

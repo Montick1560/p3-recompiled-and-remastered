@@ -39,8 +39,10 @@ pub trait Generator {
     fn emit_call_lookup(&mut self, vaddr: u32);
     /// Indirect call via RECOMP_LOOKUP using a register value at runtime.
     fn emit_call_lookup_reg(&mut self, reg_expr: &str);
-    /// HLE stub call.
-    fn emit_call_hle(&mut self, stub_name: &str);
+    /// Call to a NID import stub: RECOMP_LOOKUP at the stub address (the
+    /// runtime binds the HLE handler there at psp_hle_init — issue #40);
+    /// `stub_name` is emitted as a trailing comment only.
+    fn emit_call_hle(&mut self, stub_addr: u32, stub_name: &str);
     /// Return from function.
     fn emit_return(&mut self);
     /// Emit a raw pre-formatted C++ statement (used for complex expressions).
@@ -142,8 +144,9 @@ impl Generator for TestGenerator {
         self.output.push(format!("CALL_LOOKUP_REG:{reg_expr}"));
     }
 
-    fn emit_call_hle(&mut self, stub_name: &str) {
-        self.output.push(format!("CALL_HLE:{stub_name}"));
+    fn emit_call_hle(&mut self, stub_addr: u32, stub_name: &str) {
+        self.output
+            .push(format!("CALL_HLE:0x{stub_addr:08X}:{stub_name}"));
     }
 
     fn emit_return(&mut self) {

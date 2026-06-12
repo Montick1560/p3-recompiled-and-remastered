@@ -242,6 +242,23 @@ pub fn run_recompile(
     // an analysis.json without them must fail loud, not emit a half-output.
     let module_facts = module_facts_from_analysis(&prep.analysis, analysis_path)?;
 
+    // Generated NID binding table input (issue #40): an empty imports[] means
+    // the analysis predates the import walker running for this format — the
+    // runtime would boot with ZERO HLE bindings (every sce* call a no-op), a
+    // guaranteed silent failure. Hard error with the fix.
+    if prep.analysis.imports.is_empty() {
+        anyhow::bail!(
+            "{path} has an empty imports[] — syscall_table.cpp (the runtime's \
+             NID→HLE binding table, issue #40) cannot be generated.\n\
+             Re-run analyze against the original binary:\n    \
+             cargo run --release -- analyze --ghidra-dir <ghidra>/libexec <BOOT.BIN> -o {path}\n\
+             For an augmented baseline you cannot regenerate wholesale, graft \
+             `.imports` (and `.module`) from a fresh analyze instead — see \
+             DEBUGGING.md \"Upgrading an analysis.json baseline\".",
+            path = analysis_path.display(),
+        );
+    }
+
     // Prepare output directories
     let gen_dir = output_dir.join("generated");
     let inc_dir = output_dir.join("include");
@@ -293,11 +310,14 @@ pub fn run_recompile(
     )?;
     pb.finish_with_message("Done decoding functions");
 
-    // Write all output files
+    // Write all output files. The syscall table header records the analysis
+    // hash with the fingerprint module's recipe so the two always agree.
+    let analysis_sha256 = fingerprint::sha256_file(analysis_path)
+        .with_context(|| format!("hash {}", analysis_path.display()))?;
     let module_name = &prep.analysis.module_name;
     write_output_files(
         output_dir, &prep.analysis, &batch_output, &mid_entries_cpp, module_name,
-        &prep.unique_names,
+        &prep.unique_names, &analysis_sha256,
     )?;
 
     // Constructors are emitted as RECOMP_LOOKUP calls too (init_array.cpp) —
@@ -1442,6 +1462,7 @@ fn write_output_files(
     mid_entries_cpp: &str,
     module_name: &str,
     unique_names: &HashMap<u32, String>,
+    analysis_sha256: &str,
 ) -> anyhow::Result<()> {
     // Remove stale batch_*.cpp from a prior run before writing fresh ones.
     // A run that emits fewer batches than the previous one leaves orphaned
@@ -1456,17 +1477,15 @@ fn write_output_files(
         std::fs::write(output_dir.join(filename), content)?;
     }
 
-    // Write support files. funcs.h also declares HLE import names: generated
-    // code calls them verbatim (emit_call_hle), and only PRX modules have a
-    // non-empty imports[] — for ET_EXEC the appended string is empty, keeping
-    // Patapon's funcs.h byte-identical (issue #52 Gate B).
-    let funcs_h = format!(
-        "{}{}",
-        batch_output.funcs_h,
-        psp_emitter::batch::emit_hle_import_decls(&analysis.imports)
-    );
-    std::fs::write(output_dir.join("funcs.h"), funcs_h)?;
+    // Write support files. Import-stub calls flow through RECOMP_LOOKUP (the
+    // runtime binds HLE handlers at the generated-table stub addresses,
+    // issue #40), so funcs.h carries no HLE name declarations.
+    std::fs::write(output_dir.join("funcs.h"), &batch_output.funcs_h)?;
     std::fs::write(output_dir.join("mid_entries.cpp"), mid_entries_cpp)?;
+    std::fs::write(
+        output_dir.join("syscall_table.cpp"),
+        psp_emitter::emit_syscall_table(&analysis.imports, analysis_sha256)?,
+    )?;
     std::fs::write(
         output_dir.join("dispatch.cpp"),
         emit_dispatch_table(&analysis.functions, &analysis.mid_entries, module_name, unique_names),

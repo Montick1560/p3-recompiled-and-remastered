@@ -221,17 +221,20 @@ fn collect_unhandled_relocations(analysis: &AnalysisJson) -> BTreeMap<String, u6
 }
 
 /// Diff statically-emitted lookup targets against the dispatch table's
-/// address set (function entries + mid-entries + the 0x0 sentinel).
+/// address set (function entries + mid-entries + the 0x0 sentinel + the
+/// generated-table import stubs, which the runtime registers at
+/// `psp_hle_init()` before any recompiled code runs — issue #40).
 fn audit_dispatch_targets(
     analysis: &AnalysisJson,
     targets: &HashSet<u32>,
 ) -> DispatchAudit {
     let mut dispatch_addrs: HashSet<u32> = HashSet::with_capacity(
-        analysis.functions.len() + analysis.mid_entries.len() + 1,
+        analysis.functions.len() + analysis.mid_entries.len() + analysis.imports.len() + 1,
     );
     dispatch_addrs.insert(0);
     dispatch_addrs.extend(analysis.functions.iter().filter_map(|f| parse_hex(&f.address)));
     dispatch_addrs.extend(analysis.mid_entries.iter().filter_map(|me| parse_hex(&me.addr)));
+    dispatch_addrs.extend(analysis.imports.iter().filter_map(|imp| parse_hex(&imp.stub_addr)));
 
     let mut missing: Vec<u32> = targets.difference(&dispatch_addrs).copied().collect();
     missing.sort_unstable();

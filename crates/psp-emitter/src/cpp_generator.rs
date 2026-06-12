@@ -410,8 +410,14 @@ impl Generator for CppGenerator {
         ));
     }
 
-    fn emit_call_hle(&mut self, stub_name: &str) {
-        self.writeln(&format!("{stub_name}(rdram, ctx);"));
+    fn emit_call_hle(&mut self, stub_addr: u32, stub_name: &str) {
+        // Same dispatch path as emit_call_lookup — the stub address is a
+        // statically-emitted lookup target (recorded for the #37 audit; the
+        // runtime registers every generated-table stub at psp_hle_init).
+        self.static_lookup_targets.push(stub_addr);
+        self.writeln(&format!(
+            "RECOMP_LOOKUP(0x{stub_addr:08X})(rdram, ctx); /* {stub_name} */"
+        ));
     }
 
     fn emit_return(&mut self) {

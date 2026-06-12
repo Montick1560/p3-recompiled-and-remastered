@@ -327,7 +327,9 @@ fn rel_unix_path(repo_root: &Path, abs: &Path) -> anyhow::Result<String> {
 }
 
 /// SHA-256 of a file's bytes, lowercase hex (streamed; analysis.json is large).
-fn sha256_file(path: &Path) -> anyhow::Result<String> {
+/// `pub(crate)`: the generated syscall table (issue #40) stamps the same
+/// analysis hash into its header so table and fingerprint always agree.
+pub(crate) fn sha256_file(path: &Path) -> anyhow::Result<String> {
     let mut file = std::fs::File::open(path)
         .with_context(|| format!("open {}", path.display()))?;
     let mut hasher = Sha256::new();

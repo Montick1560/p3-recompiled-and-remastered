@@ -31,6 +31,7 @@ list(APPEND RECOMP_SOURCES
     "${{CMAKE_CURRENT_SOURCE_DIR}}/data_sections.cpp"
     "${{CMAKE_CURRENT_SOURCE_DIR}}/init_array.cpp"
     "${{CMAKE_CURRENT_SOURCE_DIR}}/mid_entries.cpp"
+    "${{CMAKE_CURRENT_SOURCE_DIR}}/syscall_table.cpp"
 )
 
 add_library({module_name}_recomp STATIC ${{RECOMP_SOURCES}})
@@ -63,6 +64,9 @@ mod tests {
         assert!(result.contains("dispatch.cpp"));
         assert!(result.contains("data_sections.cpp"));
         assert!(result.contains("mid_entries.cpp"));
+        // Generated NID binding table (issue #40) is a fixed support file:
+        // the runtime's psp_hle_init() links recomp_nid_stubs from it.
+        assert!(result.contains("syscall_table.cpp"));
         assert!(result.contains("-fno-lto"));
         // funcs.h lives at output root, not under include/ — root must be in include path
         assert!(result.contains("${CMAKE_CURRENT_SOURCE_DIR}\""));

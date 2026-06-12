@@ -1097,9 +1097,14 @@ fn emit_op(
             }
         }
         MipsOp::Jal { target } => {
-            // Check import map for HLE stub
+            // Import-stub targets flow through the dispatch table like every
+            // other cross-function call: the runtime's psp_hle_init() binds
+            // HLE handlers at the generated-table stub addresses (issue #40),
+            // so a direct named call would bypass the binding (and the
+            // by-name symbols do not exist in the runtime). The resolved NID
+            // name is kept as a comment for debuggability.
             if let Some(name) = imports.get(target) {
-                gen.emit_call_hle(name);
+                gen.emit_call_hle(*target, name);
             } else {
                 // Unknown target — use runtime dispatch table.
                 // Direct-call resolution (func_map lookup) is wired in Phase 3+;
