@@ -124,6 +124,113 @@ mod rebase_tests {
     }
 }
 
+/// Text extent (text_start, text_size) per PPSSPP `ElfReader` semantics.
+///
+/// Mirrors `Core/HLE/sceKernelModule.cpp __KernelLoadELFFromPtr`:
+/// - when a section named `.text` exists: `text_start = load_base + sh_addr`
+///   of `.text`, and `text_size = GetTotalTextSize()` — the sum of `sh_size`
+///   over sections with SHF_ALLOC set, SHF_WRITE clear, SHF_STRINGS clear
+///   (this includes `.sceStub.text`, `.lib.*`, `.rodata.sce*` — Patapon:
+///   0x001D4E04);
+/// - otherwise (stripped/sectionless): `text_start = load_base + first
+///   PT_LOAD p_vaddr` and `text_size = GetTotalTextSizeFromSeg()` — the sum
+///   of `p_filesz` over PF_X segments.
+///
+/// NOTE: a previous runtime hardcoding used the exec phdr's p_filesz
+/// (Patapon 0x244D30) for text_size; that is what PPSSPP only does for
+/// sectionless inputs. Patapon has sections, so the faithful value is
+/// 0x001D4E04 (issue #47 Phase 2 differential check, documented in
+/// DEBUGGING.md).
+pub fn text_extent(elf: &goblin::elf::Elf, load_base: u32) -> (u32, u32) {
+    use goblin::elf::program_header::PF_X;
+    use goblin::elf::section_header::{SHF_ALLOC, SHF_STRINGS, SHF_WRITE};
+
+    let text_section = elf
+        .section_headers
+        .iter()
+        .find(|sh| elf.shdr_strtab.get_at(sh.sh_name) == Some(".text"));
+    if let Some(text) = text_section {
+        let total: u32 = elf
+            .section_headers
+            .iter()
+            .filter(|sh| {
+                let f = sh.sh_flags as u32;
+                (f & SHF_ALLOC != 0) && (f & SHF_WRITE == 0) && (f & SHF_STRINGS == 0)
+            })
+            .map(|sh| sh.sh_size as u32)
+            .fold(0u32, u32::wrapping_add);
+        return (load_base.wrapping_add(text.sh_addr as u32), total);
+    }
+    let start = elf
+        .program_headers
+        .iter()
+        .find(|ph| ph.p_type == PT_LOAD)
+        .map(|ph| load_base.wrapping_add(ph.p_vaddr as u32))
+        .unwrap_or(load_base);
+    let total: u32 = elf
+        .program_headers
+        .iter()
+        .filter(|ph| ph.p_type == PT_LOAD && ph.p_flags & PF_X != 0)
+        .map(|ph| ph.p_filesz as u32)
+        .fold(0u32, u32::wrapping_add);
+    (start, total)
+}
+
+#[cfg(test)]
+mod text_extent_tests {
+    use super::*;
+    use crate::test_fixtures::{ModuleInfoFixture, PrxFixture};
+
+    fn mi() -> ModuleInfoFixture {
+        ModuleInfoFixture {
+            attrs: 2,
+            version: 0x0101,
+            name: "fixture",
+            gp: 0,
+            libent: 0,
+            libent_end: 0,
+            libstub: 0,
+            libstub_end: 0,
+        }
+    }
+
+    #[test]
+    fn section_path_sums_alloc_nonwrite_sections() {
+        // .text (8 words = 32 bytes) + .rodata.sceModuleInfo (0x34 bytes):
+        // both SHF_ALLOC, neither SHF_WRITE -> PPSSPP GetTotalTextSize sums
+        // them; text_start is .text's VA + load_base.
+        let fixture = PrxFixture::new().text(&[0u32; 8]).module_info(&mi());
+        let text_va = fixture.va_of(".text");
+        let bytes = fixture.build();
+        let elf = parse_elf(&bytes).unwrap();
+        let (start, size) = text_extent(&elf, 0x0880_4000);
+        assert_eq!(start, 0x0880_4000 + text_va);
+        assert_eq!(size, 32 + 0x34);
+    }
+
+    #[test]
+    fn sectionless_path_sums_pf_x_filesz() {
+        // Stripped fixture: no section headers -> PPSSPP
+        // GetTotalTextSizeFromSeg (PF_X segments' p_filesz; fixture phdr is
+        // RWX) and text_start = first PT_LOAD vaddr + load_base.
+        let fixture = PrxFixture::new()
+            .text(&[0u32; 8])
+            .module_info(&mi())
+            .without_section_headers();
+        let bytes = fixture.build();
+        let elf = parse_elf(&bytes).unwrap();
+        let seg_filesz = elf
+            .program_headers
+            .iter()
+            .find(|ph| ph.p_type == PT_LOAD)
+            .unwrap()
+            .p_filesz as u32;
+        let (start, size) = text_extent(&elf, 0x0880_4000);
+        assert_eq!(start, 0x0880_4000);
+        assert_eq!(size, seg_filesz);
+    }
+}
+
 /// Calculate heap base as max(segment end addresses) rounded up to 64KB.
 ///
 /// ASSERT: heap_base > every segment's p_vaddr + p_memsz (V1 pitfall #8).

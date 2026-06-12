@@ -12,8 +12,16 @@ pub struct AnalysisJson {
     pub module_name: String,
     /// Hex string, e.g. "0x08AE0000"
     pub heap_base: String,
-    /// PRX provenance — present only for relocatable (e_type 0xFFA0) modules.
-    /// Absent (not null) for ET_EXEC so their output stays byte-identical.
+    /// Module facts for the runtime boot path (issue #47 Phase 2). Emitted by
+    /// `analyze` for BOTH ET_EXEC and PRX inputs. `Option` only so files that
+    /// predate the block still deserialize; `recompile` hard-errors when it is
+    /// absent (re-run analyze — see DEBUGGING.md "Upgrading an analysis.json
+    /// baseline").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module: Option<JsonModuleInfo>,
+    /// PRX load provenance — present only for relocatable (e_type 0xFFA0)
+    /// modules. Absent (not null) for ET_EXEC. Module identity (name, gp,
+    /// entry) lives in `module` for both formats.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prx: Option<JsonPrxInfo>,
     pub functions: Vec<JsonFunction>,
@@ -25,20 +33,36 @@ pub struct AnalysisJson {
     pub segments: Vec<JsonSegment>,
 }
 
+/// Binary facts the runtime boot path needs (issue #47 Phase 2).
+///
+/// Present for both ET_EXEC and PRX inputs; addresses are hex strings.
+/// Name and gp come from the in-binary SceModuleInfo record (both formats
+/// carry one — Patapon's BOOT.BIN included); when an ET_EXEC binary has no
+/// locatable record, analyze falls back to the file stem and gp "0x00000000"
+/// with a loud warning. Text extent mirrors PPSSPP's `ElfReader` semantics
+/// (see `crate::elf::text_extent`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonModuleInfo {
+    /// SceModuleInfo name, e.g. "Labo" (Patapon) / "hacklink" (.hack//Link).
+    pub name: String,
+    /// Module entry point: load_base + e_entry, e.g. "0x089ACCD0".
+    pub entry: String,
+    /// $gp from SceModuleInfo (post-relocation for PRX), e.g. "0x08A50D20".
+    pub gp: String,
+    /// text_addr: `.text` section VA (+ load_base), or first PT_LOAD vaddr.
+    pub text_start: String,
+    /// text_size per PPSSPP `GetTotalTextSize` / `GetTotalTextSizeFromSeg`.
+    pub text_size: String,
+}
+
 /// PRX load provenance: how a relocatable module was rebased (issue #52 T5).
 ///
-/// All fields are hex strings per the schema convention.
+/// Reshaped in issue #47 Phase 2: module identity (name, gp, entry) moved to
+/// the format-independent `module` block; only the rebase provenance remains.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonPrxInfo {
     /// Load base the module was rebased to, e.g. "0x08804000".
     pub load_base: String,
-    /// SceModuleInfo name (e.g. "hacklink") — the in-binary module name, not
-    /// the top-level `module_name` file stem.
-    pub module_name: String,
-    /// Post-relocation $gp value from SceModuleInfo.
-    pub gp: String,
-    /// Module entry point: load_base + e_entry.
-    pub entry: String,
 }
 
 /// A function detected by Ghidra or cross-validation.
@@ -114,12 +138,23 @@ pub struct JsonSegment {
 mod tests {
     use super::*;
 
+    fn patapon_module() -> JsonModuleInfo {
+        JsonModuleInfo {
+            name: "Labo".into(),
+            entry: "0x089ACCD0".into(),
+            gp: "0x08A50D20".into(),
+            text_start: "0x08804000".into(),
+            text_size: "0x001D4E04".into(),
+        }
+    }
+
     #[test]
     fn analysis_json_roundtrip() {
         let json = AnalysisJson {
             binary_path: "BOOT.BIN".into(),
             module_name: "patapon".into(),
             heap_base: "0x08AE0000".into(),
+            module: Some(patapon_module()),
             prx: None,
             functions: vec![JsonFunction {
                 name: "FUN_08804000".into(),
@@ -141,6 +176,12 @@ mod tests {
         let back: AnalysisJson = serde_json::from_str(&s).unwrap();
         assert_eq!(back.module_name, "patapon");
         assert_eq!(back.functions[0].address, "0x08804000");
+        let m = back.module.expect("module block round-trips");
+        assert_eq!(m.name, "Labo");
+        assert_eq!(m.entry, "0x089ACCD0");
+        assert_eq!(m.gp, "0x08A50D20");
+        assert_eq!(m.text_start, "0x08804000");
+        assert_eq!(m.text_size, "0x001D4E04");
     }
 
     #[test]
@@ -150,6 +191,7 @@ mod tests {
             binary_path: "BOOT.BIN".into(),
             module_name: "patapon".into(),
             heap_base: "0x08AE0000".into(),
+            module: Some(patapon_module()),
             prx: None,
             functions: vec![],
             imports: vec![],
@@ -167,18 +209,22 @@ mod tests {
     }
 
     #[test]
-    fn prx_some_round_trips_all_hex_fields() {
-        let prx = JsonPrxInfo {
-            load_base: "0x08804000".into(),
-            module_name: "examplemod".into(),
-            gp: "0x08C85BD0".into(),
-            entry: "0x08BC3D98".into(),
-        };
+    fn module_absent_in_old_files_deserializes_as_none() {
+        // Pre-#47-Phase-2 baseline shape: no `module` key. Must load (so
+        // recompile can produce the actionable hard error), not fail serde.
+        let s = r#"{"binary_path":"BOOT.BIN","module_name":"boot",
+            "heap_base":"0x08AE0000","functions":[],"imports":[],
+            "relocations":[],"xrefs":[],"constructors":[],"mid_entries":[],
+            "segments":[]}"#;
+        let back: AnalysisJson = serde_json::from_str(s).unwrap();
+        assert!(back.module.is_none());
+    }
+
+    #[test]
+    fn prx_some_round_trips_load_base() {
+        let prx = JsonPrxInfo { load_base: "0x08804000".into() };
         let s = serde_json::to_string(&prx).unwrap();
         let back: JsonPrxInfo = serde_json::from_str(&s).unwrap();
         assert_eq!(back.load_base, "0x08804000");
-        assert_eq!(back.module_name, "examplemod");
-        assert_eq!(back.gp, "0x08C85BD0");
-        assert_eq!(back.entry, "0x08BC3D98");
     }
 }

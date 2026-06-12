@@ -7,10 +7,10 @@
 //! so the Patapon byte-identity gate (plan D7) holds.
 
 use anyhow::{bail, Context, Result};
-use psp_parser::analysis_json::JsonFunction;
+use psp_parser::analysis_json::{JsonFunction, JsonModuleInfo};
 use psp_parser::prx::ModuleInfo;
 use psp_parser::types::{ImportStub, RelocEntry};
-use psp_parser::{imports, prx, reloc};
+use psp_parser::{elf, imports, prx, reloc};
 use std::collections::HashMap;
 
 /// Effective load base for this run (plan D3, computed exactly once).
@@ -120,6 +120,56 @@ pub fn parse_prx_imports(
     let stubs = imports::parse_import_stubs(&image, &mi, nid_map)
         .with_context(|| format!("PRX import parsing failed (module info at 0x{mi_va:08X})"))?;
     Ok((stubs, mi))
+}
+
+/// Build the analysis.json `module{}` facts block (issue #47 Phase 2).
+///
+/// name/gp come from SceModuleInfo via the same locate+parse path the PRX
+/// import walker uses — Patapon's ET_EXEC BOOT.BIN carries the record too,
+/// so both formats are served by one code path. A PRX never reaches the
+/// fallback (its SceModuleInfo was already hard-error-parsed by
+/// [`parse_prx_imports`]); an ET_EXEC without a locatable/readable record
+/// degrades loudly to `name = file stem, gp = 0`. Text extent mirrors
+/// PPSSPP's `ElfReader` (see `psp_parser::elf::text_extent`).
+pub fn build_module_facts(
+    elf_obj: &goblin::elf::Elf,
+    image: &psp_parser::image::LoadedImage,
+    load_base: u32,
+    entry_va: u32,
+    prx_mi: Option<&ModuleInfo>,
+    file_stem: &str,
+) -> JsonModuleInfo {
+    let (name, gp) = match prx_mi {
+        Some(mi) => (mi.name.clone(), mi.gp),
+        None => match prx::locate_module_info_va(elf_obj, load_base)
+            .and_then(|va| prx::parse_module_info(image, va))
+        {
+            Ok(mi) => {
+                tracing::info!("SceModuleInfo '{}': gp=0x{:08X}", mi.name, mi.gp);
+                (mi.name, mi.gp)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "No usable SceModuleInfo ({e}); module facts degrade to \
+                     name=\"{file_stem}\", gp=0x00000000 — if this binary uses \
+                     $gp-relative addressing the runtime boot GP will be wrong"
+                );
+                (file_stem.to_string(), 0)
+            }
+        },
+    };
+    let (text_start, text_size) = elf::text_extent(elf_obj, load_base);
+    tracing::info!(
+        "Module facts: name=\"{name}\" entry=0x{entry_va:08X} gp=0x{gp:08X} \
+         text=0x{text_start:08X}+0x{text_size:X}"
+    );
+    JsonModuleInfo {
+        name,
+        entry: format!("0x{entry_va:08X}"),
+        gp: format!("0x{gp:08X}"),
+        text_start: format!("0x{text_start:08X}"),
+        text_size: format!("0x{text_size:08X}"),
+    }
 }
 
 /// Rename the function at the module entry point to "entry" (idempotent).

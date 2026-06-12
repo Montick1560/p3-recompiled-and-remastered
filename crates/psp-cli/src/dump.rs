@@ -173,6 +173,7 @@ mod tests {
             binary_path: String::new(),
             module_name: "test".into(),
             heap_base: "0x08AE0000".into(),
+            module: None,
             prx: None,
             functions: vec![
                 func("FUN_08804000", 0x08804000, 0x100),

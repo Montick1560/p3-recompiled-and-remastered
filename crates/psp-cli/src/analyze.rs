@@ -435,6 +435,28 @@ pub fn run_analyze(
     };
     tracing::info!("Resolved {} import stubs", import_stubs.len());
 
+    // 5.5. Module facts (issue #47 Phase 2): name/gp from SceModuleInfo via
+    // the same parser path for both formats; entry = load_base + e_entry;
+    // text extent per PPSSPP ElfReader semantics. Consumed by recompile to
+    // emit output/include/recomp_module.h for the runtime boot path.
+    let entry_va = load_base.wrapping_add(elf_obj.header.e_entry as u32);
+    let file_stem = binary
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown")
+        .to_lowercase();
+    let module_facts = {
+        let image = psp_parser::image::LoadedImage::new(&seg_bases, &seg_data_vecs);
+        crate::prx_load::build_module_facts(
+            &elf_obj,
+            &image,
+            load_base,
+            entry_va,
+            prx_module_info.as_ref(),
+            &file_stem,
+        )
+    };
+
     // 6. Run Ghidra headless analysis. The raw-output cache is reused only
     // when its meta sidecar matches this run (binary hash, loader, image
     // base) — a stale base-0 cache must never be silently reused (plan D9).
@@ -499,7 +521,6 @@ pub fn run_analyze(
     // 8.1. Merge fixes (plan T5 item 7; both idempotent no-ops on Patapon):
     // rename the module-start function to "entry" (the runtime hard-links the
     // symbol), and drop jal_target artifacts outside the loaded image.
-    let entry_va = load_base.wrapping_add(elf_obj.header.e_entry as u32);
     crate::prx_load::rename_entry_function(&mut functions, entry_va);
     let image_start = segments.iter().map(|s| s.p_vaddr).min().unwrap_or(0);
     let image_end = segments
@@ -577,23 +598,16 @@ pub fn run_analyze(
         mid_entries.len()
     );
 
-    let module_name = binary
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("unknown")
-        .to_lowercase();
-
     let analysis = AnalysisJson {
         binary_path: binary.display().to_string(),
-        module_name,
+        module_name: file_stem,
         heap_base: format!("0x{heap_base:08X}"),
-        // PRX provenance (plan T5 item 8): absent for ET_EXEC (skip_serializing_if)
-        // so the Patapon analysis.json stays byte-identical.
-        prx: prx_module_info.map(|mi| JsonPrxInfo {
+        // Module facts (issue #47 Phase 2): present for BOTH formats.
+        module: Some(module_facts),
+        // PRX load provenance (plan T5 item 8): absent for ET_EXEC
+        // (skip_serializing_if). Module identity lives in `module` above.
+        prx: is_prx.then(|| JsonPrxInfo {
             load_base: format!("0x{load_base:08X}"),
-            module_name: mi.name.clone(),
-            gp: format!("0x{:08X}", mi.gp),
-            entry: format!("0x{entry_va:08X}"),
         }),
         functions,
         imports: import_stubs
