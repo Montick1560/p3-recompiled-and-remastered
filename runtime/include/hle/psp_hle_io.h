@@ -49,5 +49,37 @@ void psp_io_init(const char* disc0_host_path);
 // Map PSP path to host path
 std::string psp_path_to_host(const char* psp_path);
 
+// ---- Game-module IO policy (issue #47 Phase 5 seam) ----
+// Everything title-specific the IO layer used to hardcode (Patapon's
+// DATA_CMN.BND reroute, BND IO-slot staging at game struct offsets,
+// extraction-artifact stub rejection, address-keyed diagnostics) installs
+// through this struct from the game module's register_hooks. Every pointer
+// is optional (nullptr = generic default: no reroute, no staging, no
+// artifact filtering, no extra diagnostics).
+struct PspIoPolicy {
+    /// Resolve a path whose host file is missing to a slice of a container
+    /// archive: fill the container's HOST path plus the slice's byte size
+    /// and absolute file offset. Return false when the path has no archive
+    /// backing (the open then fails with ENOENT as usual).
+    bool (*resolve_archive_backing)(const char* psp_path,
+                                    std::string* host_container,
+                                    uint32_t* size, uint32_t* off);
+    /// Stage the game's async IO slot for an archive-backed read (game
+    /// struct offsets live game-side). Called from the archive reroute and
+    /// from sceIoSetAsyncCallback for fds in the fd table.
+    void (*prepare_async_slot)(uint8_t* rdram, const char* psp_path,
+                               int callback_arg);
+    /// True when an existing host file is an ISO-extraction artifact that
+    /// does not exist on the retail disc (open must fail with ENOENT).
+    bool (*is_extraction_artifact)(const char* host_path);
+    /// Diagnostic: sceIoSetAsyncCallback observer. psp_path is nullptr
+    /// when the fd is not in the fd table.
+    void (*on_set_async_callback)(uint8_t* rdram, int fd, int callback_arg,
+                                  const char* psp_path);
+    /// Diagnostic: NULL-path sceIoOpen observer (bad-descriptor races).
+    void (*on_null_path_open)(uint8_t* rdram);
+};
+void psp_io_set_policy(const PspIoPolicy& policy);
+
 // Registration
 void psp_hle_register_io();

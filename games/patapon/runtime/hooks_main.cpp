@@ -83,6 +83,12 @@ void patapon_register_hooks(uint8_t* rdram) {
     //     inline in psp_dispatch.cpp's noop_stub.
     patapon_install_miss_handler();
 
+    // 0c. IO policy (#47 P5 seam): DATA_CMN.BND archive backing for missing
+    //     async opens, BND IO-slot staging, "BND\0" extraction-artifact
+    //     rejection, SGXD NULL-path tripwire — formerly inline in
+    //     psp_hle_io.cpp.
+    patapon_install_io_policy();
+
     // 4a. Install corruption detector wrapper for FUN_0885fe90
     // FUN_0885fe90 receives the render object as a0 (r[4]).
     // When the linked list has a corrupt pointer (< 0x08000000),

@@ -1,4 +1,3 @@
-#include "asset_bnd.h"
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_io.h"
 #include "hle/psp_hle_kernel.h"
@@ -43,6 +42,16 @@ extern thread_local uint32_t g_last_func_addr;
 // For ISO games, defaults to disc0:/PSP_GAME/USRDIR
 static std::string g_cwd = "disc0:/PSP_GAME/USRDIR";
 
+// ---- Game-module IO policy (issue #47 Phase 5 seam) ----
+// Zero-initialized = generic defaults (no archive reroute, no slot staging,
+// no artifact filtering, no extra diagnostics). The game module installs
+// its policy from register_hooks.
+static PspIoPolicy g_io_policy{};
+
+void psp_io_set_policy(const PspIoPolicy& policy) {
+    g_io_policy = policy;
+}
+
 // ---- Init ----
 
 void psp_io_init(const char* disc0_host_path) {
@@ -70,9 +79,9 @@ std::string psp_path_to_host(const char* psp_path) {
         if (c == '\\') c = '/';
     }
 
-    // host0: -> not mounted (USB dev tool, not present on retail PSP)
-    // Returning empty makes sceIoOpen return ENOENT, which tells the game
-    // to use the retail disc0: BND archive path instead of dev loose files.
+    // host0: -> not mounted (devkit host filesystem; absent on retail
+    // hardware, same as ms0:/flash0: below). ENOENT is the faithful
+    // retail answer for every game.
     if (p.substr(0, 6) == "host0:") {
         return "";
     }
@@ -108,125 +117,39 @@ std::string psp_path_to_host(const char* psp_path) {
 
 // ---- Sync HLE Functions ----
 
-static constexpr const char* k_data_cmn_bnd_path =
-    "disc0:/PSP_GAME/USRDIR/DATA_CMN.BND";
-
-static bool lookup_bnd_backing_for_psp_path(
-    const char* psp_path, uint32_t* size_out, uint32_t* off_out
-) {
-    if (psp_path == nullptr || *psp_path == '\0') return false;
-
-    const char* candidates[4] = {psp_path, nullptr, nullptr, nullptr};
-    const char* disc0 = std::strstr(psp_path, "disc0:");
-    if (disc0 == psp_path) candidates[1] = psp_path + 6;
-    const char* usrdir = std::strstr(psp_path, "USRDIR/");
-    if (usrdir != nullptr) candidates[2] = usrdir + 7;
-    const char* loadinggroup = std::strstr(psp_path, "loadinggroup/");
-    if (loadinggroup != nullptr) candidates[3] = loadinggroup;
-
-    for (const char* candidate : candidates) {
-        if (candidate == nullptr || *candidate == '\0') continue;
-        std::string normalized(candidate);
-        for (char& ch : normalized) {
-            ch = static_cast<char>(
-                std::tolower(static_cast<unsigned char>(ch)));
-        }
-        if (const BndOuterEntry* outer =
-                bnd_find_outer_entry_for_virt_path(normalized.c_str())) {
-            *size_out = outer->size;
-            *off_out = outer->file_offset;
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool detect_bnd_backed_async_slot(
-    uint8_t* rdram, int callback_arg, uint32_t* slot_ptr_out,
-    uint32_t* size_out, uint32_t* off_out
-) {
-    if (callback_arg == 0) return false;
-    uint32_t slot_ptr = static_cast<uint32_t>(callback_arg);
-    if (slot_ptr < 0x08000000U || slot_ptr >= 0x0A000000U) return false;
-
-    int32_t slot_idx = static_cast<int32_t>(
-        psp_mem_read<uint32_t>(rdram, slot_ptr + 20));
-    uint32_t size = psp_mem_read<uint32_t>(rdram, slot_ptr + 300);
-    uint32_t off = psp_mem_read<uint32_t>(rdram, slot_ptr + 308);
-    if (slot_idx >= 0 || size == 0U || off == 0U) return false;
-
-    *slot_ptr_out = slot_ptr;
-    *size_out = size;
-    *off_out = off;
-    return true;
-}
-
-static uint32_t ensure_bnd_slot_buffer(
-    uint8_t* rdram, uint32_t slot_ptr, uint32_t size
-) {
-    uint32_t buf = psp_mem_read<uint32_t>(rdram, slot_ptr + 292);
-    if (buf != 0U) return buf;
-
-    buf = psp_alloc_bnd_arena(size, 256U);
-    if (buf == 0U) return 0U;
-
-    psp_mem_write<uint32_t>(rdram, slot_ptr + 292, buf);
-    return buf;
-}
-
-static void prepare_bnd_backed_async_slot(
-    uint8_t* rdram, const std::string& psp_path, int callback_arg
-) {
-    uint32_t expected_size = 0U;
-    uint32_t expected_off = 0U;
-    if (!lookup_bnd_backing_for_psp_path(
-            psp_path.c_str(), &expected_size, &expected_off)) {
-        return;
-    }
-
-    uint32_t slot_ptr = 0U;
-    uint32_t size = 0U;
-    uint32_t off = 0U;
-    if (!detect_bnd_backed_async_slot(
-            rdram, callback_arg, &slot_ptr, &size, &off)) {
-        return;
-    }
-
-    if (size != expected_size || off != expected_off) return;
-    uint32_t buf = ensure_bnd_slot_buffer(rdram, slot_ptr, size);
-    if (buf == 0U) return;
-
-    static int prep_count = 0;
-    if (++prep_count <= 12) {
-        std::fprintf(stderr,
-            "[HLE] prepared BND slot=0x%08X off=%u size=%u buf=0x%08X\n",
-            slot_ptr, off, size, buf);
-    }
-}
-
-static bool try_route_missing_async_open_to_bnd(
+/// Route a missing async open through the game's container archive (issue
+/// #47 Phase 5 seam): the policy resolves the path to a slice
+/// [off, off+size) of a host container file; the slice-fd mechanics
+/// (slice_base/slice_len, SEEK_END = asset size, read clamping) are
+/// mechanism-generic and stay here. Returns false (no reroute) when no
+/// policy is installed or the path has no archive backing.
+static bool try_route_missing_async_open_to_archive(
     const char* psp_path, uint8_t* rdram, int psp_fd,
     int prereg_cbId, int prereg_cbArg, recomp_context* ctx
 ) {
+    if (g_io_policy.resolve_archive_backing == nullptr) return false;
+
     uint32_t size = 0U;
     uint32_t off = 0U;
-    if (!lookup_bnd_backing_for_psp_path(psp_path, &size, &off)) {
+    std::string host_path;
+    if (!g_io_policy.resolve_archive_backing(
+            psp_path, &host_path, &size, &off)) {
         return false;
     }
-
-    const std::string host_path = psp_path_to_host(k_data_cmn_bnd_path);
     if (host_path.empty()) return false;
 
     int host_fd = ::open(host_path.c_str(), O_RDONLY);
     if (host_fd < 0) return false;
 
-    // Record the asset's slice [off, off+size) within DATA_CMN.BND. The game
+    // Record the asset's slice [off, off+size) within the container. The game
     // navigates the rerouted fd by ABSOLUTE container offsets, so seeks/reads
     // pass through to the host fd unchanged; the slice is used to (a) answer
     // SEEK_END with the asset's true end (so the size-probe no longer returns
-    // the 294MB container size, which a prior band-aid capped to 512KB and
+    // the container size, which a prior band-aid capped to 512KB and
     // truncated the asset) and (b) clamp reads to the asset boundary.
-    prepare_bnd_backed_async_slot(rdram, std::string(psp_path), prereg_cbArg);
+    if (g_io_policy.prepare_async_slot != nullptr) {
+        g_io_policy.prepare_async_slot(rdram, psp_path, prereg_cbArg);
+    }
     PspFileDesc desc{};
     desc.host_fd = host_fd;
     desc.psp_path = std::string(psp_path);
@@ -244,7 +167,7 @@ static bool try_route_missing_async_open_to_bnd(
     std::fprintf(stderr,
         "[HLE] sceIoOpenAsync reroute \"%s\" -> %s fd=%d off=%u size=%u "
         "(sliced view)\n",
-        psp_path, k_data_cmn_bnd_path, psp_fd, off, size);
+        psp_path, host_path.c_str(), psp_fd, off, size);
     ctx->r[2] = psp_fd;
     return true;
 }
@@ -254,29 +177,15 @@ static bool try_route_missing_async_open_to_bnd(
 static int g_io_open_log_count = 0;
 static constexpr int IO_LOG_LIMIT = 100;
 
-// Some loose-file group directories (e.g. Patapon's LOADINGGROUP/*.BND) do NOT
-// exist on the retail ISO at all -- the game streams those assets from a packed
-// archive (DATA_CMN.BND) instead. Tools that unpack an ISO to a host directory
-// sometimes leave behind degenerate 4-byte "BND\0" placeholder files for these
-// entries. On real hardware / PPSSPP the open of such a path FAILS (ENOENT),
-// which steers the game's asset state machine down the packed-archive path.
-//
-// If we let the open succeed against the 4-byte stub, sceIoLseek(SEEK_END)
-// returns 4, which poisons the asset object's region-size field (obj+176) and
-// makes the loader skip the real region read forever. So we treat a degenerate
-// "BND\0" stub as non-existent, matching the retail disc. General: any game
-// whose loose-group dir is an extraction artifact gets the faithful disc path.
-static bool is_degenerate_bnd_stub(const std::string& host_path) {
-    struct stat st;
-    if (::stat(host_path.c_str(), &st) != 0) return false;
-    if (st.st_size != 4) return false;
-    int fd = ::open(host_path.c_str(), O_RDONLY);
-    if (fd < 0) return false;
-    char hdr[4] = {0};
-    ssize_t n = ::read(fd, hdr, 4);
-    ::close(fd);
-    if (n != 4) return false;
-    return hdr[0] == 'B' && hdr[1] == 'N' && hdr[2] == 'D' && hdr[3] == '\0';
+// ISO-extraction tools sometimes leave host files that do NOT exist on the
+// retail disc (e.g. degenerate placeholder stubs for archive-packed paths).
+// On real hardware the open of such a path FAILS (ENOENT), steering the
+// game's asset state machine down its packed-archive path. What counts as
+// an artifact is a per-game format decision — the policy decides (issue
+// #47 Phase 5 seam); generic default: nothing is filtered.
+static bool is_extraction_artifact(const std::string& host_path) {
+    return g_io_policy.is_extraction_artifact != nullptr
+        && g_io_policy.is_extraction_artifact(host_path.c_str());
 }
 
 // ---- Async Callback Notification ----
@@ -306,39 +215,10 @@ static void hle_sceIoOpen(
                 g_last_func_addr);
             g_io_open_log_count++;
         }
-        // Issue-#15 tripwire: a NULL-path open here means the rare
-        // bad-descriptor race fired (a stream voice started in file mode
-        // with no path). Dump the SGXD bank descriptors and stream-object
-        // state once, so the race is fully captured without a debugger.
-        static bool tripwire_fired = false;
-        if (!tripwire_fired) {
-            tripwire_fired = true;
-            auto rd32 = [&](uint32_t a) -> uint32_t {
-                uint32_t v;
-                std::memcpy(&v, rdram + (a & PSP_ADDR_MASK), 4);
-                return v;
-            };
-            uint32_t banks = rd32(0x08A51FC8);
-            uint32_t strms = rd32(0x08A538B8);
-            std::fprintf(stderr,
-                "[IO_NULL_TRIPWIRE] tid=%p banks=0x%08X streams=0x%08X\n",
-                (void*)pthread_self(), banks, strms);
-            for (int i = 0; banks && i < 4; i++) {
-                uint32_t b = banks + i * 0x1A8;
-                std::fprintf(stderr,
-                    "[IO_NULL_TRIPWIRE] bank[%d]@0x%08X +0x0c=0x%08X "
-                    "desc{type=0x%08X off=0x%08X path=0x%08X +0x98=0x%08X}\n",
-                    i, b, rd32(b + 0x0C), rd32(b + 0x8C), rd32(b + 0x90),
-                    rd32(b + 0x94), rd32(b + 0x98));
-            }
-            for (int i = 0; strms && i < 4; i++) {
-                uint32_t s = strms + i * 0x60B0;
-                uint32_t state = rd32(s + 0x34);
-                std::fprintf(stderr,
-                    "[IO_NULL_TRIPWIRE] stream[%d]@0x%08X path(+0x20)=0x%08X "
-                    "+0x34..0x3b=0x%08X 0x%08X\n",
-                    i, s, rd32(s + 0x20), state, rd32(s + 0x38));
-            }
+        // Game-module diagnostic (#47 P5 seam): e.g. Patapon's issue-#15
+        // SGXD bad-descriptor tripwire (the addresses live game-side).
+        if (g_io_policy.on_null_path_open != nullptr) {
+            g_io_policy.on_null_path_open(rdram);
         }
         ctx->r[2] = SCE_ERROR_ERRNO_ENOENT;
         return;
@@ -367,7 +247,7 @@ static void hle_sceIoOpen(
 
     // Reject extraction-artifact stubs (absent on the retail disc) so the game
     // takes the packed-archive asset path, exactly like real hardware/PPSSPP.
-    if (!(flags & PSP_O_CREAT) && is_degenerate_bnd_stub(host_path)) {
+    if (!(flags & PSP_O_CREAT) && is_extraction_artifact(host_path)) {
         ctx->r[2] = SCE_ERROR_ERRNO_ENOENT;
         sched_yield_point();
         return;
@@ -464,20 +344,21 @@ static void hle_sceIoClose(
     sched_yield_point();
 }
 
-// lseek for a BND-rerouted fd, which represents the asset slice
-// [slice_base, slice_base+slice_len) inside DATA_CMN.BND. Two caller idioms
-// are observed against the SAME fd kind and both must work:
-//   * state-101 size-probe path (e.g. SYSTEMLOCALIZEDATA.BND): treats the fd
-//     as a STANDALONE FILE — `SEEK_SET 0` = asset start, `SEEK_END` = asset
-//     size, then reads from offset 0.
-//   * directory path (e.g. SYSTEMDATA.BND): issues `SEEK_SET <file_offset>`,
+// lseek for an archive-rerouted fd, which represents the asset slice
+// [slice_base, slice_base+slice_len) inside a container file (installed by
+// the game module's PspIoPolicy). Two caller idioms are observed against
+// the SAME fd kind and both must work:
+//   * size-probe path: treats the fd as a STANDALONE FILE —
+//     `SEEK_SET 0` = asset start, `SEEK_END` = asset size, then reads
+//     from offset 0.
+//   * directory path: issues `SEEK_SET <file_offset>`,
 //     i.e. an ABSOLUTE container position equal to slice_base.
 // Unified rule: SEEK_SET/CUR offsets below slice_base are slice-relative
 // (rebased to slice_base); offsets >= slice_base are already absolute. Since
 // slice_base is hundreds of MB and any intra-asset offset is < slice_len
 // (a few MB), the two ranges never overlap, so the rule is unambiguous.
 // SEEK_END returns the asset SIZE (slice_len) — the value the size-probe uses
-// to allocate its read buffer — replacing the old 294MB-container-size answer
+// to allocate its read buffer — replacing the old container-size answer
 // that a band-aid then capped to 512KB (truncating the asset).
 static off_t slice_aware_lseek(PspFileDesc& d, int64_t offset, int posix_whence) {
     if (!d.is_slice) {
@@ -506,9 +387,9 @@ static off_t slice_aware_lseek(PspFileDesc& d, int64_t offset, int posix_whence)
     return static_cast<off_t>(rel);
 }
 
-// Clamp a read on a BND-rerouted fd so it cannot run past the asset end into
-// adjacent container bytes. Uses the host fd's current position relative to
-// the slice. Non-slice fds pass through unchanged.
+// Clamp a read on an archive-rerouted fd so it cannot run past the asset end
+// into adjacent container bytes. Uses the host fd's current position relative
+// to the slice. Non-slice fds pass through unchanged.
 static uint32_t clamp_read_to_slice(PspFileDesc& d, uint32_t size) {
     if (!d.is_slice || d.host_fd < 0) return size;
     off_t cur = ::lseek(d.host_fd, 0, SEEK_CUR);
@@ -624,7 +505,7 @@ static void hle_sceIoLseek(
     if (whence == PSP_SEEK_CUR) posix_whence = SEEK_CUR;
     if (whence == PSP_SEEK_END) posix_whence = SEEK_END;
 
-    // Slice-relative seek for BND-rerouted fds: the logical file is
+    // Slice-relative seek for archive-rerouted fds: the logical file is
     // [slice_base, slice_base+len). SEEK_END returns exactly the asset size —
     // the size the game uses to allocate its read buffer — with NO arbitrary
     // cap. This makes the rerouted fd behave like a real standalone file,
@@ -916,7 +797,7 @@ static void hle_sceIoOpenAsync(
 
     std::string host_path = psp_path_to_host(psp_path);
     if (host_path.empty()) {
-        if (try_route_missing_async_open_to_bnd(
+        if (try_route_missing_async_open_to_archive(
                 psp_path, rdram, psp_fd,
                 prereg_cbId, prereg_cbArg, ctx)) {
             return;
@@ -938,8 +819,8 @@ static void hle_sceIoOpenAsync(
 
     // Reject extraction-artifact stubs (absent on the retail disc) -> ENOENT,
     // so the async asset state machine takes the packed-archive path.
-    if (!(flags & PSP_O_CREAT) && is_degenerate_bnd_stub(host_path)) {
-        if (try_route_missing_async_open_to_bnd(
+    if (!(flags & PSP_O_CREAT) && is_extraction_artifact(host_path)) {
+        if (try_route_missing_async_open_to_archive(
                 psp_path, rdram, psp_fd,
                 prereg_cbId, prereg_cbArg, ctx)) {
             return;
@@ -979,7 +860,7 @@ static void hle_sceIoOpenAsync(
         }
     }
     if (host_fd < 0) {
-        if (try_route_missing_async_open_to_bnd(
+        if (try_route_missing_async_open_to_archive(
                 psp_path, rdram, psp_fd,
                 prereg_cbId, prereg_cbArg, ctx)) {
             return;
@@ -1111,10 +992,6 @@ static void hle_sceIoLseekAsync(
     if (whence == PSP_SEEK_CUR) posix_whence = SEEK_CUR;
     if (whence == PSP_SEEK_END) posix_whence = SEEK_END;
 
-    // A degenerate 4-byte "BND\0" stub is an extraction artifact for a file that
-    // does NOT exist on the retail disc. Reporting its real 4-byte size poisons
-    // the asset object's region-size field (obj+176=4), making the loader skip
-    // the real region read forever. Report it as a 0-byte file so the asset
     off_t pos = slice_aware_lseek(it->second, offset, posix_whence);
     std::fprintf(stderr,
         "[HLE] sceIoLseekAsync: fd=%d host_fd=%d offset=%lld whence=%d -> pos=%lld asyncPending_before=%d\n",
@@ -1267,37 +1144,14 @@ static void hle_sceIoSetAsyncCallback(
     int callbackId = ctx->r[5];
     int callbackArg = ctx->r[6];
 
-    // Diagnostic: log cbArg as slot pointer — read key slot fields to trace
-    if (fd >= 3 && callbackArg != 0) {
-        uint32_t slot_ptr = static_cast<uint32_t>(callbackArg);
-        uint32_t state    = psp_mem_read<uint32_t>(rdram, slot_ptr + 0);
-        uint32_t ap       = psp_mem_read<uint32_t>(rdram, slot_ptr + 12);
-        uint32_t slot_fd  = psp_mem_read<uint32_t>(rdram, slot_ptr + 16);
-        uint32_t saved_st = psp_mem_read<uint32_t>(rdram, slot_ptr + 324);
-        uint32_t file_sz  = psp_mem_read<uint32_t>(rdram, slot_ptr + 300);
-        uint32_t off_292  = psp_mem_read<uint32_t>(rdram, slot_ptr + 292);
-        uint32_t off_296  = psp_mem_read<uint32_t>(rdram, slot_ptr + 296);
-        uint32_t off_304  = psp_mem_read<uint32_t>(rdram, slot_ptr + 304);
-        uint32_t off_308  = psp_mem_read<uint32_t>(rdram, slot_ptr + 308);
-        uint32_t off_312  = psp_mem_read<uint32_t>(rdram, slot_ptr + 312);
-        uint32_t off_316  = psp_mem_read<uint32_t>(rdram, slot_ptr + 316);
-        std::fprintf(stderr,
-            "[IO_DIAG] SetAsyncCallback fd=%d cbArg=0x%08X "
-            "state=%u ap=%u sfd=%u saved=%u "
-            "fs=%u [292]=%u [296]=%u [304]=%u [308]=%u [312]=%u [316]=%u "
-            "caller=0x%08X\n",
-            fd, callbackArg, state, ap, slot_fd, saved_st,
-            file_sz, off_292, off_296, off_304, off_308, off_312, off_316,
-            g_last_func_addr);
+    // Game-module diagnostic (#47 P5 seam): slot-field dumps keyed to the
+    // game's async-slot struct layout live game-side.
+    if (g_io_policy.on_set_async_callback != nullptr) {
         auto path_it = g_fd_table.find(fd);
-        if (path_it != g_fd_table.end() && off_308 != 0U && off_292 == 0U) {
-            static int bnd_slot_path_logs = 0;
-            if (++bnd_slot_path_logs <= 12) {
-                std::fprintf(stderr,
-                    "[IO_DIAG_PATH] fd=%d psp_path=\"%s\"\n",
-                    fd, path_it->second.psp_path.c_str());
-            }
-        }
+        g_io_policy.on_set_async_callback(
+            rdram, fd, callbackArg,
+            path_it != g_fd_table.end()
+                ? path_it->second.psp_path.c_str() : nullptr);
     }
     // This is a pre-registration: the game calls SetAsyncCallback(fd=0)
     // BEFORE calling OpenAsync, to register the callback for the upcoming
@@ -1333,8 +1187,10 @@ static void hle_sceIoSetAsyncCallback(
     if (it != g_fd_table.end()) {
         it->second.callbackId  = callbackId;
         it->second.callbackArg = callbackArg;
-        prepare_bnd_backed_async_slot(
-            rdram, it->second.psp_path, callbackArg);
+        if (g_io_policy.prepare_async_slot != nullptr) {
+            g_io_policy.prepare_async_slot(
+                rdram, it->second.psp_path.c_str(), callbackArg);
+        }
 
         // Track last known cbArg for this cbId (for inheritance when cbArg=0)
         if (callbackId != 0 && callbackArg != 0) {
