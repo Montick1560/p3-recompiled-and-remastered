@@ -184,7 +184,7 @@ echo "PASS A9: BND_DISABLE preserved ([BND_SLOT_SHORT] count=0)"
 # -----------------------------------------------------------------------------
 # Step 6: A10 — corrupt BND aborts with exit 134 + [BND_ERR] line
 # -----------------------------------------------------------------------------
-./runtime/tests/make_corrupt_bnd.sh disc0/PSP_GAME/USRDIR/DATA_CMN.BND "$CORRUPT_BND"
+./games/patapon/tests/make_corrupt_bnd.sh disc0/PSP_GAME/USRDIR/DATA_CMN.BND "$CORRUPT_BND"
 set +e
 DATA_CMN_BND_PATH="$CORRUPT_BND" timeout 12 "$RUNTIME" > "$LOG_CORRUPT" 2>&1
 RC=$?

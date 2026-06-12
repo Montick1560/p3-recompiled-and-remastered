@@ -54,41 +54,9 @@ constexpr int32_t SCE_KERNEL_ERROR_BADF          = (int32_t)0x80020323U;
 // PSP_ADDR_MASK (0x07FFFFFFU) is defined in psp_memory.h
 constexpr uint32_t PSP_USER_MEM_BASE  = 0x08800000U;
 constexpr uint32_t PSP_USER_MEM_END   = 0x0C000000U;  // PSP Slim (64MB): user space up to 0x0C000000
-// BND parser arena — host-side asset staging region OUTSIDE guest user memory.
-//
-// History: the arena originally lived at 0x0B000000..0x0C000000 (carved from
-// the top of user memory, Phase 11 D-02). That collided with guest thread
-// stacks, which `psp_alloc_stack` carves DOWN from PSP_USER_MEM_END - 0x1000
-// = 0x0BFFF000: by the time titledata.bnd (1.4 MB decompressed) resolved, the
-// arena bump cursor had reached ~0x0BE3CC00 and the payload memcpy stomped
-// user_main's live stack frames (saved s3 = engine base overwritten →
-// frame-tick list walk never terminated → boot halted at Frame 5). The arena
-// also OOMed at 16 MB.
-//
-// New placement: guest VA 0x0C400000..0x0F400000 (48 MB). Alias safety under
-// the runtime's 0x07FFFFFFU mask into the 128 MB rdram:
-//   - arena masks to rdram [0x04400000, 0x07400000)
-//   - guest user RAM 0x08000000..0x0BFFFFFF masks to [0x00000000, 0x04000000)
-//   - VRAM 0x04000000..0x041FFFFF (and uncached 0x44000000 alias) masks to
-//     [0x04000000, 0x04200000) — arena starts 2 MB above it
-//   - scratchpad 0x00010000 masks to itself (far below)
-//   - the [S252] probe stack at 0x0FF00000 masks to 0x07F00000 — above the
-//     arena end with 11 MB margin
-// No guest region or runtime reservation aliases into [0x04400000, 0x07400000).
-constexpr uint32_t PSP_BND_ARENA_BASE = 0x0C400000U;
-constexpr uint32_t PSP_BND_ARENA_END  = 0x0F400000U;
+// (The BND asset-arena constants that lived here moved with the BND layer
+// to games/patapon/runtime/asset_bnd.h — issue #47 Phase 5.)
 constexpr uint32_t PSP_KERNEL_MEM_BASE = 0x08000000U;
-
-// Compile-time alias-safety guards for the BND arena (mask = 0x07FFFFFFU,
-// rdram = 128 MB = 0x08000000 bytes, VRAM masked end = 0x04200000).
-static_assert(PSP_BND_ARENA_BASE >= PSP_USER_MEM_END,
-              "BND arena must not overlap guest user memory / thread stacks");
-static_assert((PSP_BND_ARENA_BASE & 0x07FFFFFFU) >= 0x04200000U,
-              "BND arena (masked) must not overlap VRAM");
-static_assert(((PSP_BND_ARENA_END - 1U) & 0x07FFFFFFU) < 0x08000000U
-                  && (PSP_BND_ARENA_END & 0x07FFFFFFU)
-                         > (PSP_BND_ARENA_BASE & 0x07FFFFFFU),
-              "BND arena (masked) must fit contiguously inside 128MB rdram");
 
 // ---- Kernel Memory Allocator ----
 

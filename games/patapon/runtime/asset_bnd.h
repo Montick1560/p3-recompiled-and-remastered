@@ -1,17 +1,18 @@
 #pragma once
 
 // ============================================================================
-// runtime/include/asset_bnd.h — Phase 11 BND parser + arena allocator API
+// games/patapon/runtime/asset_bnd.h — Phase 11 BND parser + arena allocator
+// API (Patapon game module; moved from runtime/include in issue #47 Phase 5
+// — the BND format and DATA_CMN.BND are Patapon-specific).
 //
-// Public C++ API for the host-side DATA_CMN.BND parser. The runtime opens
-// `disc0/PSP_GAME/USRDIR/DATA_CMN.BND`, validates its 16-byte header, walks
-// the entry table at offset 0x70 with the walk-until-invalid predicate (see
-// 11-RESEARCH.md §3, R-02), and lazily decompresses+allocates per-asset
+// Public C++ API for the host-side DATA_CMN.BND parser. The game module
+// opens `disc0/PSP_GAME/USRDIR/DATA_CMN.BND`, validates its 16-byte header,
+// walks the entry table at offset 0x70 with the walk-until-invalid predicate
+// (see 11-RESEARCH.md §3, R-02), and lazily decompresses+allocates per-asset
 // descriptors into the dedicated PSP arena at 0x0C400000..0x0F400000.
 //
-// All public symbols here pair with definitions in runtime/src/asset_bnd.cpp.
-// The header is declaration-only — no inline function bodies. Mirror the
-// idiom used by runtime/include/hle/psp_hle.h:1-105.
+// All public symbols here pair with definitions in asset_bnd.cpp.
+// The header is declaration-only — no inline function bodies.
 //
 // CLAUDE.md §3 rule 3: every API that touches PSP memory takes `uint8_t* rdram`
 // as its FIRST parameter — rdram is NEVER a recomp_context field.
@@ -23,8 +24,48 @@
 #include <cstdint>
 #include <string>
 
+#include "hle/psp_hle.h"  // PSP_USER_MEM_END (arena alias-safety asserts)
+
 // Forward declaration — runtime/include/recomp.h owns the full definition.
 struct recomp_context;
+
+// ---- BND parser arena placement ----
+// Host-side asset staging region OUTSIDE guest user memory. Moved here from
+// runtime/include/hle/psp_hle.h with the rest of the BND layer (issue #47
+// Phase 5) — the arena exists only for this parser.
+//
+// History: the arena originally lived at 0x0B000000..0x0C000000 (carved from
+// the top of user memory, Phase 11 D-02). That collided with guest thread
+// stacks, which `psp_alloc_stack` carves DOWN from PSP_USER_MEM_END - 0x1000
+// = 0x0BFFF000: by the time titledata.bnd (1.4 MB decompressed) resolved, the
+// arena bump cursor had reached ~0x0BE3CC00 and the payload memcpy stomped
+// user_main's live stack frames (saved s3 = engine base overwritten →
+// frame-tick list walk never terminated → boot halted at Frame 5). The arena
+// also OOMed at 16 MB.
+//
+// Placement: guest VA 0x0C400000..0x0F400000 (48 MB). Alias safety under
+// the runtime's 0x07FFFFFFU mask into the 128 MB rdram:
+//   - arena masks to rdram [0x04400000, 0x07400000)
+//   - guest user RAM 0x08000000..0x0BFFFFFF masks to [0x00000000, 0x04000000)
+//   - VRAM 0x04000000..0x041FFFFF (and uncached 0x44000000 alias) masks to
+//     [0x04000000, 0x04200000) — arena starts 2 MB above it
+//   - scratchpad 0x00010000 masks to itself (far below)
+//   - the [S252] probe stack at 0x0FF00000 masks to 0x07F00000 — above the
+//     arena end with 11 MB margin
+// No guest region or runtime reservation aliases into [0x04400000, 0x07400000).
+constexpr uint32_t PSP_BND_ARENA_BASE = 0x0C400000U;
+constexpr uint32_t PSP_BND_ARENA_END  = 0x0F400000U;
+
+// Compile-time alias-safety guards for the BND arena (mask = 0x07FFFFFFU,
+// rdram = 128 MB = 0x08000000 bytes, VRAM masked end = 0x04200000).
+static_assert(PSP_BND_ARENA_BASE >= PSP_USER_MEM_END,
+              "BND arena must not overlap guest user memory / thread stacks");
+static_assert((PSP_BND_ARENA_BASE & 0x07FFFFFFU) >= 0x04200000U,
+              "BND arena (masked) must not overlap VRAM");
+static_assert(((PSP_BND_ARENA_END - 1U) & 0x07FFFFFFU) < 0x08000000U
+                  && (PSP_BND_ARENA_END & 0x07FFFFFFU)
+                         > (PSP_BND_ARENA_BASE & 0x07FFFFFFU),
+              "BND arena (masked) must fit contiguously inside 128MB rdram");
 
 // ----------------------------------------------------------------------------
 // BND Arena Allocator

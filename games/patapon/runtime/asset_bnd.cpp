@@ -1,7 +1,7 @@
 // ============================================================================
 // runtime/src/asset_bnd.cpp — Phase 11-03 BND parser foundation
 //
-// Implements the public API declared in runtime/include/asset_bnd.h:
+// Implements the public API declared in games/patapon/runtime/asset_bnd.h:
 //   - psp_alloc_bnd_arena  — mutex-guarded bump allocator over
 //                            [PSP_BND_ARENA_BASE..PSP_BND_ARENA_END]
 //   - bnd_init             — open + header-validate + entry-table walk

@@ -104,7 +104,6 @@ endif()
 # Runtime sources
 set(RUNTIME_SOURCES
     src/main.cpp
-    src/asset_bnd.cpp
     src/psp_memory.cpp
     src/psp_dispatch.cpp
     src/psp_scheduler.cpp
@@ -262,13 +261,13 @@ target_compile_options(test_debug_socket PRIVATE
 add_test(NAME debug_socket_tests COMMAND test_debug_socket)
 
 # BND parser unit test target (mirrors test_vfpu convention: no SDL2/GL,
-# links the parser plus psp_memory + system zlib only). The test source
-# `tests/test_asset_bnd.cpp` is created in Plan 11-06; the EXISTS guard
-# leaves the target inactive until then so this plan's build stays green.
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_asset_bnd.cpp)
+# links the parser plus psp_memory + system zlib only). The BND layer is
+# part of the Patapon game module (issue #47 Phase 5), so the target only
+# exists when that module is selected.
+if(PSPRECOMP_GAME STREQUAL "patapon")
     set(BND_TEST_SOURCES
-        tests/test_asset_bnd.cpp
-        src/asset_bnd.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon/tests/test_asset_bnd.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon/runtime/asset_bnd.cpp
         src/psp_memory.cpp
     )
 
@@ -277,6 +276,7 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_asset_bnd.cpp)
     target_include_directories(test_asset_bnd PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${PSPRECOMP_OUTPUT_DIR}/include  # recomp.h
+        ${PSP_GAME_INCLUDE_DIR}          # asset_bnd.h
     )
 
     target_link_libraries(test_asset_bnd PRIVATE

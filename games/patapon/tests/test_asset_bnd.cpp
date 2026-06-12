@@ -1,5 +1,6 @@
 // ============================================================================
-// runtime/tests/test_asset_bnd.cpp — Phase 11-06 BND parser unit tests
+// games/patapon/tests/test_asset_bnd.cpp — Phase 11-06 BND parser unit tests
+// (moved from runtime/tests with the BND layer, issue #47 Phase 5)
 //
 // Activates the EXISTS-gated `test_asset_bnd` CMake target declared by
 // Plan 11-02. Linked against `asset_bnd.cpp` + `psp_memory.cpp` only
@@ -36,7 +37,7 @@
 // ============================================================================
 
 #include "asset_bnd.h"
-#include "hle/psp_hle.h"   // PSP_BND_ARENA_BASE / PSP_BND_ARENA_END
+#include "hle/psp_hle.h"
 #include "psp_memory.h"
 #include "recomp.h"
 
