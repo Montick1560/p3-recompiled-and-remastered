@@ -405,6 +405,13 @@ static bool ge_proj_matrix_degenerate(const GeState& state) {
     return bad;
 }
 
+// Game-module degenerate-matrix fallback slot (#47 P5 seam).
+static GeDegenerateFallbackFn g_degenerate_fallback = nullptr;
+
+void ge_vertex_set_degenerate_fallback(GeDegenerateFallbackFn fn) {
+    g_degenerate_fallback = fn;
+}
+
 void ge_transform_vertices(
     std::vector<DecodedVertex>& verts,
     const GeState& state
@@ -436,14 +443,10 @@ void ge_transform_vertices(
         // diagonal) -- open issue, FPU/VFPU dataflow family.
         // Remove these workarounds when that is fixed.
         //
-        // Since the issue #27 VFPU register-file fix, the proj
-        // upload is a valid finite ortho, but the view upload is
-        // still all-zero (the guest-side gum view buffer at
-        // ~0x090965B0 is never written -- next divergence layer).
         // An all-zero view with a valid proj can never render
         // correctly through the real path (identity-view is a
-        // wrong guess against the 176x100 ortho extents), so an
-        // all-zero view ALSO routes to the NDC-direct mapping.
+        // wrong guess against the title's ortho extents), so an
+        // all-zero view ALSO routes to the degenerate fallback.
         // The full real path engages automatically once the guest
         // uploads a non-zero view matrix.
         bool view_zero = ge_view_matrix_all_zero(state);
@@ -460,14 +463,25 @@ void ge_transform_vertices(
             }
 
             if (ndc_direct) {
-                // Bypass proj: emit NDC directly from
-                // world-space. This is the ortho mapping
-                // Patapon intends (viewport scale 240/-136,
-                // center 2048, offset 1808/1912 makes
-                // NDC-direct equivalent).
-                v.pos[0] = wpos[0] / 240.0f - 1.0f;
-                v.pos[1] = wpos[1] / 136.0f + 1.0f;
-                v.pos[2] = 0.0f;
+                // Bypass proj: emit NDC directly from world-space.
+                // The mapping is title-tuned and installs from the
+                // game module (#47 P5 seam); without one, pass the
+                // world-space position through unchanged.
+                if (g_degenerate_fallback != nullptr) {
+                    g_degenerate_fallback(wpos, v.pos);
+                } else {
+                    static bool warned = false;
+                    if (!warned) {
+                        warned = true;
+                        std::fprintf(stderr,
+                            "[GE] degenerate-matrix fallback: no game "
+                            "fallback installed -- world-space "
+                            "passthrough\n");
+                    }
+                    v.pos[0] = wpos[0];
+                    v.pos[1] = wpos[1];
+                    v.pos[2] = wpos[2];
+                }
             } else {
                 float clip[4];
                 vec3_by_matrix44(state.proj_matrix,

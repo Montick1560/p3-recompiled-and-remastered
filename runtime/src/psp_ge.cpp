@@ -29,7 +29,7 @@ static uint32_t  g_finish_arg = 0;
 // -- GE-callback guest stack --
 // Lazily carved once from the top of PSP user memory (same allocator as
 // thread stacks). GE callbacks run guest code that pushes a stack frame
-// (e.g. 0x08816F9C does `addiu sp, sp, -0x10`), so a fresh zeroed ctx
+// (a typical finish handler opens with `addiu sp, sp, -0x10`), so a fresh zeroed ctx
 // with sp=0 would corrupt low memory. Shared by FINISH and SIGNAL paths.
 static uint32_t g_ge_cb_stack_top = 0;
 
@@ -211,8 +211,8 @@ GeListResult ge_process_display_list(
         case GE_CMD_FINISH: {
             // FINISH signals that the display list is complete.
             // On real PSP the GE FINISH interrupt fires the registered
-            // finish callback (sceGeSetCallback finish_func, here
-            // 0x08816F9C) with a0 = FINISH data & 0xffff (the token the
+            // finish callback (sceGeSetCallback finish_func,
+            // registered by the game) with a0 = FINISH data & 0xffff (the token the
             // game embedded in the list -- 0xffff for the frame tick)
             // and a1 = the registered finish arg. The handler pushes a
             // stack frame, so it needs a valid guest sp.
@@ -317,7 +317,7 @@ GeListResult ge_process_display_list(
             // Fire the registered GE signal callback.
             // On real PSP the GE interrupt handler calls this when the
             // SIGNAL command is encountered during list processing.
-            // The sgx signal callback (0x08816F20) calls sceKernelSetEventFlag
+            // The game's registered signal callback calls sceKernelSetEventFlag
             // which wakes the thread that calls sceKernelSignalSema(uid=259).
             std::fprintf(stderr,
                 "[GE] SIGNAL cmd at 0x%08X data=0x%06X fn=0x%08X\n",

@@ -36,3 +36,14 @@ void ge_transform_vertices(
     std::vector<DecodedVertex>& verts,
     const GeState& state
 );
+
+// ---- Game-module degenerate-matrix fallback (issue #47 Phase 5 seam) ----
+// When the guest uploads broken matrices (view all-zero; proj NaN/Inf or
+// collapsed diagonal — open issue, FPU/VFPU dataflow family), the real
+// transform path cannot work. The mapping that produces a usable frame
+// anyway is GAME-TUNED (it depends on the title's intended projection),
+// so it installs from the game module. Generic default: world-space
+// passthrough (positions used as NDC unchanged) plus the one-time warns.
+// Signature: world-space position in, NDC out.
+using GeDegenerateFallbackFn = void (*)(const float wpos[3], float out[3]);
+void ge_vertex_set_degenerate_fallback(GeDegenerateFallbackFn fn);
