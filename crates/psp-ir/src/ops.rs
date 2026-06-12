@@ -494,6 +494,28 @@ pub enum MipsOp {
     /// word-to-IR mapping (label addresses, mid-entry dispatch) is preserved.
     BranchHazardDelay { branch: Box<MipsOp>, delay: Box<MipsOp> },
 
+    /// Duplicated delay-slot instruction at its own word position (issue #56).
+    ///
+    /// Created by the decoder when a branch/delay pair's delay-slot ADDRESS is
+    /// itself an in-function branch target ("branch into delay slot", BIDS —
+    /// e.g. the SCE libc VFPU memset tail loops back into a `beq`'s delay
+    /// slot). The pair is fused into `BranchHazardDelay` at the branch's
+    /// position (taken/fall-through semantics), and this node occupies the
+    /// delay slot's position so a back-edge that enters AT the delay-slot
+    /// address executes the instruction — hardware runs it there as a normal
+    /// instruction. The emitter lowers the pair as:
+    ///
+    /// ```text
+    /// L_A:  { hazard block: snapshot; delay; if (cond) goto target; }
+    ///       goto L_A8;     // fall-through must NOT re-execute the duplicate
+    /// L_A4: <instr>        // direct entries get hardware semantics
+    /// L_A8: ...
+    /// ```
+    ///
+    /// Positional word-to-IR mapping (labels, mid-entry dispatch) is
+    /// preserved: 2 ops at 2 word positions.
+    DelaySlotRejoin { instr: Box<MipsOp> },
+
     // -------------------------------------------------------------------------
     // Relocation site markers (EMIT-10)
     // -------------------------------------------------------------------------

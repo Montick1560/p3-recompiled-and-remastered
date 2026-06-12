@@ -30,6 +30,11 @@ pub enum DecodeError {
     /// Byte slice length is not a multiple of 4 (cannot read complete words).
     #[error("byte slice out of bounds or not word-aligned")]
     OutOfBounds,
+    /// A branch/jump sits in a delay slot that is itself a branch target
+    /// (BIDS, issue #56). Invalid MIPS the rejoin duplicate cannot represent
+    /// — fail loudly instead of mis-emitting.
+    #[error("control-transfer instruction in branched-into delay slot at vaddr 0x{0:08X}")]
+    BranchInDelaySlot(u32),
 }
 
 // -------------------------------------------------------------------------
@@ -213,7 +218,73 @@ pub fn decode_function(
         .collect();
 
     // Second pass: apply delay slot reordering
-    let mut result: Vec<MipsOp> = Vec::with_capacity(word_count);
+    reorder_delay_slots(&raw_ops, base_vaddr, func_end)
+}
+
+/// Collect every in-function static control-flow target: conditional branch
+/// targets, `j`/`jal` targets, and resolved jump-table cases, restricted to
+/// `[func_start, func_end)`. Used for branch-into-delay-slot (BIDS, issue #56)
+/// detection: a delay-slot ADDRESS in this set needs a duplicated copy of the
+/// delay instruction at its own label.
+fn in_function_branch_targets(
+    raw_ops: &[(u32, MipsOp)],
+    func_start: u32,
+    func_end: u32,
+) -> std::collections::HashSet<u32> {
+    fn add(targets: &mut std::collections::HashSet<u32>, t: u32, start: u32, end: u32) {
+        if t >= start && t < end {
+            targets.insert(t);
+        }
+    }
+    let mut targets = std::collections::HashSet::new();
+    for (_, op) in raw_ops {
+        match op {
+            MipsOp::J { target }
+            | MipsOp::Jal { target }
+            | MipsOp::Beq { target, .. }
+            | MipsOp::Bne { target, .. }
+            | MipsOp::Blez { target, .. }
+            | MipsOp::Bgtz { target, .. }
+            | MipsOp::Bltz { target, .. }
+            | MipsOp::Bgez { target, .. }
+            | MipsOp::Bltzal { target, .. }
+            | MipsOp::Bgezal { target, .. }
+            | MipsOp::Bc1t { target, .. }
+            | MipsOp::Bc1f { target, .. }
+            | MipsOp::VfpuBvf { target, .. }
+            | MipsOp::VfpuBvt { target, .. } => add(&mut targets, *target, func_start, func_end),
+            MipsOp::JumpTable { cases, .. } => {
+                for &c in cases {
+                    add(&mut targets, c, func_start, func_end);
+                }
+            }
+            _ => {}
+        }
+    }
+    targets
+}
+
+/// Second decode pass: reorder each (branch, delay-slot) pair into emittable IR.
+///
+/// - Branch-likely: delay wrapped in `DelaySlot{}` AFTER the branch (emitter
+///   places it inside the taken path).
+/// - Hazard (delay WRITES a register the branch READS, issue #12): fused
+///   `BranchHazardDelay` + positional `Nop` pad.
+/// - Standard: plain swap — delay BEFORE branch.
+/// - BIDS (issue #56): when the delay slot's ADDRESS is itself an in-function
+///   branch target, the slot's position must hold the INSTRUCTION (hardware
+///   executes it there as a normal instruction), never a `Nop` pad (empty
+///   label) or the swapped branch (a branch hardware never takes from that
+///   entry). The pair becomes `BranchHazardDelay` (always snapshots — correct
+///   for hazard and non-hazard alike) + `DelaySlotRejoin` duplicate; for
+///   branch-likely the branch stays and the slot gets the duplicate.
+fn reorder_delay_slots(
+    raw_ops: &[(u32, MipsOp)],
+    func_start: u32,
+    func_end: u32,
+) -> Result<Vec<MipsOp>, DecodeError> {
+    let branch_targets = in_function_branch_targets(raw_ops, func_start, func_end);
+    let mut result: Vec<MipsOp> = Vec::with_capacity(raw_ops.len());
     let mut skip_next = false;
 
     for i in 0..raw_ops.len() {
@@ -226,13 +297,34 @@ pub fn decode_function(
 
         if is_branch_or_jump(op) {
             if i + 1 < raw_ops.len() {
-                let (_, ref ds_op) = raw_ops[i + 1];
+                let (ds_vaddr, ref ds_op) = raw_ops[i + 1];
                 skip_next = true;
+                let bids = branch_targets.contains(&ds_vaddr);
+
+                if bids && is_branch_or_jump(ds_op) {
+                    // A control transfer in a branched-into delay slot is
+                    // invalid MIPS the rejoin duplicate cannot represent —
+                    // fail loudly (decode errors become stubs, issue #56).
+                    return Err(DecodeError::BranchInDelaySlot(ds_vaddr));
+                }
 
                 if is_branch_likely(op) {
-                    // Branch-likely: delay slot wrapped in DelaySlot{}, placed AFTER branch
+                    // Branch-likely: delay slot executes ONLY when taken. The
+                    // emitter pairs the branch with the next node; a BIDS slot
+                    // additionally gets the duplicate at its own label.
                     result.push(op.clone());
-                    result.push(MipsOp::DelaySlot { instr: Box::new(ds_op.clone()) });
+                    let instr = Box::new(ds_op.clone());
+                    result.push(if bids {
+                        MipsOp::DelaySlotRejoin { instr }
+                    } else {
+                        MipsOp::DelaySlot { instr }
+                    });
+                } else if bids {
+                    result.push(MipsOp::BranchHazardDelay {
+                        branch: Box::new(op.clone()),
+                        delay: Box::new(ds_op.clone()),
+                    });
+                    result.push(MipsOp::DelaySlotRejoin { instr: Box::new(ds_op.clone()) });
                 } else if has_delay_slot_hazard(op, ds_op) {
                     // Hazard: the delay slot WRITES a register the branch READS.
                     // Real MIPS evaluates the condition / captures the jump target

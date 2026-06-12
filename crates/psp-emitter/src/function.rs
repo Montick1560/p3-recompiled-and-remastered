@@ -503,6 +503,21 @@ pub fn emit_function(func: &DecodedFunction, gen: &mut dyn Generator, imports: &
             let instr_vaddr = block.vaddr.saturating_add(i as u32 * 4);
             gen.emit_label(&format!("L_{instr_vaddr:08X}"));
 
+            // BIDS pairing (issue #56): the next node is a DelaySlotRejoin —
+            // this branch's delay-slot ADDRESS is itself a branch target.
+            // Emit the branch/delay block at this position, an unconditional
+            // skip (fall-through must not re-execute the duplicate), then the
+            // delay-slot label holding a duplicated copy of the instruction
+            // so back-edges INTO the slot get hardware semantics.
+            if let Some(MipsOp::DelaySlotRejoin { instr: dup }) = instrs.get(i + 1) {
+                emit_bids_pair(
+                    &instrs[i], dup, gen, &ra_ctx, instrs, i, instr_vaddr, func.vaddr,
+                    func_end, imports,
+                );
+                i += 2;
+                continue;
+            }
+
             // Option-A LINK/RA lowering for coalesced owners (intercepts
             // internal jal/bltzal/bgezal and jr ra; external/other ops fall
             // through to the normal path below).
@@ -594,6 +609,65 @@ fn is_terminal_external_jal(seq: &[MipsOp], i: usize, func_start: u32, func_end:
     }
     i + 1 == seq.len()
         || (i + 2 == seq.len() && matches!(seq[i + 1], MipsOp::DelaySlot { .. }))
+}
+
+/// Emit a fused BIDS pair (issue #56): a branch whose delay-slot ADDRESS is
+/// itself an in-function branch target, followed by its `DelaySlotRejoin`
+/// duplicate. Lowering:
+///
+/// ```text
+/// L_A:  { branch/delay block (hazard snapshot or likely taken-path copy) }
+///       goto L_A8;     // fall-through must NOT re-execute the duplicate
+/// L_A4: <delay instr>  // back-edges into the slot get hardware semantics
+/// L_A8: ...
+/// ```
+///
+/// `op` is the decoder-produced node at the branch position: a
+/// `BranchHazardDelay` (non-likely forms) or a bare branch-likely. Coalesced
+/// RA-modeled link branches are routed through `emit_coalesced_link_ra` first
+/// so internal `bltzal`/`bgezal` BIDS sites keep the link write.
+#[allow(clippy::too_many_arguments)]
+fn emit_bids_pair(
+    op: &MipsOp,
+    dup: &MipsOp,
+    gen: &mut dyn Generator,
+    ra_ctx: &Option<RaCtx>,
+    seq: &[MipsOp],
+    i: usize,
+    instr_vaddr: u32,
+    func_start: u32,
+    func_end: u32,
+    imports: &ImportMap,
+) {
+    let ra_handled = match ra_ctx {
+        Some(rc) => emit_coalesced_link_ra(
+            op, gen, rc, seq, i, instr_vaddr, func_start, func_end, imports,
+        ),
+        None => false,
+    };
+    if !ra_handled {
+        if is_likely(op) {
+            // Likely branch: the conditional delay-slot copy runs inside the
+            // taken path only; the duplicate below serves direct entries.
+            let ds_cpp = capture_op_cpp(dup, imports, func_start, func_end);
+            emit_op_with_ds(op, gen, imports, func_start, func_end, &ds_cpp);
+        } else {
+            emit_op(op, gen, imports, func_start, func_end);
+        }
+    }
+
+    // Unconditional skip over the duplicate, then the delay-slot label.
+    let ds_vaddr = instr_vaddr.wrapping_add(4);
+    let rejoin = instr_vaddr.wrapping_add(8);
+    if rejoin < func_end {
+        gen.emit_goto(&format!("L_{rejoin:08X}"));
+    } else {
+        // Pair sits at the very end of the function: fall-through past the
+        // duplicate would run off the body — exit like any end-of-body path.
+        gen.emit_raw("return; /* BIDS skip: rejoin point beyond function end */");
+    }
+    gen.emit_label(&format!("L_{ds_vaddr:08X}"));
+    emit_op(dup, gen, imports, func_start, func_end);
 }
 
 /// Emit a branch instruction, or a conditional tail call if the target is outside
@@ -718,13 +792,21 @@ fn emit_hazard_snapshots(branch: &MipsOp, gen: &mut dyn Generator) -> (String, S
             gen.emit_raw(&format!("const uint32_t _bh1 = (uint32_t)({rt_s});"));
             ("_bh0".into(), "_bh1".into())
         }
+        // `jr $ra` is excluded: it lowers to a plain `return;` (the register
+        // VALUE is never consumed), so a BIDS-fused `jr ra` (issue #56) must
+        // take the no-snapshot fallback `{ delay; return; }` — dispatching on
+        // a snapshotted r31 would break the C++-native return model.
+        MipsOp::Jr { rs } if *rs != Reg::Gpr(31) => {
+            let rs_s = gen.emit_gpr_read(*rs);
+            gen.emit_raw(&format!("const uint32_t _bh0 = (uint32_t)({rs_s});"));
+            ("_bh0".into(), String::new())
+        }
         MipsOp::Blez { rs, .. }
         | MipsOp::Bgtz { rs, .. }
         | MipsOp::Bltz { rs, .. }
         | MipsOp::Bgez { rs, .. }
         | MipsOp::Bltzal { rs, .. }
         | MipsOp::Bgezal { rs, .. }
-        | MipsOp::Jr { rs }
         | MipsOp::Jalr { rs, .. } => {
             let rs_s = gen.emit_gpr_read(*rs);
             gen.emit_raw(&format!("const uint32_t _bh0 = (uint32_t)({rs_s});"));
@@ -1594,6 +1676,16 @@ fn emit_op(
         }
 
         // -----------------------------------------------------------------
+        // BIDS duplicate (issue #56) — normally consumed by the pairing in
+        // `emit_function` (which emits the skip-goto + label + duplicate).
+        // Standalone fallback: the duplicate at its own label IS the
+        // direct-entry (hardware) semantic of the delay-slot word.
+        // -----------------------------------------------------------------
+        MipsOp::DelaySlotRejoin { instr } => {
+            emit_op(instr, gen, imports, func_start, func_end);
+        }
+
+        // -----------------------------------------------------------------
         // Relocation site markers (EMIT-10)
         // -----------------------------------------------------------------
         MipsOp::RelocHi16 { rt, section_idx, symbol_offset } => {
@@ -1938,6 +2030,153 @@ mod tests {
         let dispatch = gen.output.iter().position(|s| s == "CALL_LOOKUP_REG:_bh0")
             .expect("jr must dispatch on the snapshot");
         assert!(snap < delay && delay < dispatch, "snapshot -> delay -> dispatch order");
+    }
+
+    // --- BIDS rejoin pairing (issue #56) -----------------------------------
+
+    /// The memset-tail shape: BranchHazardDelay{beq a2,zero / addiu a2,-1} at
+    /// 0x08804000 whose delay slot 0x08804004 is a branch target (the bne at
+    /// 0x0880400C loops back into it).
+    fn bids_memset_tail_ops() -> Vec<MipsOp> {
+        vec![
+            MipsOp::BranchHazardDelay {
+                branch: Box::new(MipsOp::Beq {
+                    rs: Reg::Gpr(6),
+                    rt: Reg::Zero,
+                    target: 0x08804014,
+                    likely: false,
+                }),
+                delay: Box::new(MipsOp::Addiu { rt: Reg::Gpr(6), rs: Reg::Gpr(6), imm: -1 }),
+            },
+            MipsOp::DelaySlotRejoin {
+                instr: Box::new(MipsOp::Addiu { rt: Reg::Gpr(6), rs: Reg::Gpr(6), imm: -1 }),
+            },
+            MipsOp::Sb { rt: Reg::Gpr(5), rs: Reg::Gpr(4), offset: 0 },
+            MipsOp::Addiu { rt: Reg::Gpr(4), rs: Reg::Gpr(4), imm: 1 },
+            MipsOp::Bne {
+                rs: Reg::Gpr(6),
+                rt: Reg::Zero,
+                target: 0x08804004,
+                likely: false,
+            },
+            MipsOp::Jr { rs: Reg::Gpr(31) },
+        ]
+    }
+
+    #[test]
+    fn bids_rejoin_emits_skip_and_duplicate_at_slot_label() {
+        let mut func = make_func(bids_memset_tail_ops());
+        func.size = 0x18;
+        let mut gen = TestGenerator::new();
+        emit_function(&func, &mut gen, &ImportMap::new());
+
+        // Order: hazard delay (in-block) -> skip goto L_..08 -> label L_..04
+        // -> duplicate delay instr.
+        let block_delay = gen
+            .output
+            .iter()
+            .position(|s| s.contains("ctx->r[6] = ctx->r[6] + -1"))
+            .expect("hazard block must run the delay once");
+        let skip = gen
+            .output
+            .iter()
+            .position(|s| s == "goto L_08804008;")
+            .expect("fall-through must skip the duplicate: {gen.output:?}");
+        let slot_label = gen
+            .output
+            .iter()
+            .position(|s| s == "LABEL:L_08804004")
+            .expect("delay-slot address keeps its label");
+        let dup = gen.output[slot_label + 1..]
+            .iter()
+            .position(|s| s.contains("ctx->r[6] = ctx->r[6] + -1"))
+            .map(|p| p + slot_label + 1)
+            .expect("duplicate delay instr must live AT the slot label");
+        assert!(block_delay < skip && skip < slot_label && slot_label < dup,
+            "hazard-block -> skip -> label -> duplicate, got {:?}", gen.output);
+
+        // The back-edge target label is no longer empty: the very next emitted
+        // item after L_08804004 is the duplicate (not another label).
+        assert!(
+            gen.output[slot_label + 1].contains("ctx->r[6] = ctx->r[6] + -1"),
+            "label must be immediately followed by the duplicate, got {:?}",
+            &gen.output[slot_label..slot_label + 2]
+        );
+    }
+
+    #[test]
+    fn bids_pair_at_function_end_emits_return_skip() {
+        // Degenerate: the BIDS pair is the last word pair — no L_A8 exists,
+        // the skip must exit instead of emitting a goto to a missing label.
+        let ops = vec![
+            MipsOp::BranchHazardDelay {
+                branch: Box::new(MipsOp::Bne {
+                    rs: Reg::Gpr(6),
+                    rt: Reg::Zero,
+                    target: 0x08804004,
+                    likely: false,
+                }),
+                delay: Box::new(MipsOp::Addiu { rt: Reg::Gpr(6), rs: Reg::Gpr(6), imm: -1 }),
+            },
+            MipsOp::DelaySlotRejoin {
+                instr: Box::new(MipsOp::Addiu { rt: Reg::Gpr(6), rs: Reg::Gpr(6), imm: -1 }),
+            },
+        ];
+        let mut func = make_func(ops);
+        func.size = 0x8;
+        let mut gen = TestGenerator::new();
+        emit_function(&func, &mut gen, &ImportMap::new());
+        let out = gen.output.join("\n");
+        assert!(
+            !out.contains("goto L_08804008"),
+            "no goto to a label outside the function: {out}"
+        );
+        assert!(
+            out.contains("return; /* BIDS skip"),
+            "end-of-body skip must exit: {out}"
+        );
+    }
+
+    #[test]
+    fn bids_likely_branch_keeps_taken_path_copy_and_duplicate() {
+        // Branch-likely BIDS: delay-slot copy inside the taken path, skip
+        // goto, duplicate at the slot label.
+        let ops = vec![
+            MipsOp::Beq {
+                rs: Reg::Gpr(4),
+                rt: Reg::Gpr(5),
+                target: 0x0880400C,
+                likely: true,
+            },
+            MipsOp::DelaySlotRejoin {
+                instr: Box::new(MipsOp::Addiu { rt: Reg::Gpr(8), rs: Reg::Gpr(8), imm: 1 }),
+            },
+            MipsOp::Nop {},
+            MipsOp::Jr { rs: Reg::Gpr(31) },
+        ];
+        let mut func = make_func(ops);
+        func.size = 0x10;
+        let mut gen = TestGenerator::new();
+        emit_function(&func, &mut gen, &ImportMap::new());
+        let out = gen.output.join("\n");
+        // The taken path holds the delay-slot copy (rendered by the real
+        // CppGenerator via capture_op_cpp, hence the (int32_t) cast).
+        assert!(
+            gen.output.iter().any(|s| s.contains("goto L_0880400C")
+                && s.contains("ctx->r[8] = (int32_t)(ctx->r[8] + 1);")),
+            "taken path must execute the delay-slot copy: {out}"
+        );
+        assert!(out.contains("goto L_08804008;"), "skip over the duplicate: {out}");
+        let slot_label = gen
+            .output
+            .iter()
+            .position(|s| s == "LABEL:L_08804004")
+            .expect("slot label");
+        assert!(
+            gen.output[slot_label + 1].contains("ctx->r[8] = ctx->r[8] + 1"),
+            "duplicate at the slot label: {:?}",
+            &gen.output[slot_label..slot_label + 2]
+        );
     }
 
     #[test]

@@ -511,6 +511,7 @@ dependencies = [
  "anyhow",
  "base64",
  "indicatif",
+ "psp-decoder",
  "psp-ir",
  "psp-parser",
  "rayon",

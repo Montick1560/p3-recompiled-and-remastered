@@ -53,8 +53,11 @@ fn two_distinct_interior_targets_upgraded_to_jump_table() {
     // A real jump table: ≥2 distinct targets strictly inside the body.
     let base = 0x0880_4000;
     let bytes = jr_body(25); // jr $t9
-    // Interior targets: base+4 and base+0xc (both > func_start, < func_end).
-    let xrefs = vec![(0x0890_0000, base + 4), (0x0890_0004, base + 0xc)];
+    // Interior targets: base+4 and base+8 (both > func_start, < func_end).
+    // base+0xc is avoided: it is the jr's own DELAY SLOT, which would also
+    // (correctly) trigger the BIDS rejoin path (issue #56) — this test is
+    // about the JumpTable upgrade only.
+    let xrefs = vec![(0x0890_0000, base + 4), (0x0890_0004, base + 8)];
 
     let ops = decode_function(&bytes, base, &xrefs).unwrap();
 
