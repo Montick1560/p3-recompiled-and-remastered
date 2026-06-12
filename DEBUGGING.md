@@ -219,6 +219,12 @@ them (issue #43 tracks a proper registry/channel system).
 - **The freq-que/at3 audio workers parked on their reqsemas is NORMAL idle state.**
 - **`verify_geometry.sh`-style oracles need a self-test path** (a synthesized known-good
   draw) to prove they're not constant-false.
+- **A loop that never advances inside ONE function (frozen `recent_funcs` ring, one frozen
+  register) was the BIDS class** (#56, fixed): a branch into another branch's delay slot
+  used to land on an empty label / the swapped branch. The decoder now duplicates the
+  delay instruction at the slot's label (`DelaySlotRejoin`); a control transfer in a
+  branched-into slot is a loud `BranchInDelaySlot` decode error (stub) — 3 known in
+  .hack//Link, all GE-list data misdetected as code.
 
 ---
 

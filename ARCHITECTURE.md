@@ -40,7 +40,7 @@ All under `crates/`:
 |-------|----------------|
 | `psp-parser` | ELF/PRX parsing (goblin 0.9.3); PRX loading: segment rebase to `PSP_USER_MODULE_BASE`, section-first Type-A relocation discovery + PPSSPP-faithful application (`reloc.rs`), `LoadedImage` virtual-address view (`image.rs`), SceModuleInfo lookup (`prx.rs`), libstub import walking + NID resolution (`imports.rs`, `nid.rs`) |
 | `psp-ir` | `MipsOp` enum, `DecodedFunction` — typed IR for all Allegrex + FPU instructions |
-| `psp-decoder` | MIPS32 + Allegrex + FPU instruction decoding, two-pass delay-slot reordering |
+| `psp-decoder` | MIPS32 + Allegrex + FPU instruction decoding, two-pass delay-slot reordering; a branched-into delay slot (BIDS, #56) is fused at the branch (`BranchHazardDelay`) and duplicated at the slot's own position (`DelaySlotRejoin`) so back-edges into the slot keep hardware semantics |
 | `psp-optimizer` | Peephole passes; all disabled by default (`OptimizerConfig::default()` all false) |
 | `psp-emitter` | C++ code generation, batch emission (rayon), dispatch table, generated CMakeLists |
 | `psp-cli` | `psprecomp` binary with `analyze`, `recompile`, `dump` subcommands |
