@@ -1,14 +1,16 @@
 #include "hle/psp_hle.h"
-#include "hle/psp_hle_syscall_table.h"
+#include "hle/psp_hle_imports.h"
 #include "psp_scheduler.h"
 #include "recomp.h"
 
+#include <array>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 // ---- HLE Function Table ----
 // Maps NID function name -> HLE implementation.
@@ -323,6 +325,74 @@ static HleFunc alloc_trace_wrapper(HleFunc original,
     return g_trace_wrappers[slot];
 }
 
+// ---- Unimplemented import stubs (issue #40) ----
+// Every generated-table stub whose name has no registered HLE handler is
+// bound to a loud one-shot logger instead of being left as the emitted
+// silent no-op. Identity comes from a compile-time slot (same trick as the
+// trace wrappers above, via template instantiation instead of macros).
+static constexpr int HLE_UNIMPL_MAX_SLOTS = 512;
+
+struct HleUnimplSlot {
+    const RecompNidStub* stub;
+    bool logged;
+};
+
+static HleUnimplSlot g_unimpl_slots[HLE_UNIMPL_MAX_SLOTS];
+static int g_unimpl_slot_count = 0;
+
+static void hle_unimpl_call(int slot, uint8_t* rdram, recomp_context* ctx) {
+    (void)rdram;
+    (void)ctx;
+    HleUnimplSlot& s = g_unimpl_slots[slot];
+    if (!s.logged) {
+        s.logged = true;
+        std::fprintf(stderr,
+            "[HLE] UNIMPLEMENTED import %s called "
+            "(NID 0x%08X, module %s, stub 0x%08X) — behaving as a no-op\n",
+            s.stub->func_name, s.stub->nid, s.stub->module_name,
+            s.stub->stub_addr);
+    }
+    // Mirror the raw stub body ("jr $ra; nop"): no register effects.
+}
+
+template <int N>
+static void hle_unimpl_wrapper(uint8_t* rdram, recomp_context* ctx) {
+    hle_unimpl_call(N, rdram, ctx);
+}
+
+template <int... Ns>
+static constexpr std::array<HleFunc, sizeof...(Ns)>
+make_unimpl_wrappers(std::integer_sequence<int, Ns...>) {
+    return { &hle_unimpl_wrapper<Ns>... };
+}
+
+static constexpr auto g_unimpl_wrappers =
+    make_unimpl_wrappers(std::make_integer_sequence<int, HLE_UNIMPL_MAX_SLOTS>{});
+
+// Shared overflow fallback: still loud, just not per-stub-identified.
+static void hle_unimpl_overflow(uint8_t* rdram, recomp_context* ctx) {
+    (void)rdram;
+    (void)ctx;
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        std::fprintf(stderr,
+            "[HLE] UNIMPLEMENTED import called (slot table overflowed at %d; "
+            "raise HLE_UNIMPL_MAX_SLOTS to identify it) — behaving as a no-op\n",
+            HLE_UNIMPL_MAX_SLOTS);
+    }
+}
+
+/// Allocate a loud unimplemented-stub wrapper bound to `stub`.
+static HleFunc alloc_unimpl_wrapper(const RecompNidStub* stub) {
+    if (g_unimpl_slot_count >= HLE_UNIMPL_MAX_SLOTS) {
+        return &hle_unimpl_overflow;
+    }
+    int slot = g_unimpl_slot_count++;
+    g_unimpl_slots[slot] = { stub, false };
+    return g_unimpl_wrappers[static_cast<size_t>(slot)];
+}
+
 // ---- Unimplemented Syscall Logging ----
 static std::unordered_set<uint32_t> g_unimpl_syscall_logged;
 static bool g_strict_mode_hle = false;
@@ -362,17 +432,18 @@ void psp_hle_init() {
             "[HLE] Trace mode ENABLED (PSPRECOMP_HLE_TRACE=1)\n");
     }
 
-    // 2. Wire the 237 import stubs into the dispatch table.
-    //    For each stub address, if an HLE function was registered by name,
-    //    override the dispatch entry. Otherwise, leave the emitted no-op stub
-    //    (the emitter produces "return;" for the import stubs since they are
-    //    "jr $ra; nop" in the raw binary).
-    //    When tracing is enabled, wrap each function in a trace decorator.
+    // 2. Wire the generated import-stub table (issue #40: recomp_nid_stubs
+    //    comes from <output>/syscall_table.cpp, emitted per-game from
+    //    analysis.json imports[]) into the dispatch table. For each stub
+    //    address, if an HLE function was registered by name, override the
+    //    dispatch entry; otherwise bind a LOUD per-stub unimplemented
+    //    handler that logs its NID name on first call (never silent).
+    //    When tracing is enabled, wrap each implementation in a decorator.
     int implemented = 0;
     int unimplemented = 0;
 
-    for (int i = 0; i < PSP_NID_STUB_COUNT; i++) {
-        const auto& stub = PSP_NID_STUBS[i];
+    for (int i = 0; i < recomp_nid_stub_count; i++) {
+        const RecompNidStub& stub = recomp_nid_stubs[i];
         auto it = g_hle_by_name.find(stub.func_name);
 
         if (it != g_hle_by_name.end()) {
@@ -385,21 +456,38 @@ void psp_hle_init() {
             psp_dispatch_register(stub.stub_addr, fn);
             implemented++;
         } else {
-            // No implementation -- log at startup in non-quiet mode
+            psp_dispatch_register(stub.stub_addr, alloc_unimpl_wrapper(&stub));
             unimplemented++;
         }
     }
 
     std::fprintf(stderr,
         "[HLE] Import stubs: %d/%d implemented, %d unimplemented\n",
-        implemented, PSP_NID_STUB_COUNT, unimplemented);
+        implemented, recomp_nid_stub_count, unimplemented);
 
     if (g_strict_mode_hle && unimplemented > 0) {
         std::fprintf(stderr,
             "[HLE] STRICT mode: %d unimplemented NIDs "
-            "(will abort if called)\n",
+            "(loud no-op on first call)\n",
             unimplemented);
     }
+}
+
+// ---- Generated-table NID lookup (issue #40) ----
+// Linear scan over recomp_nid_stubs, cached on first use. NIDs are
+// PSP-API-universal constants, so runtime code may key on a NID (never on a
+// per-game stub address) and resolve the current game's stub through here.
+uint32_t psp_hle_stub_addr_for_nid(uint32_t nid) {
+    static std::unordered_map<uint32_t, uint32_t> cache = [] {
+        std::unordered_map<uint32_t, uint32_t> m;
+        m.reserve(static_cast<size_t>(recomp_nid_stub_count));
+        for (int i = 0; i < recomp_nid_stub_count; i++) {
+            m.emplace(recomp_nid_stubs[i].nid, recomp_nid_stubs[i].stub_addr);
+        }
+        return m;
+    }();
+    auto it = cache.find(nid);
+    return it != cache.end() ? it->second : 0;
 }
 
 // ---- Syscall Dispatch ----

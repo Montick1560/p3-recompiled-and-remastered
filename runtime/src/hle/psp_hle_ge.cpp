@@ -112,8 +112,25 @@ static void hle_sceGeSetCallback(
         constexpr int PSP_GE_INTR = 25;
         constexpr int FINISH_SUBINTR = 0;
         constexpr int SIGNAL_SUBINTR = 1;
-        FuncPtr reg = RECOMP_LOOKUP(0x089D7520U);  // sceKernelRegisterSubIntrHandler
-        FuncPtr en  = RECOMP_LOOKUP(0x089D7530U);  // sceKernelEnableSubIntr
+        // Resolve the current game's stub addresses by NID (issue #40):
+        // NIDs are PSP-API-universal constants; stub addresses are per-game.
+        uint32_t reg_stub =
+            psp_hle_stub_addr_for_nid(0xCA04A2B9U);  // sceKernelRegisterSubIntrHandler
+        uint32_t en_stub =
+            psp_hle_stub_addr_for_nid(0xFB8E22ECU);  // sceKernelEnableSubIntr
+        if (reg_stub == 0 || en_stub == 0) {
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                std::fprintf(stderr,
+                    "[GE] sceGeSetCallback: this game does not import "
+                    "RegisterSubIntrHandler/EnableSubIntr (reg=0x%08X en=0x%08X) "
+                    "— skipping the PPSSPP-aligned sub-intr replay\n",
+                    reg_stub, en_stub);
+            }
+        }
+        FuncPtr reg = reg_stub ? RECOMP_LOOKUP(reg_stub) : nullptr;
+        FuncPtr en  = en_stub  ? RECOMP_LOOKUP(en_stub)  : nullptr;
         auto call = [&](FuncPtr fn, int a0, int a1, uint32_t a2, uint32_t a3) {
             if (fn == nullptr) return;
             recomp_context sub_ctx{};

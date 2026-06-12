@@ -893,6 +893,9 @@ static uint32_t allocate_shared_noop_vtable(uint8_t* rdram) {
         return g_shared_noop_vtable_addr;
     }
 
+    // PATAPON(P6) TODO(#47): per-game stub-address baking -- this whole BND
+    // asset layer moves to games/patapon/ in portability Phase 5; the filler
+    // address must then come from per-game data, not a literal.
     constexpr uint32_t NOOP_STUB     = 0x089D76E8U;
     constexpr uint32_t VTABLE_SIZE   = 44U;   // 11 × uint32
     constexpr uint32_t VTABLE_ALIGN  = 16U;
@@ -1128,6 +1131,8 @@ void fallback_to_shared_stub(uint8_t* rdram, recomp_context* ctx,
 
     // Lazy allocate the shared 60-byte stub on first call.
     if (g_fallback_stub_desc == 0U) {
+        // PATAPON(P6) TODO(#47): same per-game literal as
+        // allocate_shared_noop_vtable -- leaves with the file in Phase 5.
         constexpr uint32_t NOOP_STUB = 0x089D76E8U;
         uint32_t vtable_addr = psp_alloc_kernel_memory(44);
         uint32_t desc_addr   = psp_alloc_kernel_memory(16);

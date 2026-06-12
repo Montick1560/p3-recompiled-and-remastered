@@ -121,9 +121,16 @@ extern bool g_hle_trace_enabled;
 /// Called during init by each per-module registration function.
 void psp_hle_register(const char* nid_name, HleFunc fn);
 
-/// Initialize HLE subsystem: register all module stubs,
-/// then override dispatch table entries for the 237 import stubs.
+/// Initialize HLE subsystem: register all module stubs, then override the
+/// dispatch table entries for every import stub in the generated table
+/// (<output>/syscall_table.cpp, issue #40). Stubs without a registered
+/// handler get a loud per-NID unimplemented no-op — never a silent gap.
 void psp_hle_init();
+
+/// Stub address of `nid` in the generated import table, or 0 when this game
+/// does not import it (issue #40). Runtime code keys on NIDs — universal PSP
+/// API constants — never on per-game stub addresses.
+uint32_t psp_hle_stub_addr_for_nid(uint32_t nid);
 
 /// Central HLE syscall dispatcher (for actual syscall instructions in binary).
 /// Called from generated code for MipsOp::Syscall instructions.
