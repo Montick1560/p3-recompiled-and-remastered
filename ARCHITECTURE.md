@@ -98,7 +98,8 @@ lives entirely under `games/<id>/`:
 | Artifact | Consumed by | Carries |
 |----------|-------------|---------|
 | `games/<id>/game.toml` | `psprecomp recompile --config` | `[recompile]` force entries / force mid-entries (replaces the former hardcoded consts), top-level stubs/skips/patches, and `[game]`/`[boot]`/`[module]`/`[runtime]` choices emitted into `recomp_game_config.h` (the runtime never parses TOML) |
-| `games/<id>/runtime/*.cpp` | runtime build via `-DPSPRECOMP_GAME=<id>` | Address-keyed dispatch hooks, allocator/CRT override inits, boot/thread context tweaks — everything title-specific that is code, not data |
+| `games/<id>/runtime/*.cpp` | runtime build via `-DPSPRECOMP_GAME=<id>` | Address-keyed dispatch hooks, allocator/CRT override bodies, boot/thread context tweaks, asset layer, IO policy, LOOKUP_MISS handler, GE vertex fallback — everything title-specific that is code, not data (Patapon: `hooks_main/_memory/_thread/_dispatch/_io/_ge.cpp` + `asset_bnd.cpp/.h`; private decls in `patapon_hooks.h`) |
+| `games/<id>/tests/`, `games/<id>/scripts/` | manual / CI | Game-coupled unit tests (`test_asset_bnd`, built only under `-DPSPRECOMP_GAME=patapon`) and acceptance scripts (`test_phase11_*.sh`) |
 
 The seam is `PspGameModule` (`runtime/include/psp_game_module.h`): one struct of
 registration hooks (`register_hooks` after `psp_hle_init()`, `on_boot_context` just
@@ -112,6 +113,23 @@ generic build verifiably contains zero game symbols (`nm | grep`). The default i
 warns loudly when the compiled-in module id differs from the output dir's
 `RECOMP_GAME_ID`. Reasoning: bring-up of a second game must not inherit Patapon's patch
 stack, and a fix that only works for one title belongs in its module, never in core.
+
+Beyond the `PspGameModule` boot hooks, the core exposes narrow installer seams a game
+module may use from `register_hooks` (issue #47 Phase 5 — each replaced formerly inline
+Patapon code; all default to no-op when uninstalled):
+
+| Seam | Header | Generic default |
+|------|--------|-----------------|
+| `psp_kmem_set_partition_alloc_observer` / `psp_kmem_bump_alloc` / `psp_kmem_reserve_remaining` | `hle/psp_hle.h` | Bump heap untouched by games except through these |
+| `psp_dispatch_set_miss_handler` | `hle/psp_hle.h` | Miss = log + `v0 = 0` noop stub |
+| `psp_kernel_set_callback_dispatch_observer` | `hle/psp_hle_kernel.h` | No per-callback diagnostics |
+| `psp_io_set_policy` (`PspIoPolicy`) | `hle/psp_hle_io.h` | No archive reroute / slot staging / artifact filter; slice-fd mechanics stay in core |
+| `ge_vertex_set_degenerate_fallback` | `psp_ge_vertex.h` | World-space passthrough + one-time warn |
+
+The quarantine is enforced mechanically by `runtime/tools/purity_gate.sh` (see
+DEBUGGING.md §2): no non-allowlisted `0x08xxxxxx`/`0x09xxxxxx` literal in
+`runtime/src` + `runtime/include`, and no game symbol (defined or undefined) in any
+core object file of a build.
 
 Zero-manifest defaults: no `--config` ⇒ no force entries, generic boot path, heap from
 the `RECOMP_HEAP_BASE` align policy, no asset layer; `-DPSPRECOMP_GAME=none` ⇒ no hooks.
@@ -134,7 +152,7 @@ All under `runtime/` (headers in `runtime/include/`, sources in `runtime/src/`):
 | Render queue | `psp_render_queue.cpp` | Condvar request queue — the only path by which GL work reaches the main thread |
 | Event loop | `psp_event_loop.cpp` | SDL2 event pump, quit handling, render-queue drain |
 | VFPU | `psp_vfpu_*.cpp` | VFPU instruction implementations (arith, convert, matrix, mem, trig, misc) |
-| Asset/BND | `asset_bnd.cpp` | Patapon BND archive directory parsing (e.g. `DATA_CMN.BND`) — still compiled into core but only initialized/registered by the Patapon game module; moves wholesale to `games/patapon/` in #47 Phase 5 |
+| Asset/BND | `games/patapon/runtime/asset_bnd.cpp` | Patapon BND archive parsing (`DATA_CMN.BND`) — lives wholly in the Patapon game module (#47 Phase 5), reached from core only through the `PspIoPolicy` seam; arena constants in `games/patapon/runtime/asset_bnd.h` |
 | Debug socket | `psp_debug_socket.cpp` | TCP server on port 9999, multiple concurrent clients, OK/ERR-framed line protocol: memory read/write, runtime-info JSON, button injection, screenshots (serviced by the render thread). Protocol reference: DEBUGGING.md §6 |
 
 ## Key Data Flow

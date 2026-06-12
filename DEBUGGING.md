@@ -57,7 +57,21 @@ cmake --build runtime/build-debug -j$(sysctl -n hw.ncpu)
 
 # Unit gates
 ./runtime/build/test_vfpu                                              # 89/89
+# test_asset_bnd lives with the BND layer in games/patapon/ (#47 P5); the
+# target exists only in PSPRECOMP_GAME=patapon builds (the default).
 DATA_CMN_BND_PATH=disc0/PSP_GAME/USRDIR/DATA_CMN.BND ./runtime/build/test_asset_bnd  # 33/33
+
+# Purity gate (#46/#47 P5): proves the runtime core is game-free. Checks
+# (1) source literals: every 0x08xxxxxx/0x09xxxxxx under runtime/src +
+#     runtime/include is one of five allowlisted class-(b) PSP constants;
+# (2) nm over the build's core object files (games/ objects excluded):
+#     no defined OR undefined FUN_0*/patapon/BND symbol.
+# Canonical run is against a generic build; the everyday patapon build is
+# also valid input (continuous check).
+cmake -B runtime/build-none -S runtime -DPSPRECOMP_GAME=none
+cmake --build runtime/build-none -j$(sysctl -n hw.ncpu)
+./runtime/tools/purity_gate.sh runtime/build-none   # prints PASS/FAIL per check
+./runtime/tools/purity_gate.sh runtime/build        # patapon build, same invariant
 
 # CLEANROOM verification run (the canonical gate)
 PSPRECOMP_CROSS_MID=1 PSPRECOMP_CLEANROOM=1 timeout 120 \
@@ -175,12 +189,14 @@ the socket for scripted/agent input.
 | `PSPRECOMP_GE_TRACE=1` | GE command-stream logging |
 | `PSPRECOMP_SEMA_TRACE=1` | Per-call sema logging (off by default — floods ~1 GB/min) |
 | `PSPRECOMP_SCREENSHOT=path` | One-shot TGA after first prims + shutdown capture |
-| `PSPRECOMP_SPLEAK=1` | Shadow-stack sp-leak detector |
 | `PSPRECOMP_CROSS_MID=1` | (recompile-time) cross-function mid-entry emission — must match workflow |
 
-~30 more narrow investigation probes exist (LK_*, GK_*, BND_*, ...); they are one-off
-band-aids/probes from past bugs — since #47 Phase 4 they live with their hooks in
-`games/patapon/runtime/hooks_main.cpp` (only compiled under `PSPRECOMP_GAME=patapon`).
+~30 more narrow investigation probes exist (LK_*, GK_*, BND_*, D1_TRACE, CTX_PROBE,
+PUSH_TRACE, FE90_OBJ, ...); they are one-off band-aids/probes from past bugs — since
+#47 Phases 4–5 they live with their hooks in `games/patapon/runtime/*.cpp` (only
+compiled under `PSPRECOMP_GAME=patapon`; the generic core reads none of them).
+The Patapon-tuned `PSPRECOMP_SPLEAK` shadow-stack detector was deleted in #47 P5
+(re-creatable from the game module via `psp_trace_checkpoint`-style instrumentation).
 Discover via `rg 'getenv\("PSPRECOMP_' runtime games crates`, and prefer not to rely on
 them (issue #43 tracks a proper registry/channel system).
 

@@ -182,10 +182,11 @@ checked with adversarial sub-agent verification before they are banked.
 ## Limitations
 
 - **Temporary renderer fallbacks.** A known open guest-side bug remains: recompiled FPU/VFPU code
-  computes broken view/projection matrices (all-zero view, NaN projection). Two renderer
-  fallbacks compensate — all-zero view is treated as identity, and a degenerate projection falls
-  back to a Patapon-specific ortho. This is adequate for the 2D title/menu screens but must be
-  fixed before 3D gameplay: the fallback hardcodes Patapon's viewport and has no depth ordering.
+  computes broken view/projection matrices (all-zero view, NaN projection). A renderer fallback
+  compensates: degenerate matrices route to a game-installable NDC mapping
+  (`games/patapon/runtime/hooks_ge.cpp` provides Patapon's ortho; generic builds pass world
+  space through with a warning). This is adequate for the 2D title/menu screens but must be
+  fixed before 3D gameplay: the mapping hardcodes Patapon's viewport and has no depth ordering.
 - **No audio.** ATRAC and SAS are crude stubs (0 samples decoded, instant end-of-stream).
 - **GE gaps.** SIGNAL relative/offset variants (0x13–0x18), lighting, texture matrix, bone/morph
   skinning, bezier surfaces, and block transfers (TRANSFERSTART) are unimplemented.
@@ -193,16 +194,17 @@ checked with adversarial sub-agent verification before they are banked.
   game's state machine) has not yet been exercised in our runtime.
 - **A rare race** in the game's IO worker (a phantom job, roughly 1 in 20 boots) is tripwired but
   not fixed.
-- **Single runnable target, single platform.** The *runtime* has been developed and verified
-  against Patapon BOOT.BIN only — other PSP games will most likely not boot (see the warning at
-  the top). The *pipeline* is one step broader: relocatable PRX modules analyze and recompile
-  generically (verified on a second commercial binary through `clang++ -fsyntax-only` of all
-  emitted batches), but running a second game has not been attempted. Type-B (0x700000A1)
-  packed relocations are detected and rejected with an explicit error. Developed and tested on
-  macOS only; Linux and Windows have never been tried (the build assumes SDL2 via pkg-config and
-  OpenGL 3.3, and the render-queue threading model was designed around macOS constraints).
-  Testing and supporting other operating systems is a to-do. Optimizer passes are disabled by
-  design until a later phase.
+- **One game renders, single platform.** Patapon BOOT.BIN is the only title that reaches
+  graphics. The runtime core itself is now game-agnostic — all Patapon-specific code lives in
+  `games/patapon/` behind compile-time seams, enforced by `runtime/tools/purity_gate.sh`
+  (no game literals or symbols in core objects) — and a second commercial binary recompiles,
+  links against the generic runtime (`-DPSPRECOMP_GAME=none`), boots through `module_start`,
+  and runs its main thread, but produces no graphics yet (bring-up is the next phase).
+  Type-B (0x700000A1) packed relocations are detected and rejected with an explicit error.
+  Developed and tested on macOS only; Linux and Windows have never been tried (the build
+  assumes SDL2 via pkg-config and OpenGL 3.3, and the render-queue threading model was
+  designed around macOS constraints). Testing and supporting other operating systems is a
+  to-do. Optimizer passes are disabled by design until a later phase.
 
 ## Reference Projects
 
