@@ -127,6 +127,24 @@ PPSSPP is a scriptable behavioral oracle, not a passive reference:
    host harness linking our implementation against PPSSPP's source semantics (the VFPU bug
    was pinned this way without any emulator run).
 
+**Tooling verdict (2026-06)** — full rationale in
+`.planning/research/ppsspp-rpc-mcp-research.md`:
+
+- No new PPSSPP RPC bridge and no self-built MCP server. PPSSPP's WebSocket debugger is
+  the daemon; psp-reclass is the agent-facing client/bridge over it (and over our debug
+  socket, §6).
+- psp-reclass's runtime-socket client read the v2 framed protocol (§6) as unframed —
+  header bytes spliced into every payload, silent corruption. The fix lives on its branch
+  `tooling/framed-runtime-client`.
+- Third-party `dmang-dev/mcp-ppsspp` MAY be used as a convenience for PPSSPP-side
+  poll-safe ops, under hard conditions on this crash-prone build: NEVER use its pause /
+  step / breakpoint_* / screenshot tools (screenshot silently sends `cpu.stepping` — the
+  documented crash path, item 3 above). It cannot reach the runtime debug socket, so it
+  does not replace psp-reclass for differential/`diff` workflows.
+- PPSSPP `gpu.buffer.*` events (including screenshot capture) hard-require
+  `CORE_STEPPING_CPU` — the same crash path on this build. `gpu.record.dump` is the safe
+  frame-capture route.
+
 ## 5. lldb recipes
 
 Launch, don't attach (macOS denies attach). `runtime/.lldbinit` auto-loads
@@ -204,6 +222,10 @@ them (issue #43 tracks a proper registry/channel system).
 
 - **pyghidra-mcp** (BOOT.BIN in a Ghidra project): `decompile_function`,
   `list_cross_references`, `search_symbols_by_name`, `gen_callgraph`, `search_code`.
+  A Ghidra RPC daemon alongside it was evaluated and rejected (2026-06): its
+  differentiators (write-back, patching) conflict with "Ghidra is byte-gate-verified,
+  never a byte source" (#52) and have no consumer here — see
+  `.planning/research/ppsspp-rpc-mcp-research.md` §7.
 - `cargo run --release -- dump analysis.json <mode>` for analysis.json inspection
   (see issue #38 section for single-function C++ dumps).
 
