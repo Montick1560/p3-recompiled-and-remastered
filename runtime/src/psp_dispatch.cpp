@@ -1,7 +1,6 @@
 #include "recomp.h"
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_kernel.h"
-#include "psp_scheduler.h"
 #include <atomic>
 #include <cstdlib>
 #include <cstdio>
@@ -10,8 +9,6 @@
 #include <mutex>
 #include <vector>
 #include <algorithm>
-#include <execinfo.h>
-#include <dlfcn.h>
 
 /// Cached STRICT mode flag — checked once on first call.
 static bool g_strict_mode = false;
@@ -69,6 +66,16 @@ int psp_dispatch_get_recent_funcs(uint32_t* out, int max) {
     return n;
 }
 
+// Game-module miss handler (#47 P5 seam): everything address-keyed that
+// used to live inline here (Patapon's IO-slot dump, [BND_VTABLE_MISS]
+// punch list, the 0x438 corrupt-vtable workaround) registers through this
+// slot from the game module's register_hooks. nullptr = no handler.
+static PspLookupMissHandler g_miss_handler = nullptr;
+
+void psp_dispatch_set_miss_handler(PspLookupMissHandler fn) {
+    g_miss_handler = fn;
+}
+
 static void noop_stub(uint8_t* rdram, recomp_context* ctx) {
     uint32_t addr = g_last_miss_addr;
     int& c = g_miss_counts[addr];
@@ -84,137 +91,14 @@ static void noop_stub(uint8_t* rdram, recomp_context* ctx) {
             static_cast<uint32_t>(ctx->r[16]),
             static_cast<uint32_t>(ctx->r[17]),
             static_cast<uint32_t>(ctx->r[21]));
-        // If r17 looks like a valid PSP slot ptr, dump slot fields
-        uint32_t r17 = static_cast<uint32_t>(ctx->r[17]);
-        if (r17 >= 0x08000000U && r17 < 0x0A000000U) {
-            uint32_t base = r17 & 0x07FFFFFFU;
-            auto rd32 = [&](uint32_t off) {
-                return *reinterpret_cast<uint32_t*>(rdram + base + off);
-            };
-            std::fprintf(stderr,
-                "[LOOKUP_MISS_CTX]   slot: state=%u ap=%u fd=%u [292]=%u [300]=%u [308]=%u\n",
-                rd32(0), rd32(12), rd32(16), rd32(292), rd32(300), rd32(308));
-        }
     }
 
-    // [BND_VTABLE_MISS] — if g_last_func_addr is in the BND arena, the caller
-    // was a noop_stub-filled vtable slot allocated by Phase 11's
-    // bnd_resolve_and_allocate (allocate_shared_noop_vtable). Punch-list
-    // output for Phase 11.2 R11.2-09 + A12 acceptance — fires regardless of
-    // the per-address `c <= 5` quota above so we always see new vtable
-    // sources as the consumer advances. See Pattern E in 11.2-PATTERNS.md.
-    if (g_last_func_addr >= PSP_BND_ARENA_BASE
-            && g_last_func_addr < PSP_BND_ARENA_END) {
-        static int vtable_miss_count = 0;
-        vtable_miss_count++;
-        if (vtable_miss_count <= 8 || vtable_miss_count % 500 == 0) {
-            std::fprintf(stderr,
-                "[BND_VTABLE_MISS] from=0x%08X (BND arena vtable entry) "
-                "target=0x%08X (#%d)\n",
-                g_last_func_addr, addr, vtable_miss_count);
-        }
+    // Game-module miss handler (#47 P5 seam) — may log address-keyed
+    // diagnostics and apply title-specific workarounds before the generic
+    // deterministic return value below.
+    if (g_miss_handler != nullptr) {
+        g_miss_handler(rdram, ctx, addr, c);
     }
-
-    // (scan code removed — target address found: 0x09012CD4)
-
-    // WORKAROUND: 0x438 is a corrupt vtable dispatch that should call
-    // FUN_0895b798 (sceKernelSignalSema thunk for uid=259).
-    // The original function loads the UID from the object, but the object
-    // pointer is corrupt (0x0003796C — invalid PSP address). Signal uid=259
-    // directly to keep the render pipeline flowing.
-    if (addr == 0x438) {
-        // [V438] Native-path root-cause probe (Phase 12): capture the REAL
-        // indirect-call site. In recompiled MIPS, jalr sets r31=return addr,
-        // so ctx->r[31] points just past the bad call. a0..a3 carry the
-        // object/args. Dump the object's first words to see where the
-        // corrupt pointer (0x0003796C = asset size) originates.
-        static int v438_count = 0;
-        if (++v438_count <= 8) {
-            // Host return address → the generated FUN_ that made this call.
-            void* host_ra = __builtin_return_address(0);
-            Dl_info dli; const char* sym = "?";
-            if (dladdr(host_ra, &dli) && dli.dli_sname) sym = dli.dli_sname;
-            std::fprintf(stderr, "[V438] host_ra=%p sym=%s r25=0x%08X\n",
-                host_ra, sym, static_cast<uint32_t>(ctx->r[25]));
-            uint32_t a0 = static_cast<uint32_t>(ctx->r[4]);
-            std::fprintf(stderr,
-                "[V438] #%d ra=0x%08X a0=0x%08X a1=0x%08X a2=0x%08X "
-                "s0=0x%08X s1=0x%08X s2=0x%08X s3=0x%08X gp=0x%08X\n",
-                v438_count,
-                static_cast<uint32_t>(ctx->r[31]),
-                a0, static_cast<uint32_t>(ctx->r[5]),
-                static_cast<uint32_t>(ctx->r[6]),
-                static_cast<uint32_t>(ctx->r[16]),
-                static_cast<uint32_t>(ctx->r[17]),
-                static_cast<uint32_t>(ctx->r[18]),
-                static_cast<uint32_t>(ctx->r[19]),
-                static_cast<uint32_t>(ctx->r[28]));
-            if (a0 >= 0x08000000U && a0 < 0x0A000000U) {
-                uint32_t b = a0 & 0x07FFFFFFU;
-                std::fprintf(stderr,
-                    "[V438]   *a0[0..3]=0x%08X 0x%08X 0x%08X 0x%08X\n",
-                    *reinterpret_cast<uint32_t*>(rdram + b + 0),
-                    *reinterpret_cast<uint32_t*>(rdram + b + 4),
-                    *reinterpret_cast<uint32_t*>(rdram + b + 8),
-                    *reinterpret_cast<uint32_t*>(rdram + b + 12));
-            }
-            // Recent function-entry chain (most recent last).
-            std::fprintf(stderr, "[V438]   ring:");
-            for (int i = 0; i < 32; ++i) {
-                uint32_t e = g_func_ring[(g_func_ring_pos + i) & 31u];
-                if (e) std::fprintf(stderr, " %08X", e);
-            }
-            std::fprintf(stderr, "\n");
-            // Dump outer object s0=0x089F8710 fields 0..96 to find the NULL sub-ptr.
-            uint32_t s0 = static_cast<uint32_t>(ctx->r[16]);
-            if (s0 >= 0x08000000U && s0 < 0x0A000000U) {
-                uint32_t b = s0 & 0x07FFFFFFU;
-                std::fprintf(stderr, "[V438]   s0obj@0x%08X:", s0);
-                for (uint32_t o = 0; o <= 96; o += 4) {
-                    std::fprintf(stderr, " +%u=%08X", o,
-                        *reinterpret_cast<uint32_t*>(rdram + b + o));
-                }
-                std::fprintf(stderr, "\n");
-            }
-            // [V438FULL] full register file + dump *(reg) for any reg that looks
-            // like a live PSP object pointer, to find the bogus object register
-            // (same-snapshot; addresses captured at OTHER times are unreliable).
-            // [V438BT] real host backtrace — names the recompiled FUN_ call chain
-            // at the crash (lldb can't reach this crash point in batch time).
-            {
-                void* bt[24];
-                int n = backtrace(bt, 24);
-                char** syms = backtrace_symbols(bt, n);
-                if (syms) {
-                    std::fprintf(stderr, "[V438BT] host stack (%d frames):\n", n);
-                    for (int bi = 0; bi < n; ++bi)
-                        std::fprintf(stderr, "[V438BT]   %s\n", syms[bi]);
-                    free(syms);
-                }
-            }
-            std::fprintf(stderr, "[V438FULL] regs:");
-            for (int ri = 0; ri < 32; ++ri) {
-                std::fprintf(stderr, " r%d=%08X", ri,
-                    static_cast<uint32_t>(ctx->r[ri]));
-            }
-            std::fprintf(stderr, "\n");
-            for (int ri = 0; ri < 32; ++ri) {
-                uint32_t rv = static_cast<uint32_t>(ctx->r[ri]);
-                if (rv >= 0x08000000U && rv < 0x0A000000U) {
-                    uint32_t rb = rv & 0x07FFFFFFU;
-                    std::fprintf(stderr,
-                        "[V438FULL]   *r%d@%08X: +0=%08X +4=%08X +8=%08X +12=%08X\n",
-                        ri, rv,
-                        *reinterpret_cast<uint32_t*>(rdram + rb + 0),
-                        *reinterpret_cast<uint32_t*>(rdram + rb + 4),
-                        *reinterpret_cast<uint32_t*>(rdram + rb + 8),
-                        *reinterpret_cast<uint32_t*>(rdram + rb + 12));
-                }
-            }
-        }
-        psp_hle_signal_sema_by_uid(259, 1);
-    }
-
 
     ctx->r[2] = 0;
 }
@@ -335,63 +219,6 @@ static int g_total_entries = 0;
 // so g_last_func_addr will show the iterator function.
 thread_local uint32_t g_prev_func_addr = 0;
 
-// [SPLEAK] shadow-stack sp-leak detector. Reconstructs sp nesting from function
-// entries (no exit hook needed). Reports the function that returned with sp
-// imbalanced by >= 0x40. Gated by PSPRECOMP_SPLEAK; default-silent.
-struct SpFrame { uint32_t func; uint32_t entry_sp; };
-static thread_local std::vector<SpFrame> g_sp_shadow;
-static thread_local bool g_spleak_on = false;
-static thread_local bool g_spleak_checked = false;
-
-void psp_spleak_checkpoint(uint32_t addr) {
-    if (!g_spleak_checked) {
-        const char* e = std::getenv("PSPRECOMP_SPLEAK");
-        g_spleak_on = (e && e[0] == '1');
-        g_spleak_checked = true;
-    }
-    if (!g_spleak_on) return;
-    PspThread* t = psp_get_current_thread();
-    if (!t) return;
-    uint32_t sp = static_cast<uint32_t>(t->ctx.r[29]);
-    // Record a rolling per-visit trace of every function entry + sp during each
-    // FE90 (obj 0x0913E900) state-3 visit. When a visit's sp ends up >= +0x380
-    // over its baseline (the +896 leak), dump that visit's full trace so the
-    // exact entry sequence around the leak is captured.
-    struct Ent { uint32_t func; uint32_t sp; };
-    static thread_local bool armed = false;
-    static thread_local uint32_t base_sp = 0;
-    static thread_local std::vector<Ent> buf;
-    static thread_local bool dumped = false;
-    if (dumped) return;
-    if (addr == 0x0885FE90u
-            && static_cast<uint32_t>(t->ctx.r[4]) == 0x0913E900u) {
-        uint8_t* rd = t->rdram;
-        uint32_t st = rd ? *reinterpret_cast<uint32_t*>(
-            rd + ((0x0913E900u + 172u) & 0x07FFFFFFu)) : 0;
-        if (st == 3) { armed = true; base_sp = sp; buf.clear(); }
-        else { armed = false; }
-        return;
-    }
-    if (!armed) return;
-    buf.push_back(Ent{addr, sp});
-    int32_t over = static_cast<int32_t>(sp - base_sp);
-    if (over >= 0x380 && buf.size() > 2) {
-        std::fprintf(stderr, "[SPRAW] LEAKING FE90 visit base=0x%08X reached "
-                     "over=+%d after %zu entries; dump:\n", base_sp, over, buf.size());
-        size_t start = buf.size() > 400 ? buf.size() - 400 : 0;
-        uint32_t prev = start ? buf[start-1].sp : base_sp;
-        for (size_t i = start; i < buf.size(); i++) {
-            int32_t d = static_cast<int32_t>(buf[i].sp - prev);
-            std::fprintf(stderr, "[SPRAW] %4zu func=0x%08X sp=0x%08X over=%+d step=%+d\n",
-                         i, buf[i].func, buf[i].sp,
-                         static_cast<int32_t>(buf[i].sp - base_sp), d);
-            prev = buf[i].sp;
-        }
-        dumped = true; armed = false;
-    }
-    if (buf.size() > 200000) { armed = false; buf.clear(); }
-}
-
 void psp_trace_checkpoint(uint32_t addr) {
     if (!g_pc_trace_checked) {
         const char* env = std::getenv("PSPRECOMP_PC_TRACE");
@@ -411,16 +238,9 @@ void psp_trace_checkpoint(uint32_t addr) {
         1, std::memory_order_relaxed) & 63u]
         .store(addr, std::memory_order_relaxed);
 
-    // [SPLEAK] env PSPRECOMP_SPLEAK: shadow-stack reconstruction of sp at every
-    // function entry to pin the function that RETURNS with sp imbalanced (the
-    // +0x380 leak on the FE90 completion chain). psp_trace_checkpoint is the
-    // FIRST statement of every recompiled function, before its prologue runs,
-    // so the observed sp == the caller's sp at the call site. Stack grows down:
-    // a normal nested call has entry_sp <= caller's entry_sp; on return sp rises.
-    // When entering F at sp_new, every shadow frame with entry_sp < sp_new has
-    // returned. If a returned frame's predecessor resumes at a DIFFERENT sp than
-    // it was at when it made the call, that predecessor's callee leaked.
-    psp_spleak_checkpoint(addr);
+    // (The PSPRECOMP_SPLEAK shadow-stack sp-leak detector that hung here was
+    // a Patapon-tuned investigation probe — deleted in #47 Phase 5;
+    // re-creatable from games/patapon/ if that hunt ever reopens.)
     if (!g_pc_trace) return;
     g_total_entries++;
 

@@ -144,6 +144,15 @@ extern void psp_dispatch_register(uint32_t vaddr, FuncPtr fn);
 /// abort, no miss counters). Boot-time only — not thread-safe (#47 P1).
 extern FuncPtr psp_dispatch_probe_lookup(uint32_t vaddr);
 
+/// Game-module LOOKUP_MISS handler (#47 P5 seam): invoked from the
+/// non-STRICT miss stub with (rdram, ctx, missed addr, per-address miss
+/// count) BEFORE the stub's deterministic `v0 = 0`. The game module may
+/// log address-keyed diagnostics or apply title-specific workarounds
+/// (e.g. Patapon's 0x438 corrupt-vtable sema signal). nullptr = none.
+using PspLookupMissHandler =
+    void (*)(uint8_t* rdram, recomp_context* ctx, uint32_t addr, int count);
+void psp_dispatch_set_miss_handler(PspLookupMissHandler fn);
+
 // ---- Game-module seams over the user-memory bump heap (#47 Phase 5) ----
 // Game modules (games/<id>/runtime/, e.g. Patapon's allocator overrides)
 // reach the generic bump heap ONLY through these; the heap statics stay

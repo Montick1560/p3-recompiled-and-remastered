@@ -78,6 +78,11 @@ void patapon_register_hooks(uint8_t* rdram) {
     //    resolves are still the original generated functions.
     psp_hle_kernel_memory_resolve_guest_funcs();
 
+    // 0b. LOOKUP_MISS handler (#47 P5 seam): IO-slot dump, BND vtable-miss
+    //     punch list, and the 0x438 corrupt-vtable workaround — formerly
+    //     inline in psp_dispatch.cpp's noop_stub.
+    patapon_install_miss_handler();
+
     // 4a. Install corruption detector wrapper for FUN_0885fe90
     // FUN_0885fe90 receives the render object as a0 (r[4]).
     // When the linked list has a corrupt pointer (< 0x08000000),
