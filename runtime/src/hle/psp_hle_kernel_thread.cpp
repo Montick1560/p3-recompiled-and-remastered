@@ -2,6 +2,7 @@
 #include "hle/psp_hle_kernel.h"
 #include "psp_scheduler.h"
 #include "psp_memory.h"
+#include "psp_game_module.h"
 #include "recomp.h"
 
 #include <cstdio>
@@ -149,17 +150,13 @@ static void hle_sceKernelStartThread(
     //    256 bytes at stack_top, k0 register points there,
     //    usable SP starts below the k0 area.
     //    PPSSPP sets k0+C0=UID, k0+C8=stack, k0+F8/FC=0xFFFFFFFF.
-    //    PATAPON(P12): 0x089F0000 is Patapon's dlmalloc default-heap
-    //    descriptor — a .bss global in the game image (FUN_0881E1F4 checks
-    //    k0+4: if non-zero it uses this heap; if zero it reads a fallback
-    //    pointer from 0x089F65F0). NOT derivable from analysis.json facts;
-    //    moves to games/patapon's on_thread_start hook in #47 Phase 4 (the
-    //    generic default will write 0).
+    //    k0+4 heap descriptor stays 0 here (unconfigured PPSSPP-style k0
+    //    area, plan decision P12); title-specific values (e.g. Patapon's
+    //    dlmalloc default-heap descriptor) come from the game module's
+    //    on_thread_start hook below.
     uint32_t stack_top = pt->stack_top;
     std::memset(
         rdram + (stack_top & PSP_ADDR_MASK), 0, 0x100);
-    psp_mem_write<uint32_t>(
-        rdram, stack_top + 0x04, 0x089F0000U);
     psp_mem_write<int32_t>(
         rdram, stack_top + 0xC0, it->second.uid);
     psp_mem_write<uint32_t>(
@@ -168,6 +165,10 @@ static void hle_sceKernelStartThread(
         rdram, stack_top + 0xF8, 0xFFFFFFFFU);
     psp_mem_write<uint32_t>(
         rdram, stack_top + 0xFC, 0xFFFFFFFFU);
+
+    // 4a. Game-module per-thread hook (issues #46/#47 Phase 4): runs after
+    //     the standard k0 block is built so the module can override fields.
+    psp_game_module()->on_thread_start(rdram, stack_top);
 
     // 4b. Allocate newlib _reent structure for this thread.
     //     PSP __getreent() reads from k0+0x00. If NULL, newlib

@@ -57,6 +57,7 @@ These decisions are accumulated from 18+ completed plans. Violating them causes 
 - Memory access via `psp_mem_read`/`psp_mem_write` with `0x07FFFFFFU` mask
 - GL calls MUST go through render request queue (never from game threads -- macOS requirement)
 - `thread_local PspThread* g_current` -- each OS thread knows its PspThread without shared lookup
+- NO game-specific data in runtime core: per-game code lives in `games/<id>/runtime/` (selected by `-DPSPRECOMP_GAME`, default `patapon`), per-game choices in `games/<id>/game.toml`, binary facts in generated headers (`recomp_module.h`, `recomp_game_config.h`). A fix that only works for one title belongs in its game module, never in `runtime/src`
 
 ### Emitter/IR
 - Mid-entry dispatch: wrapper sets `ctx->entry_point`, parent switch dispatches to label, clears before goto
@@ -83,7 +84,9 @@ cargo run --release -- analyze --ghidra-dir <ghidra-install>/libexec BOOT.BIN
 cargo run --release -- recompile analysis.json --config games/patapon/game.toml -o output
 cargo test
 
-# C++ runtime (Release)
+# C++ runtime (Release; PSPRECOMP_GAME defaults to "patapon" — compiles in
+# games/patapon/runtime/. Use -DPSPRECOMP_GAME=none for a pure generic build
+# with zero game hooks.)
 cmake -B runtime/build -S runtime && cmake --build runtime/build -j$(sysctl -n hw.ncpu)
 
 # C++ runtime (Debug -- for lldb)

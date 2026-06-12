@@ -148,7 +148,9 @@ cargo run --release -- analyze --ghidra-dir "$(brew --prefix ghidra)/libexec" BO
 PSPRECOMP_CROSS_MID=1 cargo run --release -- recompile analysis.json \
     --config games/patapon/game.toml -o output
 
-# 4. Build the runtime
+# 4. Build the runtime (PSPRECOMP_GAME selects the games/<id>/ hook module;
+#    defaults to "patapon". -DPSPRECOMP_GAME=none builds a pure generic
+#    runtime with zero game-specific hooks — see ARCHITECTURE.md "Per-Game Layer")
 cmake -B runtime/build -S runtime && cmake --build runtime/build -j$(sysctl -n hw.ncpu)
 
 # 5. Run (the configuration the current status was verified under)

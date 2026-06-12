@@ -5,6 +5,16 @@
 #include "recomp.h"
 #include "recomp_module.h"  // generated module facts (issue #47 Phase 2)
 
+// Generated per-game choices (issues #46/#47 Phase 4): RECOMP_HEAP_OVERRIDE
+// pins the heap base when a game's manifest sets [module] heap_base.
+// Guarded so output dirs generated before Phase 4 still build.
+#if __has_include("recomp_game_config.h")
+#include "recomp_game_config.h"
+#endif
+#ifndef RECOMP_HEAP_OVERRIDE
+#define RECOMP_HEAP_OVERRIDE 0x0U
+#endif
+
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -138,8 +148,12 @@ static inline bool psp_cleanroom() {
 // for Patapon 0x08AE0000 -> 0x09000000, bit-identical to the historical
 // hardcoded layout (boot fragility, plan risk R4). Revisit (drop the
 // alignment) only when a game actually needs the headroom below 16 MB.
+// A manifest [module] heap_base pin (RECOMP_HEAP_OVERRIDE, issue #46)
+// bypasses the align policy when a game needs tighter packing.
 static constexpr uint32_t k_heap_start =
-    (RECOMP_HEAP_BASE + 0x00FFFFFFU) & ~0x00FFFFFFU;
+    (RECOMP_HEAP_OVERRIDE != 0x0U)
+        ? RECOMP_HEAP_OVERRIDE
+        : ((RECOMP_HEAP_BASE + 0x00FFFFFFU) & ~0x00FFFFFFU);
 static uint32_t g_heap_pos = k_heap_start;
 // Cap dlmalloc at 0x0B000000 so it cannot grow into the guest thread-stack
 // region (psp_alloc_stack carves DOWN from PSP_USER_MEM_END - 0x1000 =

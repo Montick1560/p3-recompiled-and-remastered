@@ -47,7 +47,10 @@ cargo build --release && cargo test --release
 PSPRECOMP_CROSS_MID=1 cargo run --release -- recompile analysis.json \
     --config games/patapon/game.toml -o output
 
-# Runtime (Release for verification, Debug for lldb)
+# Runtime (Release for verification, Debug for lldb). PSPRECOMP_GAME defaults
+# to "patapon" (compiles in games/patapon/runtime/); -DPSPRECOMP_GAME=none
+# builds the pure generic runtime — zero game hooks, used for quarantine runs
+# (a generic-run log must contain NO Patapon hook/override/BND lines).
 cmake -B runtime/build -S runtime && cmake --build runtime/build -j$(sysctl -n hw.ncpu)
 cmake -B runtime/build-debug -S runtime -DCMAKE_BUILD_TYPE=Debug
 cmake --build runtime/build-debug -j$(sysctl -n hw.ncpu)
@@ -176,8 +179,10 @@ the socket for scripted/agent input.
 | `PSPRECOMP_CROSS_MID=1` | (recompile-time) cross-function mid-entry emission — must match workflow |
 
 ~30 more narrow investigation probes exist (LK_*, GK_*, BND_*, ...); they are one-off
-band-aids/probes from past bugs — discover via `rg 'getenv\("PSPRECOMP_' runtime crates`,
-and prefer not to rely on them (issue #43 tracks a proper registry/channel system).
+band-aids/probes from past bugs — since #47 Phase 4 they live with their hooks in
+`games/patapon/runtime/hooks_main.cpp` (only compiled under `PSPRECOMP_GAME=patapon`).
+Discover via `rg 'getenv\("PSPRECOMP_' runtime games crates`, and prefer not to rely on
+them (issue #43 tracks a proper registry/channel system).
 
 ## 8. Static-side oracles
 
@@ -328,7 +333,7 @@ On mismatch, `cmake -B runtime/build -S runtime` fails with:
 
 ```
 output/ is stale relative to the emitter sources — run:
-    PSPRECOMP_CROSS_MID=1 cargo run --release -- recompile analysis.json -o output
+    PSPRECOMP_CROSS_MID=1 cargo run --release -- recompile analysis.json --config games/<id>/game.toml -o output
 STALE: emitter sources changed since output/ was recompiled (recorded <hash>..., actual <hash>...)
   changed: crates/psp-emitter/src/lib.rs
 ```
@@ -424,6 +429,34 @@ are absent from the function body. Pre-existing emitter gap (mid-entry/coalesce 
 untouched by #40/#47 P1-P3), tracked as a GitHub issue: the emitter should drop dispatch
 cases whose labels are missing from the parent body, or hard-error at emit time.
 
+
+## #46/#47 P4 — per-game manifest + game module (PSPRECOMP_GAME)
+
+A game's curated layer lives under `games/<id>/` (ARCHITECTURE.md "Per-Game Layer"):
+`game.toml` feeds `recompile --config` (force entries; `[game]/[boot]/[module]/[runtime]`
+choices → generated `recomp_game_config.h`), and `games/<id>/runtime/*.cpp` holds the
+address-keyed hooks, compiled in via the CMake cache var `PSPRECOMP_GAME` (default
+`patapon`; `none` = pure generic build).
+
+Debugging handles:
+
+- **Boot banner**: `[RT] game module: <id>` is the second log line; a
+  `game-module mismatch` WARNING means the compiled-in module id differs from the
+  output dir's manifest id (`RECOMP_GAME_ID`) — wrong-game hooks silently corrupt, so
+  always resolve the warning before trusting a run.
+- **Quarantine gate** (generic-build sanity): a `-DPSPRECOMP_GAME=none` run against ANY
+  output must contain zero Patapon hook/override/BND lines —
+  `grep -E '\[BND|\[GK|\[WRAP|\[SM_|dlmalloc overrides|installed for FUN' run.log` → 0.
+  Patapon-specific misses (e.g. `0x08816F9C`, the GE finish label the Patapon module
+  stubs) surface as loud `[LOOKUP_MISS]` lines instead — expected and informational.
+- **Hook archaeology**: the migrated hook bodies keep their original main.cpp block
+  numbering (4a..4z) in `games/patapon/runtime/hooks_main.cpp`, so older handoffs and
+  planning docs still cross-reference. Behavioral hooks carry `REMOVAL CRITERION`
+  comments (issue #46 acceptance).
+- **Forgot the manifest?** Recompiling Patapon WITHOUT `--config games/patapon/game.toml`
+  silently drops its 3 force entries + 4 force mid-entries — counts shift from
+  14104/2022 and `--expect-*` flags catch it. The mismatch warning also fires
+  (output id `""` vs module `patapon`).
 
 ## #37 — recompile_report.json (silent-path audit)
 

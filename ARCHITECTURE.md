@@ -8,6 +8,7 @@ see [README.md](README.md).
 - [System Overview](#system-overview)
 - [Rust Crates](#rust-crates)
 - [Generated Output Layout](#generated-output-layout)
+- [Per-Game Layer (games/)](#per-game-layer-games)
 - [Runtime Subsystems](#runtime-subsystems)
 - [Key Data Flow](#key-data-flow)
 - [Invariants and Conventions](#invariants-and-conventions)
@@ -63,6 +64,7 @@ All under `crates/`:
 | `fingerprint.json` | Build fingerprint: content hash of the codegen-determining Rust sources + analysis.json hash + `cross_mid` flag + counts. Verified at runtime CMake configure by `runtime/cmake/check_fingerprint.py` — stale output/ fails configure (recipe in `crates/psp-cli/src/fingerprint.rs`; usage in DEBUGGING.md "#36") |
 | `include/recomp_fingerprint.h` | Generated header with the fingerprint hash/flag/timestamp; `runtime/src/main.cpp` prints it as the first boot line |
 | `include/recomp_module.h` | Generated module facts (issue #47 Phase 2): `RECOMP_MODULE_NAME/ENTRY/GP/TEXT_START/TEXT_SIZE`, `RECOMP_SEG0_VADDR/MEMSZ`, `RECOMP_HEAP_BASE`, `RECOMP_CTOR_COUNT/FIRST_CTOR` — sourced from analysis.json `module{}`; the runtime boot path hard-includes it (emitter: `crates/psp-emitter/src/module_header.rs`; recompile **hard-errors** when analysis.json lacks `module{}` — see DEBUGGING.md "#47 P2") |
+| `include/recomp_game_config.h` | Generated per-game choices (issues #46/#47 Phase 4): `RECOMP_GAME_ID`, `RECOMP_BOOT_PATH`, `RECOMP_HEAP_OVERRIDE`, `RECOMP_ASSET_LAYER_BND` — sourced from the `--config` manifest (`games/<id>/game.toml`); generic no-op defaults when recompile ran without `--config`. The runtime guards the include (pre-Phase-4 outputs still build) and never parses TOML (emitter: `crates/psp-emitter/src/game_config_header.rs`) |
 
 Every recompiled function has the signature
 `void(uint8_t* rdram, recomp_context* ctx)` (`FuncPtr` in `recomp.h`). The FPU register file in
@@ -83,10 +85,37 @@ declarations, so no game-specific symbols are required at link time.
 
 Per-game boot constants travel the same channel (issue #47 Phase 2): the runtime
 hard-includes the generated `recomp_module.h` for the module name/entry/GP, text range,
-first load segment, heap base (16 MB-aligned bump-heap start, policy P11) and the boot
-probes — runtime sources carry no game-specific addresses for these. Remaining marked
-exceptions (`PATAPON(P12)` k0+4 heap-descriptor writes, address-keyed hooks) move to
-`games/patapon/` in Phase 4.
+first load segment, heap base (16 MB-aligned bump-heap start, policy P11; a manifest
+`[module] heap_base` pin overrides via `RECOMP_HEAP_OVERRIDE`) and the boot probes —
+runtime sources carry no game-specific addresses for these.
+
+## Per-Game Layer (games/)
+
+Issue #46 / #47 Phase 4: a game is described by **facts** (analysis.json → generated
+headers, automatic) plus **choices and workarounds** (curated), and the curated layer
+lives entirely under `games/<id>/`:
+
+| Artifact | Consumed by | Carries |
+|----------|-------------|---------|
+| `games/<id>/game.toml` | `psprecomp recompile --config` | `[recompile]` force entries / force mid-entries (replaces the former hardcoded consts), top-level stubs/skips/patches, and `[game]`/`[boot]`/`[module]`/`[runtime]` choices emitted into `recomp_game_config.h` (the runtime never parses TOML) |
+| `games/<id>/runtime/*.cpp` | runtime build via `-DPSPRECOMP_GAME=<id>` | Address-keyed dispatch hooks, allocator/CRT override inits, boot/thread context tweaks — everything title-specific that is code, not data |
+
+The seam is `PspGameModule` (`runtime/include/psp_game_module.h`): one struct of
+registration hooks (`register_hooks` after `psp_hle_init()`, `on_boot_context` just
+before `entry()`, `on_thread_start` after each thread's k0 block is built). Exactly one
+translation unit provides the strong `psp_game_module()` definition: the selected game
+module, or `runtime/src/psp_game_default.cpp` (no-op module, id `""`) when
+`-DPSPRECOMP_GAME=none`. Selection is compile-time (CMake glob of
+`games/<id>/runtime/*.cpp` with `CONFIGURE_DEPENDS`) — no plugin machinery, and a
+generic build verifiably contains zero game symbols (`nm | grep`). The default is
+`patapon` so the documented build commands keep working unchanged; at boot the runtime
+warns loudly when the compiled-in module id differs from the output dir's
+`RECOMP_GAME_ID`. Reasoning: bring-up of a second game must not inherit Patapon's patch
+stack, and a fix that only works for one title belongs in its module, never in core.
+
+Zero-manifest defaults: no `--config` ⇒ no force entries, generic boot path, heap from
+the `RECOMP_HEAP_BASE` align policy, no asset layer; `-DPSPRECOMP_GAME=none` ⇒ no hooks.
+A well-behaved game boots this way — the manifest exists for curation, not table stakes.
 
 ## Runtime Subsystems
 
@@ -94,7 +123,8 @@ All under `runtime/` (headers in `runtime/include/`, sources in `runtime/src/`):
 
 | Subsystem | Files | Responsibility |
 |-----------|-------|----------------|
-| Boot / main loop | `main.cpp` | Boot sequence (module start, thread creation), SDL2 main loop |
+| Boot / main loop | `main.cpp` | Generic boot sequence (module start, thread creation), SDL2 main loop — contains zero address-keyed hooks (they live in `games/<id>/runtime/`, Phase 4) |
+| Game modules | `psp_game_module.h`, `psp_game_default.cpp`, `games/<id>/runtime/` | Per-game hook seam — see [Per-Game Layer](#per-game-layer-games) |
 | Memory | `psp_memory.cpp` | 128 MB `rdram` allocation; all guest addresses masked with `0x07FFFFFFU` |
 | Dispatch | `psp_dispatch.cpp` | `RECOMP_LOOKUP` address→function resolution; miss handler; `PSPRECOMP_STRICT` abort mode |
 | Scheduler | `psp_scheduler.cpp` | Cooperative threading (`PspThread`, yield points); `thread_local PspThread* g_current` |
@@ -104,7 +134,7 @@ All under `runtime/` (headers in `runtime/include/`, sources in `runtime/src/`):
 | Render queue | `psp_render_queue.cpp` | Condvar request queue — the only path by which GL work reaches the main thread |
 | Event loop | `psp_event_loop.cpp` | SDL2 event pump, quit handling, render-queue drain |
 | VFPU | `psp_vfpu_*.cpp` | VFPU instruction implementations (arith, convert, matrix, mem, trig, misc) |
-| Asset/BND | `asset_bnd.cpp` | Patapon BND archive directory parsing (e.g. `DATA_CMN.BND`) |
+| Asset/BND | `asset_bnd.cpp` | Patapon BND archive directory parsing (e.g. `DATA_CMN.BND`) — still compiled into core but only initialized/registered by the Patapon game module; moves wholesale to `games/patapon/` in #47 Phase 5 |
 | Debug socket | `psp_debug_socket.cpp` | TCP server on port 9999, multiple concurrent clients, OK/ERR-framed line protocol: memory read/write, runtime-info JSON, button injection, screenshots (serviced by the render thread). Protocol reference: DEBUGGING.md §6 |
 
 ## Key Data Flow

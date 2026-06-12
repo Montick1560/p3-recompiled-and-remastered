@@ -45,7 +45,7 @@ option(PSPRECOMP_ALLOW_STALE
     "Allow configuring against a stale output/ (fingerprint mismatch becomes a warning)" OFF)
 
 set(PSPRECOMP_REGEN_CMD
-    "PSPRECOMP_CROSS_MID=1 cargo run --release -- recompile analysis.json -o ${PSPRECOMP_OUTPUT_DIR}")
+    "PSPRECOMP_CROSS_MID=1 cargo run --release -- recompile analysis.json --config games/<id>/game.toml -o ${PSPRECOMP_OUTPUT_DIR}")
 
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_FOUND)
@@ -139,6 +139,33 @@ set(RUNTIME_SOURCES
     src/glad.c
     src/psp_debug_socket.cpp
 )
+
+# ── Game-module selection (issues #46/#47 Phase 4) ──────────────────────────
+# Everything address-keyed or title-specific lives in games/<id>/runtime/,
+# compiled in only when selected here (exactly one strong psp_game_module()
+# definition per build). Default "patapon" preserves the documented Patapon
+# build commands byte-for-byte; "none" builds the pure generic runtime with
+# ZERO game hooks compiled in or registered.
+#   cmake -B runtime/build -S runtime                       # Patapon (default)
+#   cmake -B runtime/build-none -S runtime -DPSPRECOMP_GAME=none   # generic
+set(PSPRECOMP_GAME "patapon" CACHE STRING
+    "games/<id> module to compile in ('none' = generic build, zero game hooks)")
+if(PSPRECOMP_GAME STREQUAL "none" OR PSPRECOMP_GAME STREQUAL "")
+    list(APPEND RUNTIME_SOURCES src/psp_game_default.cpp)
+    message(STATUS "psprecomp: game module = (none — generic build)")
+else()
+    # CONFIGURE_DEPENDS: newly added hook files are picked up without a manual
+    # reconfigure (plan risk R7 — same trap class as the batch_*.cpp glob).
+    file(GLOB PSP_GAME_SOURCES CONFIGURE_DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/../games/${PSPRECOMP_GAME}/runtime/*.cpp)
+    if(NOT PSP_GAME_SOURCES)
+        message(FATAL_ERROR
+            "games/${PSPRECOMP_GAME}/runtime/ has no sources — unknown game id "
+            "'${PSPRECOMP_GAME}' (use -DPSPRECOMP_GAME=none for a generic build).")
+    endif()
+    list(APPEND RUNTIME_SOURCES ${PSP_GAME_SOURCES})
+    message(STATUS "psprecomp: game module = ${PSPRECOMP_GAME}")
+endif()
 
 add_executable(psprecomp_runtime ${RUNTIME_SOURCES})
 
