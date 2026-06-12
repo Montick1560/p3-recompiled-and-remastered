@@ -10,7 +10,16 @@ use std::process::Command;
 /// Invoke Ghidra headless analysis and write raw JSON to `output`.
 ///
 /// Verifies that the ghidra-allegrex plugin is installed before running.
-pub fn run_ghidra_analysis(binary: &Path, ghidra_dir: &Path, output: &Path) -> Result<()> {
+/// For relocatable PRX inputs, `prx_base` pins the loader and image base
+/// (`-loader PspElfLoader -loader-imagebase <hex>`) so ghidra-allegrex
+/// rebases + relocates the image natively (plan D1); `None` (ET_EXEC) keeps
+/// the invocation bit-for-bit unchanged (loader pinning deferred, D13).
+pub fn run_ghidra_analysis(
+    binary: &Path,
+    ghidra_dir: &Path,
+    output: &Path,
+    prx_base: Option<u32>,
+) -> Result<()> {
     // Verify plugin is installed
     let plugin_dir = ghidra_dir.join("Ghidra/Processors/Allegrex");
     if !plugin_dir.exists() {
@@ -38,20 +47,34 @@ pub fn run_ghidra_analysis(binary: &Path, ghidra_dir: &Path, output: &Path) -> R
     std::fs::create_dir_all("/tmp/ghidra_projects")
         .context("Failed to create /tmp/ghidra_projects")?;
 
+    let mut args: Vec<String> = [
+        "/tmp/ghidra_projects",
+        "psprecomp_analysis",
+        "-import",
+        binary.to_str().context("binary path not UTF-8")?,
+        "-scriptPath",
+        &script_dir,
+        "-postScript",
+        "ExtractAnalysis.java",
+        output.to_str().context("output path not UTF-8")?,
+        "-deleteProject",
+        "-overwrite",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    if let Some(base) = prx_base {
+        // Bare hex, no 0x — the format analyzeHeadless expects (R3 §8).
+        args.extend([
+            "-loader".into(),
+            "PspElfLoader".into(),
+            "-loader-imagebase".into(),
+            format!("{base:x}"),
+        ]);
+    }
+
     let status = Command::new(&headless)
-        .args([
-            "/tmp/ghidra_projects",
-            "psprecomp_analysis",
-            "-import",
-            binary.to_str().context("binary path not UTF-8")?,
-            "-scriptPath",
-            &script_dir,
-            "-postScript",
-            "ExtractAnalysis.java",
-            output.to_str().context("output path not UTF-8")?,
-            "-deleteProject",
-            "-overwrite",
-        ])
+        .args(&args)
         .status()
         .with_context(|| format!("Failed to execute {}", headless.display()))?;
 
@@ -76,6 +99,113 @@ fn find_analysis_script() -> Result<std::path::PathBuf> {
         }
     }
     bail!("ExtractAnalysis.java not found; expected at ./analysis/ExtractAnalysis.java");
+}
+
+/// Provenance sidecar for the `<output>.ghidra_raw.json` cache (plan D9).
+///
+/// A cached raw JSON may be reused only when this meta matches the current
+/// run — otherwise a stale base-0 cache would silently defeat a rebased
+/// re-run (the issue #52 failure mode).
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct GhidraCacheMeta {
+    /// SHA-256 of the input binary bytes.
+    binary_sha256: String,
+    /// "PspElfLoader" when pinned (PRX), "auto" otherwise.
+    loader: String,
+    /// Bare-hex image base passed to the loader (e.g. "8804000"), or None.
+    imagebase: Option<String>,
+}
+
+impl GhidraCacheMeta {
+    /// Meta describing the current invocation.
+    fn for_run(binary_sha256: String, prx_base: Option<u32>) -> Self {
+        match prx_base {
+            Some(base) => Self {
+                binary_sha256,
+                loader: "PspElfLoader".into(),
+                imagebase: Some(format!("{base:x}")),
+            },
+            None => Self { binary_sha256, loader: "auto".into(), imagebase: None },
+        }
+    }
+}
+
+/// True when the cache meta sidecar exists and matches the current run.
+fn ghidra_cache_valid(meta_path: &Path, expected: &GhidraCacheMeta) -> bool {
+    let Ok(s) = std::fs::read_to_string(meta_path) else {
+        return false;
+    };
+    match serde_json::from_str::<GhidraCacheMeta>(&s) {
+        Ok(meta) => meta == *expected,
+        Err(_) => false,
+    }
+}
+
+/// Lowercase-hex SHA-256 of `data`.
+fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(data))
+}
+
+/// Parse a hex address string like "0x08804000" to u32.
+fn parse_hex_addr(s: &str) -> Option<u32> {
+    let t = s.trim().trim_start_matches("0x").trim_start_matches("0X");
+    u32::from_str_radix(t, 16).ok()
+}
+
+/// Byte-equality gate (plan T6/D2): Ghidra's per-block SHA-256 exports must
+/// match the psp-parser relocated segment bytes.
+///
+/// Runs for both ELF and PRX (for ET_EXEC it verifies Ghidra didn't perturb
+/// bytes — free regression assurance). Blocks not fully contained in one
+/// rebased segment are Ghidra-synthesized and skipped; a missing "blocks" key
+/// (legacy cache, or Ghidra skipped) only warns.
+fn verify_ghidra_block_hashes(
+    ghidra_data: &serde_json::Value,
+    seg_bases: &[u32],
+    seg_datas: &[Vec<u8>],
+) -> Result<()> {
+    let Some(blocks) = ghidra_data.get("blocks").and_then(|b| b.as_array()) else {
+        tracing::warn!(
+            "ghidra_raw.json has no \"blocks\" key (legacy cache or Ghidra skipped); \
+             byte-equality gate not enforced"
+        );
+        return Ok(());
+    };
+    let mut verified = 0usize;
+    for block in blocks {
+        let name = block["name"].as_str().unwrap_or("?");
+        let (Some(start), Some(size), Some(ghidra_sha)) = (
+            block["start"].as_str().and_then(parse_hex_addr),
+            block["size"].as_u64(),
+            block["sha256"].as_str(),
+        ) else {
+            bail!("malformed block entry in ghidra_raw.json: {block}");
+        };
+        let slice = seg_bases.iter().zip(seg_datas).find_map(|(&base, data)| {
+            let off = start.checked_sub(base)? as usize;
+            let end = off.checked_add(size as usize)?;
+            data.get(off..end)
+        });
+        let Some(slice) = slice else {
+            continue; // Ghidra-synthesized block outside every segment
+        };
+        let ours = sha256_hex(slice);
+        if ours != ghidra_sha.to_lowercase() {
+            bail!(
+                "byte-equality gate FAILED for block {name} [start 0x{start:08X}, size \
+                 {size}]: ghidra sha256 {ghidra_sha} != psp-parser sha256 {ours} — \
+                 relocation engine divergence (reloc.rs vs ghidra-allegrex); see \
+                 .planning/plans/52-prx-support-plan.md §1 D1 fallback"
+            );
+        }
+        verified += 1;
+    }
+    tracing::info!(
+        "Byte-equality gate: {verified}/{} Ghidra blocks verified against relocated segments",
+        blocks.len()
+    );
+    Ok(())
 }
 
 /// Detect mid-function entry points from Ghidra xrefs (V1-compatible approach).
@@ -298,23 +428,40 @@ pub fn run_analyze(
     };
     tracing::info!("Resolved {} import stubs", import_stubs.len());
 
-    // 6. Run Ghidra headless analysis (reuse existing output if available)
+    // 6. Run Ghidra headless analysis. The raw-output cache is reused only
+    // when its meta sidecar matches this run (binary hash, loader, image
+    // base) — a stale base-0 cache must never be silently reused (plan D9).
+    const GHIDRA_STUB_JSON: &str = r#"{"functions":[],"xrefs":[],"constructors":[]}"#;
     let ghidra_raw_path = output.with_extension("ghidra_raw.json");
-    if ghidra_raw_path.exists() {
-        tracing::info!(
-            "Using existing {}",
-            ghidra_raw_path.display()
-        );
+    let meta_path = output.with_extension("ghidra_raw.meta.json");
+    let expected_meta = GhidraCacheMeta::for_run(sha256_hex(&raw_data), is_prx.then_some(load_base));
+    if ghidra_raw_path.exists() && ghidra_cache_valid(&meta_path, &expected_meta) {
+        tracing::info!("Using existing {} (cache meta matches)", ghidra_raw_path.display());
     } else if let Some(ghidra) = ghidra_dir {
-        run_ghidra_analysis(binary, ghidra, &ghidra_raw_path)?;
-    } else {
-        tracing::warn!(
-            "--ghidra-dir not provided; skipping Ghidra analysis"
+        if ghidra_raw_path.exists() {
+            tracing::warn!(
+                "stale/unverified ghidra_raw cache at {} — re-running Ghidra",
+                ghidra_raw_path.display()
+            );
+        }
+        run_ghidra_analysis(binary, ghidra, &ghidra_raw_path, is_prx.then_some(load_base))?;
+        std::fs::write(&meta_path, serde_json::to_string_pretty(&expected_meta)?)
+            .with_context(|| format!("Failed to write {}", meta_path.display()))?;
+    } else if ghidra_raw_path.exists()
+        && std::fs::read_to_string(&ghidra_raw_path)
+            .map(|s| s != GHIDRA_STUB_JSON)
+            .unwrap_or(true)
+    {
+        bail!(
+            "ghidra_raw cache at {} has no matching meta sidecar ({}) and cannot be \
+             verified — a stale base-0 cache would silently corrupt the analysis. \
+             Re-run with --ghidra-dir to regenerate it (and the meta), or delete it.",
+            ghidra_raw_path.display(),
+            meta_path.display()
         );
-        std::fs::write(
-            &ghidra_raw_path,
-            r#"{"functions":[],"xrefs":[],"constructors":[]}"#,
-        )?;
+    } else {
+        tracing::warn!("--ghidra-dir not provided; skipping Ghidra analysis");
+        std::fs::write(&ghidra_raw_path, GHIDRA_STUB_JSON)?;
     }
 
     // 7. Load Ghidra raw output
@@ -322,6 +469,10 @@ pub fn run_analyze(
         .with_context(|| format!("Cannot read {}", ghidra_raw_path.display()))?;
     let ghidra_data: serde_json::Value =
         serde_json::from_str(&ghidra_json_str).context("Ghidra raw JSON is invalid")?;
+
+    // 7.5. Byte-equality gate (plan T6/D2): hard-fail if Ghidra's relocated
+    // block bytes differ from psp-parser's relocated segments.
+    verify_ghidra_block_hashes(&ghidra_data, &seg_bases, &seg_data_vecs)?;
 
     // 8. Merge all data into AnalysisJson
     use psp_parser::analysis_json::*;
@@ -476,4 +627,81 @@ pub fn run_analyze(
         output.display()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn block_json(start: u32, data: &[u8], sha_of: &[u8]) -> serde_json::Value {
+        serde_json::json!({
+            "blocks": [{
+                "name": ".text",
+                "start": format!("0x{start:08X}"),
+                "size": data.len() as u64,
+                "sha256": sha256_hex(sha_of),
+            }]
+        })
+    }
+
+    #[test]
+    fn gate_passes_on_matching_block_bytes() {
+        let seg = vec![0xAAu8, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+        let ghidra = block_json(0x0880_4002, &seg[2..6], &seg[2..6]);
+        verify_ghidra_block_hashes(&ghidra, &[0x0880_4000], &[seg]).unwrap();
+    }
+
+    #[test]
+    fn gate_fails_loudly_on_divergent_bytes() {
+        let seg = vec![0u8; 16];
+        let other = vec![1u8; 4];
+        let ghidra = block_json(0x0880_4000, &other, &other);
+        let err = verify_ghidra_block_hashes(&ghidra, &[0x0880_4000], &[seg]).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("byte-equality gate FAILED"), "actionable: {msg}");
+        assert!(msg.contains(".text"), "names the block: {msg}");
+    }
+
+    #[test]
+    fn gate_skips_blocks_outside_every_segment_and_warns_on_missing_key() {
+        // Ghidra-synthesized block (e.g. an overlay) not contained in a segment.
+        let seg = vec![0u8; 8];
+        let ghidra = block_json(0x0000_0000, &[1, 2, 3, 4], &[9, 9, 9, 9]);
+        verify_ghidra_block_hashes(&ghidra, &[0x0880_4000], &[seg.clone()]).unwrap();
+        // Missing "blocks" key (legacy cache): warn-only, never an error.
+        let legacy = serde_json::json!({"functions": []});
+        verify_ghidra_block_hashes(&legacy, &[0x0880_4000], &[seg]).unwrap();
+    }
+
+    #[test]
+    fn cache_meta_matches_only_same_binary_loader_and_base() {
+        let dir = std::env::temp_dir().join(format!("psprecomp_meta_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let meta_path = dir.join("x.ghidra_raw.meta.json");
+        let written = GhidraCacheMeta::for_run("abc123".into(), Some(0x0880_4000));
+        std::fs::write(&meta_path, serde_json::to_string(&written).unwrap()).unwrap();
+
+        let same = GhidraCacheMeta::for_run("abc123".into(), Some(0x0880_4000));
+        assert!(ghidra_cache_valid(&meta_path, &same));
+        // Different base, different binary, or ET_EXEC run: all invalid.
+        let other_base = GhidraCacheMeta::for_run("abc123".into(), Some(0x0900_0000));
+        assert!(!ghidra_cache_valid(&meta_path, &other_base));
+        let other_bin = GhidraCacheMeta::for_run("def456".into(), Some(0x0880_4000));
+        assert!(!ghidra_cache_valid(&meta_path, &other_bin));
+        let et_exec = GhidraCacheMeta::for_run("abc123".into(), None);
+        assert!(!ghidra_cache_valid(&meta_path, &et_exec));
+        // Missing sidecar: invalid.
+        assert!(!ghidra_cache_valid(&dir.join("missing.json"), &same));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn cache_meta_serializes_bare_hex_imagebase() {
+        let prx = GhidraCacheMeta::for_run("s".into(), Some(0x0880_4000));
+        assert_eq!(prx.loader, "PspElfLoader");
+        assert_eq!(prx.imagebase.as_deref(), Some("8804000"));
+        let elf = GhidraCacheMeta::for_run("s".into(), None);
+        assert_eq!(elf.loader, "auto");
+        assert_eq!(elf.imagebase, None);
+    }
 }

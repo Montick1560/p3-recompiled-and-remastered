@@ -41,6 +41,7 @@ import java.util.Set;
  *   <li>functions - detected function entries (ghidra + jal_target sources)</li>
  *   <li>xrefs - cross-references from .data/.rodata (3 detection layers)</li>
  *   <li>constructors - ordered init_array entries</li>
+ *   <li>blocks - per-block SHA-256 of initialized memory (byte-equality gate, issue #52)</li>
  *   <li>imports - empty array (filled by Rust post-processing stage)</li>
  *   <li>relocations - empty array (filled by Rust post-processing stage)</li>
  *   <li>mid_entries - empty array (filled by Rust post-processing stage)</li>
@@ -130,11 +131,15 @@ public class ExtractAnalysis extends GhidraScript {
         // --- Step 5: Init_array / constructor detection ---
         JsonArray constructors = extractConstructors(mem);
 
+        // --- Step 5.5: Per-block SHA-256 hashes (byte-equality gate, issue #52) ---
+        JsonArray blocks = extractBlockHashes(mem);
+
         // --- Step 6: Assemble root JSON object ---
         JsonObject root = new JsonObject();
         root.add("functions",    functions);
         root.add("xrefs",        xrefs);
         root.add("constructors", constructors);
+        root.add("blocks",       blocks);
         root.add("imports",      new JsonArray()); // filled by Rust stage
         root.add("relocations",  new JsonArray()); // filled by Rust stage
         root.add("mid_entries",  new JsonArray()); // filled by Rust stage
@@ -680,6 +685,52 @@ public class ExtractAnalysis extends GhidraScript {
                 currentRun.size()
             ));
         }
+    }
+
+    // =========================================================================
+    // Step 5.5: Per-block byte hashes (issue #52 byte-equality gate)
+    // =========================================================================
+
+    /**
+     * Exports a SHA-256 digest of every initialized, loaded memory block.
+     *
+     * <p>The Rust analyze stage recomputes the same hashes over its own relocated
+     * segment bytes and hard-fails on mismatch, so the two relocation engines
+     * (psp-parser reloc.rs vs ghidra-allegrex) can never silently diverge.
+     * Uninitialized blocks (bss) have no bytes to hash; non-loaded blocks
+     * (Ghidra's OTHER-space artifacts like _elfHeader) have address offsets that
+     * can collide numerically with real ram addresses, so both are skipped.
+     *
+     * @param mem Ghidra Memory
+     * @return JsonArray of {name, start, size, sha256} objects
+     * @throws Exception on memory read or digest errors
+     */
+    private JsonArray extractBlockHashes(Memory mem) throws Exception {
+        JsonArray blocks = new JsonArray();
+        byte[] buf = new byte[65536];
+        for (MemoryBlock block : mem.getBlocks()) {
+            if (!block.isInitialized() || !block.isLoaded()) {
+                continue;
+            }
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            try (java.io.InputStream in = block.getData()) {
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    md.update(buf, 0, n);
+                }
+            }
+            StringBuilder hex = new StringBuilder();
+            for (byte b : md.digest()) {
+                hex.append(String.format("%02x", b));
+            }
+            JsonObject obj = new JsonObject();
+            obj.addProperty("name",   block.getName());
+            obj.addProperty("start",  String.format("0x%08X", block.getStart().getOffset()));
+            obj.addProperty("size",   block.getSize());
+            obj.addProperty("sha256", hex.toString());
+            blocks.add(obj);
+        }
+        return blocks;
     }
 
     // =========================================================================
