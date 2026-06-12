@@ -44,7 +44,9 @@ dispatch table, and the data sections. The generated code compiles together with
 imported firmware NIDs, and a PSP Graphics Engine (GE) to OpenGL 3.3 translation layer.
 
 For Patapon BOOT.BIN the current pipeline recompiles ~14,104 functions with 2,022 mid-function
-entry points and HLEs 237 imported firmware NIDs.
+entry points and HLEs 237 imported firmware NIDs. The NID-to-stub binding table is generated
+per game into `output/syscall_table.cpp` from the analysis; the runtime carries no per-game
+stub addresses.
 
 ## Pipeline
 

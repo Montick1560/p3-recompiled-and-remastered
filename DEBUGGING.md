@@ -380,7 +380,9 @@ check could never fire (non-STRICT lookup returns a noop stub). The probe now us
 ### Upgrading an analysis.json baseline (#47 Phase 2)
 
 `recompile` **hard-errors** on an analysis.json without `module{}` (anything analyzed
-before Phase 2). For a normal baseline, just re-run analyze:
+before Phase 2) and on an empty `imports[]` (anything analyzed before the ELF import
+walker, issue #40 — the runtime would boot with zero HLE bindings). For a normal
+baseline, just re-run analyze:
 
 ```bash
 cargo run --release -- analyze --ghidra-dir $(brew --prefix ghidra)/libexec \
@@ -400,7 +402,8 @@ augmented baseline wholesale — **graft** the module block from a fresh analyze
 ```bash
 cargo run --release -- analyze --ghidra-dir $(brew --prefix ghidra)/libexec \
     disc0/PSP_GAME/SYSDIR/BOOT.BIN -o /tmp/fresh-analysis.json
-jq --slurpfile fresh /tmp/fresh-analysis.json '.module = $fresh[0].module' \
+jq --slurpfile fresh /tmp/fresh-analysis.json \
+    '.module = $fresh[0].module | .imports = $fresh[0].imports' \
     analysis.json > analysis-upgraded.json && mv analysis-upgraded.json analysis.json
 PSPRECOMP_CROSS_MID=1 cargo run --release -- recompile analysis.json -o output \
     --expect-functions 14104 --expect-mid-entries 2022
@@ -480,8 +483,52 @@ contained the 4 known `FUN_089DBC*` decode errors among 1,830 total (1,829 from
 recompile-stage heuristic discovery decoding data, 1 from hle_scan). The dispatch audit
 found 346 missing targets — **all** at `0x02xxxxxx`, none inside the loaded segment
 (0x08804000–0x08ADC400): garbage `j`-targets decoded from data words, not real misses.
-Zero unresolved NIDs and zero relocations (Patapon is a relocation-free ELF; both paths
-exercised by unit tests instead).
+Zero relocations (Patapon is a relocation-free ELF; the path is exercised by unit
+tests instead). Since issue #40, analyze parses ET_EXEC imports too: Patapon's
+`counts.imports_total` baseline is **237** (was 0) and `unresolved_nids` is **1**
+(NID 0xEBD177D6, scePower — missing from data/niddb; see the #40 section).
+
+## #40 — generated syscall table (NID import bindings)
+
+Every `psprecomp recompile` writes `<output>/syscall_table.cpp`: one row per
+analysis.json `imports[]` entry (stub address, NID, resolved name, library), sorted by
+stub address, header stamped with the analysis.json sha256. The runtime's
+`psp_hle_init()` walks `recomp_nid_stubs` (decls: `runtime/include/hle/psp_hle_imports.h`)
+and binds HLE handlers **by name** at the stub addresses — the hand-maintained
+`runtime/include/hle/psp_hle_syscall_table.h` is gone, and the runtime contains no
+per-game stub addresses. Runtime code that needs a stub keys on the NID (a universal PSP
+API constant) via `psp_hle_stub_addr_for_nid(nid)` — e.g. the GE sub-intr replay in
+`psp_hle_ge.cpp`.
+
+Pieces to know when debugging:
+
+- **Boot line** (unchanged format): `[HLE] Import stubs: X/Y implemented, Z unimplemented`.
+  Patapon baseline: `237/237 implemented, 0 unimplemented`. A sudden drop means HLE
+  registration names diverged from NID-db names — diff the generated table's `func_name`
+  column against `psp_hle_register` calls.
+- **Unimplemented imports are loud, never silent**: each unbound stub is registered with a
+  per-stub handler that logs `[HLE] UNIMPLEMENTED import <name> (NID 0x..., module ...,
+  stub 0x...)` once on first call and then behaves as the raw stub (`jr $ra; nop` — no
+  register effects). Unresolved NIDs carry the walker's canonical fallback name
+  `NID_0x%08X`; an HLE handler for such an import registers under exactly that name
+  (example: `psp_hle_power.cpp` registers `NID_0xEBD177D6`).
+- **Call sites**: the emitter lowers `jal <import stub>` to
+  `RECOMP_LOOKUP(0xADDR)(rdram, ctx); /* sceName */` — through the dispatch table, never a
+  direct named call (the by-name HLE symbols do not exist; psp_hle_init's registration is
+  what makes the lookup hit the handler). The #37 dispatch audit therefore counts import
+  stub addresses as registered.
+- **Binding-diff gate (2026-06-12, hand-table deletion evidence)**: fresh Patapon analyze
+  vs the 237-entry hand table — 237/237 stub addresses identical, 237/237 NIDs identical,
+  236/237 names byte-identical (every previously hand-corrected name agrees with
+  data/niddb). The single discrepancy: NID 0xEBD177D6 at 0x089D7A60 had the hand-invented
+  placeholder `unknown_EBD177D6`; the walker emits `NID_0xEBD177D6` (niddb miss). PPSSPP
+  `Core/HLE/scePower.cpp` identifies 0xEBD177D6 as scePowerSetClockFrequency (exported
+  alias "scePower_EBD177D6"); the runtime handler keeps returning SCE_OK and now registers
+  under the fallback name. The same NID shows up in .hack//Link's imports — the rename
+  generalizes.
+- **recompile hard-errors on an empty `imports[]`** (analysis.json predating the ELF
+  import walker): the runtime would otherwise boot with zero HLE bindings. Fix: re-analyze
+  (or graft `.imports`+`.module` for the augmented baseline, see the #47 P2 section).
 
 ## #38 — `dump <analysis.json> 0xADDR` (single-function C++ emission)
 

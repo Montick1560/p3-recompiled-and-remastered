@@ -28,7 +28,7 @@ cmake -B runtime/build -S runtime && cmake --build runtime/build -> psprecomp_ru
 
 ### Key Output Files (`output/`)
 
-`generated/batch_*.cpp` (per-batch translations), `dispatch.cpp` (address-to-function table), `data_sections.cpp` (.data/.rodata/.bss with 0x07FFFFFFU masking), `init_array.cpp`, `mid_entries.cpp`, `funcs.h` (forward decls), `include/recomp.h` (recomp_context, register aliases, memory macros), `CMakeLists.txt` (globs `batch_*.cpp` only)
+`generated/batch_*.cpp` (per-batch translations), `dispatch.cpp` (address-to-function table), `data_sections.cpp` (.data/.rodata/.bss with 0x07FFFFFFU masking), `init_array.cpp`, `mid_entries.cpp`, `syscall_table.cpp` (generated NID import binding table -- the runtime binds HLE handlers by name at its stub addresses, issue #40), `funcs.h` (forward decls), `include/recomp.h` (recomp_context, register aliases, memory macros), `CMakeLists.txt` (globs `batch_*.cpp` only)
 
 ### Key Runtime Files (`runtime/`)
 

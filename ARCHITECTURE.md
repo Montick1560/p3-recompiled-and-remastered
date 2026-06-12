@@ -55,6 +55,7 @@ All under `crates/`:
 | `data_sections.cpp` | `.data`/`.rodata`/`.bss` as byte arrays (addresses masked with `0x07FFFFFFU`) |
 | `init_array.cpp` | Static-constructor pointer table (not walked by default — the game's CRT handles it) |
 | `mid_entries.cpp` | Mid-function entry point wrappers |
+| `syscall_table.cpp` | Generated NID import binding table (issue #40): one `RecompNidStub` row per analysis.json `imports[]` entry (stub address, NID, resolved name, library), sorted by stub address, header stamped with the analysis.json sha256. The runtime's `psp_hle_init()` binds HLE handlers by name at these stub addresses (decls: `runtime/include/hle/psp_hle_imports.h`; emitter: `crates/psp-emitter/src/syscall_table.rs`; recompile **hard-errors** on an empty `imports[]`) |
 | `funcs.h` | Forward declarations for all generated functions |
 | `include/recomp.h` | `recomp_context` struct, register aliases, memory macros, `RECOMP_LOOKUP` declaration |
 | `CMakeLists.txt` | Generated build fragment — globs `batch_*.cpp` only; defines `{module_name}_recomp` plus the stable alias `psp::recomp` |
@@ -97,7 +98,7 @@ All under `runtime/` (headers in `runtime/include/`, sources in `runtime/src/`):
 | Memory | `psp_memory.cpp` | 128 MB `rdram` allocation; all guest addresses masked with `0x07FFFFFFU` |
 | Dispatch | `psp_dispatch.cpp` | `RECOMP_LOOKUP` address→function resolution; miss handler; `PSPRECOMP_STRICT` abort mode |
 | Scheduler | `psp_scheduler.cpp` | Cooperative threading (`PspThread`, yield points); `thread_local PspThread* g_current` |
-| HLE | `src/hle/psp_hle_*.cpp` | Firmware NID implementations: io, kernel (thread/sema/mutex/eventflag/memory), display, ge, ctrl, power, utility; name-based registration wired to stub addresses via dispatch overrides |
+| HLE | `src/hle/psp_hle_*.cpp` | Firmware NID implementations: io, kernel (thread/sema/mutex/eventflag/memory), display, ge, ctrl, power, utility; name-based registration wired to the generated `syscall_table.cpp` stub addresses via dispatch overrides (issue #40 — no per-game stub addresses in the runtime; unbound stubs get a loud per-NID unimplemented no-op; NID→stub lookup for runtime code via `psp_hle_stub_addr_for_nid`) |
 | GE list processor | `psp_ge.cpp` | Display-list interpretation, including SIGNAL flow-control behaviors 0x10–0x12 (JUMP/CALL/RET) |
 | Renderer | `psp_ge_draw.cpp`, `psp_ge_vertex.cpp`, `psp_ge_texture.cpp`, `psp_ge_shader.cpp` | Vertex decode/transform (column-major PSP matrices), CLUT/texture decode, shaders, GL draw — deep-dive in [docs/GRAPHICS.md](docs/GRAPHICS.md) |
 | Render queue | `psp_render_queue.cpp` | Condvar request queue — the only path by which GL work reaches the main thread |
