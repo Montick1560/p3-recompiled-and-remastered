@@ -21,7 +21,10 @@ Two halves: a Rust recompilation pipeline (offline) and a C++17 runtime (online)
    data. Merged into `analysis.json` (all addresses as hex strings). Relocatable PRX modules
    (`e_type 0xFFA0`) are first rebased to `PSP_USER_MODULE_BASE` (0x08804000; `--load-base`
    to override) with their Type-A relocation tables applied; ET_EXEC binaries load where
-   linked and skip every PRX-only step.
+   linked and skip every PRX-only step. For **both** formats, analyze emits a `module{}`
+   facts block (SceModuleInfo name + gp, entry = load_base + e_entry, text extent per
+   PPSSPP `ElfReader` semantics) — the runtime's boot constants flow from it (issue #47
+   Phase 2). PRX inputs additionally record `prx{load_base}` provenance.
 2. **Recompile** — each guest function is decoded into a typed IR and emitted as a C++ function;
    batches are emitted in parallel (rayon). Output also includes the dispatch table, data
    sections, and mid-entry wrappers.
@@ -58,6 +61,7 @@ All under `crates/`:
 | `recompile_report.json` | Silent-path audit: counts, decode errors, unresolved NIDs, unhandled relocations, dispatch-target audit, dedup renames (schema in `crates/psp-cli/src/report.rs`; usage in DEBUGGING.md "#37") |
 | `fingerprint.json` | Build fingerprint: content hash of the codegen-determining Rust sources + analysis.json hash + `cross_mid` flag + counts. Verified at runtime CMake configure by `runtime/cmake/check_fingerprint.py` — stale output/ fails configure (recipe in `crates/psp-cli/src/fingerprint.rs`; usage in DEBUGGING.md "#36") |
 | `include/recomp_fingerprint.h` | Generated header with the fingerprint hash/flag/timestamp; `runtime/src/main.cpp` prints it as the first boot line |
+| `include/recomp_module.h` | Generated module facts (issue #47 Phase 2): `RECOMP_MODULE_NAME/ENTRY/GP/TEXT_START/TEXT_SIZE`, `RECOMP_SEG0_VADDR/MEMSZ`, `RECOMP_HEAP_BASE`, `RECOMP_CTOR_COUNT/FIRST_CTOR` — sourced from analysis.json `module{}`; the runtime boot path hard-includes it (emitter: `crates/psp-emitter/src/module_header.rs`; recompile **hard-errors** when analysis.json lacks `module{}` — see DEBUGGING.md "#47 P2") |
 
 Every recompiled function has the signature
 `void(uint8_t* rdram, recomp_context* ctx)` (`FuncPtr` in `recomp.h`). The FPU register file in
@@ -75,6 +79,13 @@ never hardcodes a game's module name or output path; building against another ga
 Runtime hooks that wrap specific guest functions resolve them through the dispatch table
 at boot (`RECOMP_LOOKUP` against the pristine table) instead of `extern FUN_*`
 declarations, so no game-specific symbols are required at link time.
+
+Per-game boot constants travel the same channel (issue #47 Phase 2): the runtime
+hard-includes the generated `recomp_module.h` for the module name/entry/GP, text range,
+first load segment, heap base (16 MB-aligned bump-heap start, policy P11) and the boot
+probes — runtime sources carry no game-specific addresses for these. Remaining marked
+exceptions (`PATAPON(P12)` k0+4 heap-descriptor writes, address-keyed hooks) move to
+`games/patapon/` in Phase 4.
 
 ## Runtime Subsystems
 

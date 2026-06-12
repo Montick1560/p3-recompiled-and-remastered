@@ -346,6 +346,70 @@ exit 0 with the warning; revert + recompile → `fingerprint OK` with the **iden
 combined hash (determinism). Removing fingerprint.json → warning, configure + build OK.
 
 
+## #47 P2 — recomp_module.h (generated module facts)
+
+Every `psprecomp recompile` also writes `<output>/include/recomp_module.h` from the
+analysis.json `module{}` block (plus `segments[0]`, `heap_base`, `constructors[]`):
+`RECOMP_MODULE_NAME/ENTRY/GP/TEXT_START/TEXT_SIZE`, `RECOMP_SEG0_VADDR/MEMSZ`,
+`RECOMP_HEAP_BASE`, `RECOMP_CTOR_COUNT/FIRST_CTOR`. The runtime boot path (NativeModule
+block, boot GP, bump-heap base, boot probes, `sceKernelGetModuleIdByAddress` text range)
+hard-includes it — per-game constants no longer live in runtime sources. It regenerates
+with the output dir; staleness is covered by the #36 fingerprint (analysis.json hash).
+
+`module{}` is produced by `analyze` for **both** ET_EXEC and PRX inputs from the same
+SceModuleInfo parser path (`crates/psp-cli/src/prx_load.rs::build_module_facts`).
+Text extent follows PPSSPP `ElfReader` semantics (`psp-parser elf::text_extent`).
+
+### Differential note: text_size (investigated 2026-06-12)
+
+The pre-P2 runtime hardcoded Patapon text_size `0x244D30` — that is the exec phdr's
+`p_filesz`, which PPSSPP (`ElfReader::GetTotalTextSizeFromSeg`) only uses for
+**sectionless** inputs. Patapon has section headers, so PPSSPP computes
+`GetTotalTextSize()` = sum of SHF_ALLOC, non-WRITE, non-STRINGS section sizes =
+`0x001D4E04`, and that is what a game would read via `sceKernelQueryModuleInfo` under
+PPSSPP. Verdict: the old hardcoding was the bug; the generated fact is PPSSPP-faithful.
+(All other Patapon facts equal the old constants exactly: name "Labo" — matches the
+in-binary SceModuleInfo at 0x089D7EEC — entry 0x089ACCD0, GP 0x08A50D20, text_start
+0x08804000, seg0 0x08804000+0x2D8400, heap_base 0x08AE0000 → 16MB-aligned 0x09000000.)
+
+The old ctor boot probe address `0x08804B58` was also stale: it is not in the current
+`constructors[]` at all (first is `0x08804CE8`), and its `RECOMP_LOOKUP(...) == nullptr`
+check could never fire (non-STRICT lookup returns a noop stub). The probe now uses
+`RECOMP_FIRST_CTOR` + `psp_dispatch_probe_lookup` (nullable), i.e. it actually checks.
+
+### Upgrading an analysis.json baseline (#47 Phase 2)
+
+`recompile` **hard-errors** on an analysis.json without `module{}` (anything analyzed
+before Phase 2). For a normal baseline, just re-run analyze:
+
+```bash
+cargo run --release -- analyze --ghidra-dir $(brew --prefix ghidra)/libexec \
+    disc0/PSP_GAME/SYSDIR/BOOT.BIN -o analysis.json
+```
+
+**The augmented Patapon baseline is the exception.** It carries 524 hand-curated
+`source:"vtable_miss"` functions a fresh analyze does not produce. Measured empirically
+(2026-06-12): fresh analyze = 9,719 functions (baseline 10,243 = fresh + exactly 524);
+after recompile-stage discovery the fresh path reaches 14,098 functions / 2,017
+mid-entries vs the baseline's 14,104 / 2,022 — recovery is **incomplete**. 13 dispatch
+entries exist only in the baseline path: vtable_miss roots `0x08827FA8`, `0x08858D0C`,
+`0x0887E598`, plus 10 entries derived from vtable_miss seeds (incl. the coalesced
+`0x08827F7C/0x08827F9C` family and `0x0887E690/98`). Verdict: do NOT regenerate the
+augmented baseline wholesale — **graft** the module block from a fresh analyze into it:
+
+```bash
+cargo run --release -- analyze --ghidra-dir $(brew --prefix ghidra)/libexec \
+    disc0/PSP_GAME/SYSDIR/BOOT.BIN -o /tmp/fresh-analysis.json
+jq --slurpfile fresh /tmp/fresh-analysis.json '.module = $fresh[0].module' \
+    analysis.json > analysis-upgraded.json && mv analysis-upgraded.json analysis.json
+PSPRECOMP_CROSS_MID=1 cargo run --release -- recompile analysis.json -o output \
+    --expect-functions 14104 --expect-mid-entries 2022
+```
+
+(Long-term fix: re-express the 524 vtable_miss addresses as curated per-game data —
+manifest `force_entries`, #47 Phase 4 — so a fresh analyze becomes sufficient.)
+
+
 ## #37 — recompile_report.json (silent-path audit)
 
 Every `psprecomp recompile` run writes `<output>/recompile_report.json` and prints a
