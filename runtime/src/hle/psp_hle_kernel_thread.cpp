@@ -35,6 +35,18 @@ static std::unordered_map<int, int> g_thid_to_uid;
 // ---- Callback Table ----
 static std::unordered_map<int, PspCallback> g_callbacks;
 
+// Game-module callback-dispatch observer (#47 P5 seam): invoked right
+// before sceKernelCheckCallback dispatches a pending callback. Lets a game
+// module attach address-keyed diagnostics (e.g. Patapon's IoAsyncCallback
+// arg-struct dump) without a special case in the generic dispatcher.
+static PspCallbackDispatchObserver g_callback_dispatch_observer = nullptr;
+
+void psp_kernel_set_callback_dispatch_observer(
+    PspCallbackDispatchObserver fn
+) {
+    g_callback_dispatch_observer = fn;
+}
+
 // Forward declaration (used by CB variants before definition)
 static void hle_sceKernelCheckCallback(
     uint8_t* rdram, recomp_context* ctx);
@@ -499,24 +511,11 @@ static void hle_sceKernelCheckCallback(
             cb.uid, cb.func_addr, cb.notify_count,
             cb.notify_arg, cb.user_arg);
 
-        // Debug: for IoAsyncCallback, show the function
-        // pointer at notify_arg+12 that determines whether
-        // the callback does useful work.
-        if (cb.func_addr == 0x088629CCU && cb.notify_arg != 0) {
-            uint32_t na = static_cast<uint32_t>(cb.notify_arg);
-            uint32_t na_off = na & 0x07FFFFFFU;
-            if (na_off + 16 <= 0x08000000U) {
-                uint32_t fptr = psp_mem_read<uint32_t>(
-                    rdram, na + 12);
-                // Also log offset 0, 4, 8 for full struct context
-                uint32_t f0 = psp_mem_read<uint32_t>(rdram, na + 0);
-                uint32_t f4 = psp_mem_read<uint32_t>(rdram, na + 4);
-                uint32_t f8 = psp_mem_read<uint32_t>(rdram, na + 8);
-                std::fprintf(stderr,
-                    "[HLE] IoAsyncCB: notify_arg=0x%08X "
-                    "*(+0)=0x%08X *(+4)=0x%08X *(+8)=0x%08X *(+12)=0x%08X\n",
-                    na, f0, f4, f8, fptr);
-            }
+        // Game-module observer (#47 P5 seam): address-keyed callback
+        // diagnostics live in the game module, not here.
+        if (g_callback_dispatch_observer != nullptr) {
+            g_callback_dispatch_observer(
+                rdram, cb.func_addr, cb.notify_arg);
         }
 
         fn(rdram, ctx);
@@ -638,44 +637,6 @@ static void hle_sceKernelTerminateDeleteThread(
     // Also remove from tracking
     int uid = ctx->r[4];
     g_thread_by_uid.erase(uid);
-}
-
-// ---- CRT Assertion Override ----
-// FUN_088133EC is the game's CRT libc assertion handler that prints
-// "libc:%s: no reent structure found" via sceKernelPrintf and then
-// calls sceKernelExitThread(1). On the real PSP, the kernel provides
-// a per-thread _reent structure; in our runtime, the reent may not
-// be fully initialized. Override this function to log a warning and
-// return gracefully instead of killing the thread.
-//
-// Also override FUN_088134B4 which is the CRT __libcInit that calls
-// 088133EC. This prevents the entire CRT assertion path.
-
-static void hle_crt_no_reent_handler(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    static int s_warn_count = 0;
-    if (s_warn_count < 3) {
-        std::fprintf(stderr,
-            "[HLE] CRT no-reent assertion suppressed "
-            "(returning gracefully)\n");
-        ++s_warn_count;
-    }
-    // Return 0 (success) instead of calling ExitThread
-    ctx->r[2] = 0;
-    (void)rdram;
-}
-
-/// Initialize CRT assertion override.
-/// Must be called after psp_init_dispatch_table().
-void psp_crt_assertion_override_init() {
-    // Override FUN_088133EC (CRT no-reent assertion handler)
-    psp_dispatch_register(0x088133ECU,
-        reinterpret_cast<FuncPtr>(hle_crt_no_reent_handler));
-
-    std::fprintf(stderr,
-        "[RT] CRT assertion override registered "
-        "(no_reent=0x088133EC)\n");
 }
 
 // ---- Registration ----

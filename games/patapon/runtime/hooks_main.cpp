@@ -2601,6 +2601,11 @@ void patapon_register_hooks(uint8_t* rdram) {
     //      allocation triggers a fatal assertion. The override returns
     //      gracefully, letting the game handle OOM without thread death.
     psp_crt_assertion_override_init();
+
+    // 4a4. Callback-dispatch observer (#47 P5 seam): IoAsyncCallback
+    //      (FUN_088629CC) arg-struct dump, formerly inline in the generic
+    //      sceKernelCheckCallback dispatcher.
+    patapon_install_callback_observer();
 }
 
 /// Boot-context tweaks, invoked immediately before entry() (module_start).

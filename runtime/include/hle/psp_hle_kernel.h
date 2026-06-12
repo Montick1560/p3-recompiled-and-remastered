@@ -78,6 +78,13 @@ void psp_kernel_notify_callback(int cbId, int notifyArg);
 /// Dispatch one pending callback (if any). Called by *CB HLE variants.
 void psp_kernel_check_callbacks(uint8_t* rdram, recomp_context* ctx);
 
+/// Game-module observer invoked right before a pending callback is
+/// dispatched (#47 P5 seam): (rdram, callback func addr, notify_arg).
+/// Installed by the game module's register_hooks; nullptr = no observer.
+using PspCallbackDispatchObserver =
+    void (*)(uint8_t* rdram, uint32_t func_addr, int notify_arg);
+void psp_kernel_set_callback_dispatch_observer(PspCallbackDispatchObserver fn);
+
 // Event flag wait modes
 constexpr uint32_t PSP_EVENT_WAITOR   = 0x00;
 constexpr uint32_t PSP_EVENT_WAITAND  = 0x01;
