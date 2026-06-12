@@ -31,9 +31,10 @@
 // Heap-base policy (#47 P2, decision P11): the generated fact
 // RECOMP_HEAP_BASE (analysis.json heap_base — first 64K-aligned address past
 // the loaded image) aligned UP to 16 MB. Game-agnostic rule, no manifest pin;
-// for Patapon 0x08AE0000 -> 0x09000000, bit-identical to the historical
-// hardcoded layout (boot fragility, plan risk R4). Revisit (drop the
-// alignment) only when a game actually needs the headroom below 16 MB.
+// for Patapon the alignment lands exactly on the historical hardcoded heap
+// base, keeping the fragile boot layout bit-identical (plan risk R4).
+// Revisit (drop the alignment) only when a game actually needs the headroom
+// below the next 16 MB boundary.
 // A manifest [module] heap_base pin (RECOMP_HEAP_OVERRIDE, issue #46)
 // bypasses the align policy when a game needs tighter packing.
 static constexpr uint32_t k_heap_start =
