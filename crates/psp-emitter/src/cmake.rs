@@ -34,6 +34,9 @@ list(APPEND RECOMP_SOURCES
 )
 
 add_library({module_name}_recomp STATIC ${{RECOMP_SOURCES}})
+# Stable alias: the runtime links `psp::recomp` so it never needs to know
+# the per-game module name (issue #47 Phase 1).
+add_library(psp::recomp ALIAS {module_name}_recomp)
 target_include_directories({module_name}_recomp PUBLIC
     "${{CMAKE_CURRENT_SOURCE_DIR}}/include"
     "${{CMAKE_CURRENT_SOURCE_DIR}}"
@@ -69,5 +72,13 @@ mod tests {
     fn cmake_uses_module_name() {
         let result = emit_cmake_lists("patapon");
         assert!(result.contains("patapon_recomp"));
+    }
+
+    #[test]
+    fn cmake_defines_stable_alias() {
+        // The runtime links `psp::recomp` regardless of the module name
+        // (issue #47 Phase 1) — the alias must always be emitted.
+        let result = emit_cmake_lists("boot_dec");
+        assert!(result.contains("add_library(psp::recomp ALIAS boot_dec_recomp)"));
     }
 }
