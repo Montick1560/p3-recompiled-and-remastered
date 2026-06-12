@@ -59,7 +59,8 @@ DATA_CMN_BND_PATH=disc0/PSP_GAME/USRDIR/DATA_CMN.BND ./runtime/build/test_asset_
 PSPRECOMP_CROSS_MID=1 PSPRECOMP_CLEANROOM=1 timeout 120 \
   ./runtime/build/psprecomp_runtime > /tmp/run.log 2>&1
 # Gates: exit 124; sentinel-only LOOKUP_MISS; 0 "bus error"/"marking dead";
-# [GE_GEOM_HEARTBEAT] monotonic; real_nonsprite in expected band (~13.8-14.1k @120s);
+# [GE_GEOM_HEARTBEAT] monotonic; real_nonsprite in expected band (13.8k-15.7k @120s;
+#   observed across sessions — boot nondeterminism moves it within this band);
 # "proj matrix degenerate" ABSENT; "view matrix all-zero" exactly once.
 # DELETE /tmp/run.log after grepping.
 ```

@@ -98,6 +98,12 @@ fn section_reloc_tables(elf: &goblin::elf::Elf) -> Vec<RelocTable> {
                 "Section {source} holds traditional SHT_REL relocations — unsupported for \
                  relocatable PSP modules, skipping (PPSSPP does the same)"
             ),
+            PT_PSPREL2 => tracing::warn!(
+                "Section {source} is typed 0x700000A1 (Type-B packed relocations) — PPSSPP \
+                 only honors Type-B as a program-header format on sectionless PRXs and \
+                 ignores such sections; skipping it here too. If this module later fails to \
+                 relocate, this section is the first suspect"
+            ),
             _ => {}
         }
     }
@@ -297,6 +303,18 @@ mod tests {
         let bytes = PrxFixture::new()
             .text(&[0x0000_0010])
             .reloc_typed(".rel.text", vec![0u8; 8], SHT_REL)
+            .build();
+        let elf_obj = elf::parse_elf(&bytes).unwrap();
+        assert!(find_reloc_tables(&elf_obj).is_empty());
+    }
+
+    #[test]
+    fn type_b_typed_section_is_skipped_like_ppsspp() {
+        // 0x700000A1 is only meaningful as a program-header type (sectionless PRX);
+        // a SECTION carrying it is skipped with a loud warning, matching PPSSPP.
+        let bytes = PrxFixture::new()
+            .text(&[0x0000_0010])
+            .reloc_typed(".rel.typeb", vec![0u8; 8], PT_PSPREL2)
             .build();
         let elf_obj = elf::parse_elf(&bytes).unwrap();
         assert!(find_reloc_tables(&elf_obj).is_empty());
