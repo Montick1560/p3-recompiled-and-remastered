@@ -4,6 +4,7 @@ target/
 # C++ build
 runtime/build/
 runtime/build-debug/
+runtime/build-none/
 cmake-build-*/
 
 # External toolchain checkouts

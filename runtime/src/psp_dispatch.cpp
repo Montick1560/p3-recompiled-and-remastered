@@ -213,10 +213,8 @@ static std::unordered_map<uint32_t, int> g_func_counts;
 static std::mutex g_pc_trace_mutex;
 static int g_total_entries = 0;
 
-// Corruption detector: when FUN_0885fe90 is entered with an invalid
-// "this" pointer (r[4] < 0x08000000 and non-zero), log the caller chain.
-// The corrupt pointer comes from FUN_0885efc8's linked list iteration,
-// so g_last_func_addr will show the iterator function.
+// Previous dispatched-function address, kept per thread so game-module
+// diagnostics (games/<name>/hooks_dispatch.cpp) can report caller chains.
 thread_local uint32_t g_prev_func_addr = 0;
 
 void psp_trace_checkpoint(uint32_t addr) {
