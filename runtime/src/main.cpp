@@ -23,6 +23,12 @@
 #include "recomp_fingerprint.h"
 #endif
 
+// Generated module facts (issue #47 Phase 2): RECOMP_MODULE_* / RECOMP_SEG0_*
+// / RECOMP_HEAP_BASE / RECOMP_CTOR_* — per-game boot constants sourced from
+// analysis.json. Hard include: recompile refuses to produce an output/ that
+// lacks it, so a missing header means a stale output dir (regenerate it).
+#include "recomp_module.h"
+
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -38,8 +44,9 @@ extern void psp_init_data_sections(uint8_t* rdram);
 // From psp_dispatch.cpp
 extern thread_local uint32_t g_last_func_addr;
 
-// module_start entry point — named "entry" in the emitter output at
-// address 0x089ACCD0 (Patapon BOOT.BIN specific).
+// module_start entry point — the emitter canonically names the function at
+// the module entry address (RECOMP_MODULE_ENTRY) "entry" for every input
+// (issue #52 T5.7), so this hard extern is a contract, not a Ghidra accident.
 extern RECOMP_FUNC void entry(uint8_t* rdram, recomp_context* ctx);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2677,8 +2684,9 @@ int main(int argc, char* argv[]) {
         psp_mem_write<uint8_t>(rdram, BOOT_MODULE_ADDR + 0x06, 0x01);
         // +0x07: version[1] = 0x01
         psp_mem_write<uint8_t>(rdram, BOOT_MODULE_ADDR + 0x07, 0x01);
-        // +0x08: name = "Labo" (28-byte field)
-        const char* mod_name = "Labo";
+        // +0x08: name (28-byte field) — SceModuleInfo name from the binary
+        // (issue #47 Phase 2: all values below come from recomp_module.h)
+        const char* mod_name = RECOMP_MODULE_NAME;
         std::memcpy(
             rdram + ((BOOT_MODULE_ADDR + 0x08) & PSP_ADDR_MASK),
             mod_name, std::strlen(mod_name) + 1);
@@ -2687,29 +2695,30 @@ int main(int argc, char* argv[]) {
         // +0x2C: modid = BOOT_MODULE_UID
         psp_mem_write<uint32_t>(rdram, BOOT_MODULE_ADDR + 0x2C,
             static_cast<uint32_t>(BOOT_MODULE_UID));
-        // +0x50: module_start_func = 0x089ACCD0
+        // +0x50: module_start_func
         psp_mem_write<uint32_t>(rdram, BOOT_MODULE_ADDR + 0x50,
-            0x089ACCD0U);
-        // +0x64: entry_addr = 0x089ACCD0
+            RECOMP_MODULE_ENTRY);
+        // +0x64: entry_addr
         psp_mem_write<uint32_t>(rdram, BOOT_MODULE_ADDR + 0x64,
-            0x089ACCD0U);
-        // +0x68: gp_value = 0x08A50D20
+            RECOMP_MODULE_ENTRY);
+        // +0x68: gp_value
         psp_mem_write<uint32_t>(rdram, BOOT_MODULE_ADDR + 0x68,
-            0x08A50D20U);
-        // +0x6C: text_addr = 0x08804000
+            RECOMP_MODULE_GP);
+        // +0x6C: text_addr
         psp_mem_write<uint32_t>(rdram, BOOT_MODULE_ADDR + 0x6C,
-            0x08804000U);
-        // +0x70: text_size = 0x244D30
+            RECOMP_MODULE_TEXT_START);
+        // +0x70: text_size (PPSSPP GetTotalTextSize semantics; the previous
+        // hardcoding used the exec phdr's p_filesz — see DEBUGGING.md #47 P2)
         psp_mem_write<uint32_t>(rdram, BOOT_MODULE_ADDR + 0x70,
-            0x244D30U);
+            RECOMP_MODULE_TEXT_SIZE);
         // +0x7C: nsegment = 1
         psp_mem_write<uint32_t>(rdram, BOOT_MODULE_ADDR + 0x7C, 1);
-        // +0x80: segmentaddr[0] = 0x08804000
+        // +0x80: segmentaddr[0]
         psp_mem_write<uint32_t>(rdram, BOOT_MODULE_ADDR + 0x80,
-            0x08804000U);
-        // +0x90: segmentsize[0] = 2982912
+            RECOMP_SEG0_VADDR);
+        // +0x90: segmentsize[0]
         psp_mem_write<uint32_t>(rdram, BOOT_MODULE_ADDR + 0x90,
-            2982912U);
+            RECOMP_SEG0_MEMSZ);
 
         std::fprintf(stderr,
             "[RT] Boot module NativeModule at 0x%08X\n",
@@ -2778,6 +2787,10 @@ int main(int argc, char* argv[]) {
     uint32_t boot_k0 = PSP_USER_MEM_END - 1;  // 0x0BFFFFFF with Slim model
     uint32_t boot_k0_masked = boot_k0 & PSP_ADDR_MASK;
     std::memset(rdram + boot_k0_masked, 0, 0x100);
+    // PATAPON(P12): 0x089F0000 is Patapon's dlmalloc default-heap descriptor
+    // (a .bss global inside the game image) — NOT derivable from analysis.json
+    // facts. Moves to games/patapon's on_boot_context hook in #47 Phase 4;
+    // the generic default will write 0 (unconfigured PPSSPP-style k0 area).
     psp_mem_write<uint32_t>(rdram, boot_k0 + 0x04, 0x089F0000U);
     psp_mem_write<int32_t>(rdram, boot_k0 + 0xC0, 0);
     psp_mem_write<uint32_t>(rdram, boot_k0 + 0xC8, boot_k0);
@@ -2805,7 +2818,7 @@ int main(int argc, char* argv[]) {
     ctx.r[29] = static_cast<int32_t>(boot_k0 - 0x100); // SP below k0 area
 
     // 6b. Set GP register to module gp_value (PPSSPP __KernelSetupRootThread)
-    ctx.r[28] = static_cast<int32_t>(0x08A50D20U);  // GP = module gp_value
+    ctx.r[28] = static_cast<int32_t>(RECOMP_MODULE_GP);  // GP = module gp_value
 
     // 6c. Copy boot path to stack as module_start arguments
     //     PPSSPP __KernelSetupRootThread pattern:
@@ -2837,20 +2850,32 @@ int main(int argc, char* argv[]) {
     //    We verify: (a) first constructor address is in dispatch table,
     //    (b) data sections were loaded (non-zero bytes in .data region).
     {
-        // (a) Verify first constructor (0x08804B58) is in the dispatch table
-        FuncPtr first_ctor = RECOMP_LOOKUP(0x08804B58U);
-        if (first_ctor == nullptr) {
+        // (a) Verify the first constructor is in the dispatch table
+        //     (fact-derived, issue #47 Phase 2: the address comes from
+        //     analysis.json constructors[0] via recomp_module.h, and the
+        //     probe uses psp_dispatch_probe_lookup — the plain RECOMP_LOOKUP
+        //     never returns nullptr in non-STRICT mode, so the old check
+        //     could not actually fail). Skipped for ctor-less modules.
+        if (RECOMP_CTOR_COUNT > 0u) {
+            FuncPtr first_ctor = psp_dispatch_probe_lookup(RECOMP_FIRST_CTOR);
+            if (first_ctor == nullptr) {
+                std::fprintf(stderr,
+                    "FAIL: Criterion 3 — first constructor 0x%08X "
+                    "not in dispatch table\n", RECOMP_FIRST_CTOR);
+                return 1;
+            }
+        } else {
             std::fprintf(stderr,
-                "FAIL: Criterion 3 — first constructor "
-                "not in dispatch table\n");
-            return 1;
+                "[RT] Criterion 3: module has no constructors[]; "
+                "ctor probe skipped\n");
         }
-        // (b) Verify data sections were loaded: check non-zero byte in .data
-        //     Segment starts at masked 0x00804000 (0x08804000 & 0x07FFFFFF)
-        //     and is 2,982,912 bytes. If psp_init_data_sections was NOT
-        //     called, this region is all zeroes.
+        // (b) Verify data sections were loaded: check non-zero byte at the
+        //     start of the first load segment (fact-derived; if
+        //     psp_init_data_sections was NOT called this region is all
+        //     zeroes — segment starts are code/data, never a zero page).
         bool data_loaded = false;
-        for (uint32_t off = 0x00804000; off < 0x00804100; off++) {
+        uint32_t seg0 = RECOMP_SEG0_VADDR & PSP_ADDR_MASK;
+        for (uint32_t off = seg0; off < seg0 + 0x100; off++) {
             if (rdram[off] != 0) {
                 data_loaded = true;
                 break;
@@ -2859,7 +2884,8 @@ int main(int argc, char* argv[]) {
         if (!data_loaded) {
             std::fprintf(stderr,
                 "FAIL: Criterion 3 — data sections appear "
-                "empty (first 256 bytes all zero)\n");
+                "empty (first 256 bytes of segment 0 at 0x%08X all zero)\n",
+                RECOMP_SEG0_VADDR);
             return 1;
         }
         std::fprintf(stderr,
@@ -2929,7 +2955,8 @@ int main(int argc, char* argv[]) {
 
     // 10. Call module_start — typically creates game threads and returns
     std::fprintf(stderr,
-        "[RT] Calling module_start (0x089ACCD0)...\n");
+        "[RT] Calling module_start (0x%08X)...\n",
+        RECOMP_MODULE_ENTRY);
     entry(rdram, &ctx);
     std::fprintf(stderr, "[RT] module_start returned\n");
 

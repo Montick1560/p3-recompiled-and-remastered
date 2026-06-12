@@ -149,10 +149,12 @@ static void hle_sceKernelStartThread(
     //    256 bytes at stack_top, k0 register points there,
     //    usable SP starts below the k0 area.
     //    PPSSPP sets k0+C0=UID, k0+C8=stack, k0+F8/FC=0xFFFFFFFF.
-    //    Game's dlmalloc (FUN_0881E1F4) checks k0+4: if non-zero,
-    //    uses the default heap at 0x089F0000; if zero, reads a
-    //    fallback pointer from 0x089F65F0. Setting k0+4 to the
-    //    heap descriptor address ensures the normal path is taken.
+    //    PATAPON(P12): 0x089F0000 is Patapon's dlmalloc default-heap
+    //    descriptor — a .bss global in the game image (FUN_0881E1F4 checks
+    //    k0+4: if non-zero it uses this heap; if zero it reads a fallback
+    //    pointer from 0x089F65F0). NOT derivable from analysis.json facts;
+    //    moves to games/patapon's on_thread_start hook in #47 Phase 4 (the
+    //    generic default will write 0).
     uint32_t stack_top = pt->stack_top;
     std::memset(
         rdram + (stack_top & PSP_ADDR_MASK), 0, 0x100);

@@ -3,6 +3,7 @@
 #include "psp_memory.h"
 #include "psp_scheduler.h"
 #include "recomp.h"
+#include "recomp_module.h"  // generated module facts (issue #47 Phase 2)
 
 #include <cstdio>
 #include <cstring>
@@ -130,9 +131,16 @@ static inline bool psp_cleanroom() {
 }
 
 // ---- Heap Allocator ----
-// Bump allocator for PSP user memory. Grows upward from heap_base.
-// heap_base is after .bss end (from analysis.json: 0x08AD0000 area).
-static uint32_t g_heap_pos = 0x09000000U;  // Start above .bss
+// Bump allocator for PSP user memory. Grows upward from the heap start.
+// Heap-base policy (#47 P2, decision P11): the generated fact
+// RECOMP_HEAP_BASE (analysis.json heap_base — first 64K-aligned address past
+// the loaded image) aligned UP to 16 MB. Game-agnostic rule, no manifest pin;
+// for Patapon 0x08AE0000 -> 0x09000000, bit-identical to the historical
+// hardcoded layout (boot fragility, plan risk R4). Revisit (drop the
+// alignment) only when a game actually needs the headroom below 16 MB.
+static constexpr uint32_t k_heap_start =
+    (RECOMP_HEAP_BASE + 0x00FFFFFFU) & ~0x00FFFFFFU;
+static uint32_t g_heap_pos = k_heap_start;
 // Cap dlmalloc at 0x0B000000 so it cannot grow into the guest thread-stack
 // region (psp_alloc_stack carves DOWN from PSP_USER_MEM_END - 0x1000 =
 // 0x0BFFF000). Historically this was PSP_BND_ARENA_BASE, but the BND arena
@@ -141,6 +149,10 @@ static uint32_t g_heap_pos = 0x09000000U;  // Start above .bss
 static constexpr uint32_t g_heap_end = 0x0B000000U;
 static_assert(g_heap_end <= PSP_USER_MEM_END - 0x1000U,
               "heap must stay below the guest thread-stack region");
+static_assert(k_heap_start < g_heap_end,
+              "16MB-aligned RECOMP_HEAP_BASE must leave room below the "
+              "stack-region floor — image too large for the P11 alignment "
+              "policy; revisit #47 P11");
 
 static std::unordered_map<int, uint32_t> g_mem_blocks;   // uid -> addr
 static std::unordered_map<int, uint32_t> g_mem_sizes;    // uid -> size

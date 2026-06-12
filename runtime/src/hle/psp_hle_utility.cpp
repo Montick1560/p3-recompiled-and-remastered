@@ -4,6 +4,7 @@
 #include "psp_runtime.h"
 #include "psp_scheduler.h"
 #include "recomp.h"
+#include "recomp_module.h"  // generated module facts (issue #47 Phase 2)
 
 #include <algorithm>
 #include <cstdio>
@@ -42,7 +43,7 @@ uint32_t psp_alloc_kernel_memory(uint32_t size) {
 }
 
 uint32_t psp_get_boot_module_gp() {
-    return 0x08A50D20U;  // Patapon module GP
+    return RECOMP_MODULE_GP;  // SceModuleInfo gp (generated fact, #47 P2)
 }
 
 // ---- Cache Operations (all no-ops) ----
@@ -461,8 +462,8 @@ static void init_boot_module_tracking() {
     ModuleInfo boot_mod{};
     boot_mod.uid = BOOT_MODULE_UID;
     boot_mod.native_module_addr = BOOT_MODULE_ADDR;
-    boot_mod.entry_addr = 0x089ACCD0U;
-    std::strncpy(boot_mod.name, "Labo", sizeof(boot_mod.name));
+    boot_mod.entry_addr = RECOMP_MODULE_ENTRY;
+    std::strncpy(boot_mod.name, RECOMP_MODULE_NAME, sizeof(boot_mod.name) - 1);
     g_modules.push_back(boot_mod);
 }
 
@@ -628,9 +629,9 @@ static void hle_sceKernelGetModuleIdByAddress(
     uint8_t* rdram, recomp_context* ctx
 ) {
     uint32_t addr = static_cast<uint32_t>(ctx->r[4]);
-    // Patapon text segment: 0x08804000 to 0x08804000 + 0x244D30
-    constexpr uint32_t TEXT_START = 0x08804000U;
-    constexpr uint32_t TEXT_END = TEXT_START + 0x244D30U;
+    // Boot module text range (generated facts, #47 P2)
+    constexpr uint32_t TEXT_START = RECOMP_MODULE_TEXT_START;
+    constexpr uint32_t TEXT_END = TEXT_START + RECOMP_MODULE_TEXT_SIZE;
     if (addr >= TEXT_START && addr < TEXT_END) {
         ctx->r[2] = BOOT_MODULE_UID;
     } else {
