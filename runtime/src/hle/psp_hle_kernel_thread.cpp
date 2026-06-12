@@ -1,0 +1,733 @@
+#include "hle/psp_hle.h"
+#include "hle/psp_hle_kernel.h"
+#include "psp_scheduler.h"
+#include "psp_memory.h"
+#include "recomp.h"
+
+#include <cstdio>
+#include <cstring>
+#include <chrono>
+#include <thread>
+#include <unordered_map>
+
+// ---- newlib _reent Initialization ----
+// PSP newlib __getreent() reads the _reent pointer from k0+0x00.
+// If k0+0x00 is NULL, newlib prints "no reent structure found"
+// and calls sceKernelExitThread(1), killing the thread.
+//
+// On the real PSP, the kernel allocates a _reent struct for each
+// thread and stores its address at k0+0x00. Our runtime must do
+// the same. The _reent struct is 1024 bytes, zero-initialized.
+//
+// The _reent minimum fields (newlib struct _reent):
+//   +0x00: _errno (int32_t)
+//   +0x04: _stdin (FILE*, can be NULL)
+//   +0x08: _stdout (FILE*, can be NULL)
+//   +0x0C: _stderr (FILE*, can be NULL)
+// Zero initialization is safe -- errno=0, all pointers NULL.
+static constexpr uint32_t PSP_REENT_SIZE = 1024;
+
+// ---- Thread UID Tracking ----
+static std::unordered_map<int, PspThreadInfo> g_thread_by_uid;
+static std::unordered_map<int, int> g_thid_to_uid;
+
+// ---- Callback Table ----
+static std::unordered_map<int, PspCallback> g_callbacks;
+
+// Forward declaration (used by CB variants before definition)
+static void hle_sceKernelCheckCallback(
+    uint8_t* rdram, recomp_context* ctx);
+
+// ---- UID Generator (shared across all kernel objects) ----
+static int g_uid_counter = 0x100;
+
+int psp_next_uid() {
+    return g_uid_counter++;
+}
+
+// ---- Stack Allocator ----
+// Grows downward from top of PSP user memory
+static uint32_t g_stack_top = PSP_USER_MEM_END - 0x1000;
+
+uint32_t psp_alloc_stack(uint8_t* rdram, uint32_t size) {
+    (void)rdram;
+    // Align to 256 bytes
+    size = (size + 0xFF) & ~0xFFU;
+    g_stack_top -= size;
+    return g_stack_top;
+}
+
+// ---- System Time Base ----
+static auto g_time_base = std::chrono::steady_clock::now();
+
+static uint64_t get_system_time_us() {
+    auto now = std::chrono::steady_clock::now();
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            now - g_time_base).count());
+}
+
+// ---- HLE Functions ----
+
+static void hle_sceKernelCreateThread(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    uint32_t name_ptr = static_cast<uint32_t>(ctx->r[4]);
+    uint32_t entry    = static_cast<uint32_t>(ctx->r[5]);
+    int32_t  priority = ctx->r[6];
+    uint32_t stack_sz = static_cast<uint32_t>(ctx->r[7]);
+
+    const char* name = reinterpret_cast<const char*>(
+        rdram + (name_ptr & PSP_ADDR_MASK));
+
+    // Allocate guest stack
+    uint32_t stack_top = psp_alloc_stack(rdram, stack_sz);
+
+    // Create thread via Phase 3 scheduler
+    int thid = psp_thread_create(name, entry, priority, stack_top, 0);
+    if (thid < 0) {
+        std::fprintf(stderr,
+            "[HLE] sceKernelCreateThread(\"%s\") FAILED: no slots\n",
+            name);
+        ctx->r[2] = SCE_KERNEL_ERROR_NO_MEMORY;
+        return;
+    }
+
+    int uid = psp_next_uid();
+    PspThreadInfo info{};
+    info.uid = uid;
+    info.thid = thid;
+    info.entry_addr = entry;
+    info.stack_base = stack_top;
+    info.stack_size = stack_sz;
+    info.priority = priority;
+    std::strncpy(info.name, name, sizeof(info.name) - 1);
+
+    g_thread_by_uid[uid] = info;
+    g_thid_to_uid[thid] = uid;
+
+    std::fprintf(stderr,
+        "[HLE] sceKernelCreateThread(\"%s\", 0x%08X, pri=%d, "
+        "stk=%u) -> uid=%d\n",
+        name, entry, priority, stack_sz, uid);
+
+    ctx->r[2] = uid;
+}
+
+static void hle_sceKernelStartThread(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    int uid = ctx->r[4];
+    int32_t arglen = ctx->r[5];
+    uint32_t argp = static_cast<uint32_t>(ctx->r[6]);
+
+    // 1. Look up thread info by UID
+    auto it = g_thread_by_uid.find(uid);
+    if (it == g_thread_by_uid.end()) {
+        std::fprintf(stderr,
+            "[HLE] sceKernelStartThread(uid=%d) NOT FOUND\n", uid);
+        ctx->r[2] = SCE_KERNEL_ERROR_NOT_FOUND_THREAD;
+        return;
+    }
+
+    int thid = it->second.thid;
+
+    // 2. Get PspThread via psp_get_thread(thid)
+    PspThread* pt = psp_get_thread(thid);
+    if (!pt) {
+        std::fprintf(stderr,
+            "[HLE] sceKernelStartThread(uid=%d) thid=%d "
+            "invalid slot\n", uid, thid);
+        ctx->r[2] = SCE_KERNEL_ERROR_ILLEGAL_THREAD;
+        return;
+    }
+
+    // 3. Wire rdram (Research Fix 1): set BEFORE thread starts
+    pt->rdram = rdram;
+
+    // 4. Set up k0 area (Research Fix 2):
+    //    256 bytes at stack_top, k0 register points there,
+    //    usable SP starts below the k0 area.
+    //    PPSSPP sets k0+C0=UID, k0+C8=stack, k0+F8/FC=0xFFFFFFFF.
+    //    Game's dlmalloc (FUN_0881E1F4) checks k0+4: if non-zero,
+    //    uses the default heap at 0x089F0000; if zero, reads a
+    //    fallback pointer from 0x089F65F0. Setting k0+4 to the
+    //    heap descriptor address ensures the normal path is taken.
+    uint32_t stack_top = pt->stack_top;
+    std::memset(
+        rdram + (stack_top & PSP_ADDR_MASK), 0, 0x100);
+    psp_mem_write<uint32_t>(
+        rdram, stack_top + 0x04, 0x089F0000U);
+    psp_mem_write<int32_t>(
+        rdram, stack_top + 0xC0, it->second.uid);
+    psp_mem_write<uint32_t>(
+        rdram, stack_top + 0xC8, stack_top);
+    psp_mem_write<uint32_t>(
+        rdram, stack_top + 0xF8, 0xFFFFFFFFU);
+    psp_mem_write<uint32_t>(
+        rdram, stack_top + 0xFC, 0xFFFFFFFFU);
+
+    // 4b. Allocate newlib _reent structure for this thread.
+    //     PSP __getreent() reads from k0+0x00. If NULL, newlib
+    //     asserts "no reent structure found" and exits the thread.
+    //     Allocate 1024 bytes from kernel memory, zero-init, and
+    //     write the address to k0+0x00.
+    uint32_t reent_addr =
+        psp_alloc_kernel_memory(PSP_REENT_SIZE);
+    if (reent_addr != 0) {
+        std::memset(
+            rdram + (reent_addr & PSP_ADDR_MASK),
+            0, PSP_REENT_SIZE);
+        psp_mem_write<uint32_t>(
+            rdram, stack_top + 0x00, reent_addr);
+    }
+
+    pt->ctx.r[26] = static_cast<int32_t>(stack_top);
+
+    // 5. Set usable SP below k0 area
+    pt->ctx.r[29] = static_cast<int32_t>(stack_top - 0x100);
+
+    // 6. Copy thread arguments (Research Fix 3):
+    //    PSP convention: copy argPtr data onto thread's stack,
+    //    set a0=argLen, a1=stack copy address.
+    if (argp != 0 && arglen > 0) {
+        uint32_t aligned_len =
+            (static_cast<uint32_t>(arglen) + 0xFU) & ~0xFU;
+        uint32_t new_sp =
+            static_cast<uint32_t>(pt->ctx.r[29]) - aligned_len;
+        std::memcpy(
+            rdram + (new_sp & PSP_ADDR_MASK),
+            rdram + (argp & PSP_ADDR_MASK),
+            static_cast<size_t>(arglen));
+        pt->ctx.r[4] = arglen;
+        pt->ctx.r[5] = static_cast<int32_t>(new_sp);
+        pt->ctx.r[29] = static_cast<int32_t>(new_sp);
+    }
+
+    // 7. Set GP register from boot module's gp_value
+    // PPSSPP does this via __KernelGetModuleGP(module->GetUID())
+    pt->ctx.r[28] = static_cast<int32_t>(psp_get_boot_module_gp());
+
+    // 8. RA = 0 for clean return to thread_entry_wrapper
+    pt->ctx.r[31] = 0;
+
+    // 9. Start the thread via scheduler (LAST)
+    int rc = psp_thread_start(thid);
+    if (rc < 0) {
+        std::fprintf(stderr,
+            "[HLE] sceKernelStartThread(uid=%d) FAILED\n", uid);
+        ctx->r[2] = SCE_KERNEL_ERROR_ILLEGAL_THREAD;
+        return;
+    }
+
+    std::fprintf(stderr,
+        "[HLE] sceKernelStartThread(uid=%d, \"%s\", "
+        "arglen=%d, argp=0x%08X)\n",
+        uid, it->second.name, arglen, argp);
+
+    ctx->r[2] = SCE_OK;
+}
+
+static void hle_sceKernelExitThread(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    int32_t status = ctx->r[4];
+    static int s_exit_log_count = 0;
+    if (s_exit_log_count < 5) {
+        std::fprintf(stderr,
+            "[HLE] sceKernelExitThread(status=%d)\n", status);
+        ++s_exit_log_count;
+        if (s_exit_log_count == 5) {
+            std::fprintf(stderr,
+                "[HLE] (further ExitThread messages "
+                "suppressed)\n");
+        }
+    }
+    // On the real PSP, sceKernelExitThread never returns --
+    // it terminates the calling thread immediately. We throw
+    // PspThreadExitException to unwind through recompiled code
+    // back to thread_entry_wrapper where it is caught.
+    // psp_thread_exit_current() is called after the catch.
+    (void)rdram;
+    throw PspThreadExitException(status);
+}
+
+static void hle_sceKernelExitDeleteThread(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    int32_t status = ctx->r[4];
+    std::fprintf(stderr,
+        "[HLE] sceKernelExitDeleteThread(status=%d)\n",
+        status);
+    (void)rdram;
+    throw PspThreadExitException(status);
+}
+
+static void hle_sceKernelDeleteThread(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    int uid = ctx->r[4];
+    // Just remove from tracking
+    g_thread_by_uid.erase(uid);
+    ctx->r[2] = SCE_OK;
+    (void)rdram;
+}
+
+static void hle_sceKernelDelayThread(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    uint32_t usec = static_cast<uint32_t>(ctx->r[4]);
+    // Dispatch pending IO callbacks before yielding — this matches the PSP's
+    // behaviour where async IO completions are delivered on the next scheduler
+    // quantum.  Without this, IO state-machine callbacks (e.g. the FileThread's
+    // fd callback uid=273) are never dispatched because the driving loop uses
+    // plain sceKernelDelayThread (not the CB variant).
+    psp_kernel_check_callbacks(rdram, ctx);
+    sched_yield_point();
+    std::this_thread::sleep_for(std::chrono::microseconds(usec));
+    ctx->r[2] = SCE_OK;
+}
+
+static void hle_sceKernelDelayThreadCB(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    psp_kernel_check_callbacks(rdram, ctx);
+    hle_sceKernelDelayThread(rdram, ctx);
+}
+
+static void hle_sceKernelSleepThread(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    sched_yield_point();
+    int rc = psp_thread_sleep_current();
+    ctx->r[2] = (rc == 0) ? SCE_OK : rc;
+    (void)rdram;
+}
+
+static void hle_sceKernelSleepThreadCB(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    psp_kernel_check_callbacks(rdram, ctx);
+    hle_sceKernelSleepThread(rdram, ctx);
+}
+
+static void hle_sceKernelGetThreadId(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    PspThread* t = psp_get_current_thread();
+    if (t) {
+        auto it = g_thid_to_uid.find(t->id);
+        if (it != g_thid_to_uid.end()) {
+            ctx->r[2] = it->second;
+            (void)rdram;
+            return;
+        }
+    }
+    // Boot thread doesn't have a UID
+    ctx->r[2] = 0x100;
+    (void)rdram;
+}
+
+static void hle_sceKernelReferThreadStatus(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    int uid = ctx->r[4];
+    uint32_t info_ptr = static_cast<uint32_t>(ctx->r[5]);
+
+    if (info_ptr != 0) {
+        // Write minimal SceKernelThreadInfo: size field at offset 0
+        psp_mem_write<int32_t>(rdram, info_ptr, 104);  // struct size
+        // Status at offset 8: RUNNING=2
+        psp_mem_write<int32_t>(rdram, info_ptr + 8, 2);
+    }
+
+    ctx->r[2] = SCE_OK;
+    (void)uid;
+}
+
+static void hle_sceKernelChangeThreadPriority(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    // No-op for now
+    ctx->r[2] = SCE_OK;
+    (void)rdram;
+}
+
+static void hle_sceKernelChangeCurrentThreadAttr(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    ctx->r[2] = SCE_OK;
+    (void)rdram;
+}
+
+static void hle_sceKernelGetSystemTimeLow(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    uint64_t us = get_system_time_us();
+    ctx->r[2] = static_cast<int32_t>(us & 0xFFFFFFFFU);
+    (void)rdram;
+}
+
+static void hle_sceKernelGetSystemTimeWide(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    // 64-bit return: low 32 in v0, high 32 in v1
+    // PSP actually returns 64-bit in v0:v1 pair
+    uint64_t us = get_system_time_us();
+    ctx->r[2] = static_cast<int32_t>(us & 0xFFFFFFFFU);
+    ctx->r[3] = static_cast<int32_t>((us >> 32) & 0xFFFFFFFFU);
+    (void)rdram;
+}
+
+static void hle_sceKernelWaitThreadEnd(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    int uid = ctx->r[4];
+    uint32_t timeout_ptr = static_cast<uint32_t>(ctx->r[5]);
+
+    auto it = g_thread_by_uid.find(uid);
+    if (it == g_thread_by_uid.end()) {
+        ctx->r[2] = SCE_KERNEL_ERROR_NOT_FOUND_THREAD;
+        (void)rdram;
+        return;
+    }
+
+    int thid = it->second.thid;
+    int timeout_us = 0;
+    if (timeout_ptr != 0) {
+        timeout_us = static_cast<int>(
+            psp_mem_read<uint32_t>(rdram, timeout_ptr));
+    }
+
+    sched_yield_point();
+    int rc = psp_thread_wait_end(thid, timeout_us);
+    ctx->r[2] = rc;
+}
+
+static void hle_sceKernelWaitThreadEndCB(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    psp_kernel_check_callbacks(rdram, ctx);
+    hle_sceKernelWaitThreadEnd(rdram, ctx);
+}
+
+static void hle_sceKernelGetThreadStackFreeSize(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    // Return a reasonable free stack size
+    ctx->r[2] = 0x4000;  // 16KB free
+    (void)rdram;
+}
+
+static void hle_sceKernelCreateCallback(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    uint32_t name_ptr = static_cast<uint32_t>(ctx->r[4]);
+    uint32_t func_addr = static_cast<uint32_t>(ctx->r[5]);
+    uint32_t user_arg = static_cast<uint32_t>(ctx->r[6]);
+
+    const char* name = reinterpret_cast<const char*>(
+        rdram + (name_ptr & PSP_ADDR_MASK));
+
+    int uid = psp_next_uid();
+    PspCallback cb{};
+    cb.uid = uid;
+    std::strncpy(cb.name, name, sizeof(cb.name) - 1);
+    cb.func_addr = func_addr;
+    cb.user_arg = user_arg;
+    cb.pending = false;
+    cb.notify_count = 0;
+    cb.notify_arg = 0;
+    g_callbacks[uid] = cb;
+
+    std::fprintf(stderr,
+        "[HLE] sceKernelCreateCallback(\"%s\", 0x%08X, "
+        "arg=0x%08X) -> uid=%d\n",
+        name, func_addr, user_arg, uid);
+
+    ctx->r[2] = uid;
+}
+
+static void hle_sceKernelDeleteCallback(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    int uid = ctx->r[4];
+    g_callbacks.erase(uid);
+    ctx->r[2] = SCE_OK;
+    (void)rdram;
+}
+
+static void hle_sceKernelCheckCallback(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    // Iterate callbacks looking for pending dispatch
+    for (auto& [id, cb] : g_callbacks) {
+        if (!cb.pending) {
+            continue;
+        }
+        cb.pending = false;
+
+        FuncPtr fn = RECOMP_LOOKUP(cb.func_addr);
+        if (!fn) {
+            std::fprintf(stderr,
+                "[HLE] CheckCallback: LOOKUP_MISS for "
+                "cb uid=%d func=0x%08X\n",
+                cb.uid, cb.func_addr);
+            continue;
+        }
+
+        // Save registers that callback will clobber
+        int32_t saved_a0 = ctx->r[4];
+        int32_t saved_a1 = ctx->r[5];
+        int32_t saved_a2 = ctx->r[6];
+        int32_t saved_ra = ctx->r[31];
+
+        // PSP callback ABI (PPSSPP HLE/sceKernelThread.cpp):
+        // a0=notify_count, a1=notify_arg, a2=common_arg
+        ctx->r[4] = cb.notify_count;
+        ctx->r[5] = cb.notify_arg;
+        ctx->r[6] = static_cast<int32_t>(cb.user_arg);
+        ctx->r[31] = 0;  // ra=0 so callback returns cleanly
+
+        std::fprintf(stderr,
+            "[HLE] CheckCallback: DISPATCHING cb uid=%d "
+            "func=0x%08X notify_count=%d notify_arg=%d "
+            "user_arg=0x%08X\n",
+            cb.uid, cb.func_addr, cb.notify_count,
+            cb.notify_arg, cb.user_arg);
+
+        // Debug: for IoAsyncCallback, show the function
+        // pointer at notify_arg+12 that determines whether
+        // the callback does useful work.
+        if (cb.func_addr == 0x088629CCU && cb.notify_arg != 0) {
+            uint32_t na = static_cast<uint32_t>(cb.notify_arg);
+            uint32_t na_off = na & 0x07FFFFFFU;
+            if (na_off + 16 <= 0x08000000U) {
+                uint32_t fptr = psp_mem_read<uint32_t>(
+                    rdram, na + 12);
+                // Also log offset 0, 4, 8 for full struct context
+                uint32_t f0 = psp_mem_read<uint32_t>(rdram, na + 0);
+                uint32_t f4 = psp_mem_read<uint32_t>(rdram, na + 4);
+                uint32_t f8 = psp_mem_read<uint32_t>(rdram, na + 8);
+                std::fprintf(stderr,
+                    "[HLE] IoAsyncCB: notify_arg=0x%08X "
+                    "*(+0)=0x%08X *(+4)=0x%08X *(+8)=0x%08X *(+12)=0x%08X\n",
+                    na, f0, f4, f8, fptr);
+            }
+        }
+
+        fn(rdram, ctx);
+
+        std::fprintf(stderr,
+            "[HLE] CheckCallback: RETURNED from cb uid=%d "
+            "func=0x%08X v0=0x%08X\n",
+            cb.uid, cb.func_addr,
+            static_cast<uint32_t>(ctx->r[2]));
+
+        // Restore caller registers
+        ctx->r[4] = saved_a0;
+        ctx->r[5] = saved_a1;
+        ctx->r[6] = saved_a2;
+        ctx->r[31] = saved_ra;
+
+        // Return count=1 (one callback dispatched)
+        ctx->r[2] = 1;
+        return;
+    }
+
+    // No pending callbacks
+    ctx->r[2] = 0;
+}
+
+// ---- Callback Check (called from *CB HLE variants) ----
+
+void psp_kernel_check_callbacks(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    hle_sceKernelCheckCallback(rdram, ctx);
+}
+
+// ---- Callback Notification (called from IO subsystem) ----
+
+void psp_kernel_notify_callback(int cbId, int notifyArg) {
+    auto it = g_callbacks.find(cbId);
+    if (it == g_callbacks.end()) {
+        return;
+    }
+    static int notify_log_count = 0;
+    if (notify_log_count < 200) {
+        std::fprintf(stderr,
+            "[HLE] notify_callback(cbId=%d, notifyArg=0x%08X) "
+            "was_pending=%d old_arg=0x%08X\n",
+            cbId, static_cast<uint32_t>(notifyArg),
+            it->second.pending ? 1 : 0,
+            static_cast<uint32_t>(it->second.notify_arg));
+        notify_log_count++;
+    }
+    it->second.pending = true;
+    it->second.notify_count++;
+    it->second.notify_arg = notifyArg;
+}
+
+static void hle_sceKernelSuspendThread(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    ctx->r[2] = SCE_OK;
+    (void)rdram;
+}
+
+static void hle_sceKernelResumeThread(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    ctx->r[2] = SCE_OK;
+    (void)rdram;
+}
+
+static void hle_sceKernelWakeupThread(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    int uid = ctx->r[4];
+
+    auto it = g_thread_by_uid.find(uid);
+    if (it == g_thread_by_uid.end()) {
+        std::fprintf(stderr,
+            "[HLE] sceKernelWakeupThread(uid=%d) NOT FOUND\n",
+            uid);
+        ctx->r[2] = SCE_KERNEL_ERROR_NOT_FOUND_THREAD;
+        (void)rdram;
+        return;
+    }
+
+    int thid = it->second.thid;
+    int rc = psp_thread_wakeup(thid);
+    ctx->r[2] = (rc == 0) ? SCE_OK : rc;
+    (void)rdram;
+}
+
+static void hle_sceKernelTerminateThread(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    int uid = ctx->r[4];
+
+    auto it = g_thread_by_uid.find(uid);
+    if (it == g_thread_by_uid.end()) {
+        ctx->r[2] = SCE_KERNEL_ERROR_NOT_FOUND_THREAD;
+        (void)rdram;
+        return;
+    }
+
+    int thid = it->second.thid;
+    PspThread* pt = psp_get_thread(thid);
+    if (pt) {
+        std::fprintf(stderr,
+            "[HLE] sceKernelTerminateThread(uid=%d, \"%s\")\n",
+            uid, it->second.name);
+    }
+
+    ctx->r[2] = SCE_OK;
+    (void)rdram;
+}
+
+static void hle_sceKernelTerminateDeleteThread(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    hle_sceKernelTerminateThread(rdram, ctx);
+    // Also remove from tracking
+    int uid = ctx->r[4];
+    g_thread_by_uid.erase(uid);
+}
+
+// ---- CRT Assertion Override ----
+// FUN_088133EC is the game's CRT libc assertion handler that prints
+// "libc:%s: no reent structure found" via sceKernelPrintf and then
+// calls sceKernelExitThread(1). On the real PSP, the kernel provides
+// a per-thread _reent structure; in our runtime, the reent may not
+// be fully initialized. Override this function to log a warning and
+// return gracefully instead of killing the thread.
+//
+// Also override FUN_088134B4 which is the CRT __libcInit that calls
+// 088133EC. This prevents the entire CRT assertion path.
+
+static void hle_crt_no_reent_handler(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    static int s_warn_count = 0;
+    if (s_warn_count < 3) {
+        std::fprintf(stderr,
+            "[HLE] CRT no-reent assertion suppressed "
+            "(returning gracefully)\n");
+        ++s_warn_count;
+    }
+    // Return 0 (success) instead of calling ExitThread
+    ctx->r[2] = 0;
+    (void)rdram;
+}
+
+/// Initialize CRT assertion override.
+/// Must be called after psp_init_dispatch_table().
+void psp_crt_assertion_override_init() {
+    // Override FUN_088133EC (CRT no-reent assertion handler)
+    psp_dispatch_register(0x088133ECU,
+        reinterpret_cast<FuncPtr>(hle_crt_no_reent_handler));
+
+    std::fprintf(stderr,
+        "[RT] CRT assertion override registered "
+        "(no_reent=0x088133EC)\n");
+}
+
+// ---- Registration ----
+
+void psp_hle_register_kernel_thread() {
+    psp_hle_register("sceKernelCreateThread",
+                      hle_sceKernelCreateThread);
+    psp_hle_register("sceKernelStartThread",
+                      hle_sceKernelStartThread);
+    psp_hle_register("sceKernelExitThread",
+                      hle_sceKernelExitThread);
+    psp_hle_register("sceKernelExitDeleteThread",
+                      hle_sceKernelExitDeleteThread);
+    psp_hle_register("sceKernelDeleteThread",
+                      hle_sceKernelDeleteThread);
+    psp_hle_register("sceKernelDelayThread",
+                      hle_sceKernelDelayThread);
+    psp_hle_register("sceKernelDelayThreadCB",
+                      hle_sceKernelDelayThreadCB);
+    psp_hle_register("sceKernelSleepThread",
+                      hle_sceKernelSleepThread);
+    psp_hle_register("sceKernelSleepThreadCB",
+                      hle_sceKernelSleepThreadCB);
+    psp_hle_register("sceKernelGetThreadId",
+                      hle_sceKernelGetThreadId);
+    psp_hle_register("sceKernelReferThreadStatus",
+                      hle_sceKernelReferThreadStatus);
+    psp_hle_register("sceKernelChangeThreadPriority",
+                      hle_sceKernelChangeThreadPriority);
+    psp_hle_register("sceKernelChangeCurrentThreadAttr",
+                      hle_sceKernelChangeCurrentThreadAttr);
+    psp_hle_register("sceKernelGetSystemTimeLow",
+                      hle_sceKernelGetSystemTimeLow);
+    psp_hle_register("sceKernelGetSystemTimeWide",
+                      hle_sceKernelGetSystemTimeWide);
+    psp_hle_register("sceKernelWaitThreadEnd",
+                      hle_sceKernelWaitThreadEnd);
+    psp_hle_register("sceKernelWaitThreadEndCB",
+                      hle_sceKernelWaitThreadEndCB);
+    psp_hle_register("sceKernelGetThreadStackFreeSize",
+                      hle_sceKernelGetThreadStackFreeSize);
+    psp_hle_register("sceKernelCreateCallback",
+                      hle_sceKernelCreateCallback);
+    psp_hle_register("sceKernelDeleteCallback",
+                      hle_sceKernelDeleteCallback);
+    psp_hle_register("sceKernelCheckCallback",
+                      hle_sceKernelCheckCallback);
+    psp_hle_register("sceKernelSuspendThread",
+                      hle_sceKernelSuspendThread);
+    psp_hle_register("sceKernelResumeThread",
+                      hle_sceKernelResumeThread);
+    psp_hle_register("sceKernelWakeupThread",
+                      hle_sceKernelWakeupThread);
+    psp_hle_register("sceKernelTerminateThread",
+                      hle_sceKernelTerminateThread);
+    psp_hle_register("sceKernelTerminateDeleteThread",
+                      hle_sceKernelTerminateDeleteThread);
+}
