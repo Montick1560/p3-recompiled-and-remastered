@@ -372,10 +372,11 @@ PPSSPP. Verdict: the old hardcoding was the bug; the generated fact is PPSSPP-fa
 in-binary SceModuleInfo at 0x089D7EEC — entry 0x089ACCD0, GP 0x08A50D20, text_start
 0x08804000, seg0 0x08804000+0x2D8400, heap_base 0x08AE0000 → 16MB-aligned 0x09000000.)
 
-The old ctor boot probe address `0x08804B58` was also stale: it is not in the current
-`constructors[]` at all (first is `0x08804CE8`), and its `RECOMP_LOOKUP(...) == nullptr`
-check could never fire (non-STRICT lookup returns a noop stub). The probe now uses
-`RECOMP_FIRST_CTOR` + `psp_dispatch_probe_lookup` (nullable), i.e. it actually checks.
+The old ctor boot probe address `0x08804B58` was not `constructors[0]` (it sits at
+index 12 — `constructors[]` is unsorted; the first entry is `0x08804CE8`), and its
+`RECOMP_LOOKUP(...) == nullptr` check could never fire (non-STRICT lookup returns a noop
+stub). The probe now uses `RECOMP_FIRST_CTOR` + `psp_dispatch_probe_lookup` (nullable),
+i.e. it actually checks.
 
 ### Upgrading an analysis.json baseline (#47 Phase 2)
 
@@ -411,6 +412,13 @@ PSPRECOMP_CROSS_MID=1 cargo run --release -- recompile analysis.json -o output \
 
 (Long-term fix: re-express the 524 vtable_miss addresses as curated per-game data —
 manifest `force_entries`, #47 Phase 4 — so a fresh analyze becomes sufficient.)
+
+**The graft is mandatory, not just preferred:** recompiling the *fresh* (non-grafted)
+Patapon analysis currently emits code that does not compile — `FUN_08827E7C` in
+batch_0020.cpp contains `goto` statements to mid-entry labels (`L_08827F44` et al.) that
+are absent from the function body. Pre-existing emitter gap (mid-entry/coalesce layer,
+untouched by #40/#47 P1-P3), tracked as a GitHub issue: the emitter should drop dispatch
+cases whose labels are missing from the parent body, or hard-error at emit time.
 
 
 ## #37 — recompile_report.json (silent-path audit)
