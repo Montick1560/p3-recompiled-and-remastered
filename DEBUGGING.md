@@ -574,12 +574,16 @@ Pieces to know when debugging:
   Patapon baseline: `237/237 implemented, 0 unimplemented`. A sudden drop means HLE
   registration names diverged from NID-db names — diff the generated table's `func_name`
   column against `psp_hle_register` calls.
-- **Unimplemented imports are loud, never silent**: each unbound stub is registered with a
-  per-stub handler that logs `[HLE] UNIMPLEMENTED import <name> (NID 0x..., module ...,
-  stub 0x...)` once on first call and then behaves as the raw stub (`jr $ra; nop` — no
-  register effects). Unresolved NIDs carry the walker's canonical fallback name
-  `NID_0x%08X`; an HLE handler for such an import registers under exactly that name
-  (example: `psp_hle_power.cpp` registers `NID_0xEBD177D6`).
+- **Unimplemented imports are loud, never silent — and return a deterministic v0=0**:
+  each unbound stub is registered with a per-stub handler that logs
+  `[HLE] UNIMPLEMENTED import <name> (NID 0x..., module ..., stub 0x...)` once on first
+  call and sets `v0 = 0` (SCE_OK). It originally mirrored the raw stub (`jr $ra; nop` —
+  no register effects), which made every consumer of the result branch on leftover r2
+  garbage (.hack//Link L5: `sceKernelGetThreadCurrentPriority` garbage fed the main wait
+  loop's branch). If a game needs a specific non-zero return, that is the signal to
+  implement the NID, not to special-case the stub. Unresolved NIDs carry the walker's
+  canonical fallback name `NID_0x%08X`; an HLE handler for such an import registers under
+  exactly that name (example: `psp_hle_power.cpp` registers `NID_0xEBD177D6`).
 - **Call sites**: the emitter lowers `jal <import stub>` to
   `RECOMP_LOOKUP(0xADDR)(rdram, ctx); /* sceName */` — through the dispatch table, never a
   direct named call (the by-name HLE symbols do not exist; psp_hle_init's registration is
@@ -713,3 +717,21 @@ dispatch.cpp on every run). Byte-diff against a master-built output is therefore
 emitter regression gate with no sort-normalization needed; any other residual diff is a
 real behavior change. Regression test:
 `coalesce_mid_entry_registration_is_deterministic_and_sorted` (crates/psp-cli/src/recompile.rs).
+
+## LwMutex HLE (runtime/src/hle/psp_hle_kernel_lwmutex.cpp)
+
+`sceKernelCreate/Delete/Lock/LockCB/TryLock/UnlockLwMutex`, PPSSPP-faithful
+(`Core/HLE/sceKernelMutex.cpp`). The part that bites when debugging: **the LwMutex's
+state is GUEST-visible** — a 32-byte workarea the game allocated (`+0` lockLevel,
+`+4` lockThread = the `sceKernelGetThreadId` UID of the owner, `+8` attr,
+`+16` kernel-object uid; `lockThread` 0 = free, −1 = deleted; `uid` −1 = invalid).
+Read it live over the debug socket to see lock state — there is no host-side mirror to
+trust; every HLE decision derives from those words. The host object exists only to block
+waiters (one global host mutex serializes all transitions; per-object condvar; 5 s
+safety valve + `g_should_exit` escape; `wait` tag `lwmutex:<uid>` in the socket `I`
+thread dump). `Create` returns **0**, not the uid (the uid lives in the workarea — a
+game comparing v0 against the uid is misreading the API, not hitting a runtime bug).
+Recursion requires attr `0x200`; a second lock without it returns
+`SCE_LWMUTEX_ERROR_ALREADY_LOCKED` (0x800201CF), exactly like PPSSPP. Patapon imports
+no LwMutex NIDs (0/237 — binding is a no-op there); .hack//Link imports
+Create/Delete/Lock/Unlock and exercises them at ~430 calls/s from the CRI mixer.
