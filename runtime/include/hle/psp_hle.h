@@ -144,28 +144,27 @@ extern void psp_dispatch_register(uint32_t vaddr, FuncPtr fn);
 /// abort, no miss counters). Boot-time only — not thread-safe (#47 P1).
 extern FuncPtr psp_dispatch_probe_lookup(uint32_t vaddr);
 
-/// Resolve the guest functions wrapped by the kernel-memory hooks against
-/// the PRISTINE dispatch table. MUST be called immediately after
-/// psp_init_dispatch_table(), before any psp_dispatch_register override —
-/// later resolution would capture hook wrappers instead of the original
-/// generated functions (#47 P1; replaces link-time extern FUN_* refs).
-void psp_hle_kernel_memory_resolve_guest_funcs();
+// ---- Game-module seams over the user-memory bump heap (#47 Phase 5) ----
+// Game modules (games/<id>/runtime/, e.g. Patapon's allocator overrides)
+// reach the generic bump heap ONLY through these; the heap statics stay
+// private to psp_hle_kernel_memory.cpp and core carries no game knowledge.
 
-/// Override the game's dlmalloc allocator (FUN_0881E558, FUN_0881E7A8)
-/// with a native bump allocator. Must be called after psp_hle_init().
-void psp_dlmalloc_override_init();
+/// Observer invoked after every successful sceKernelAllocPartitionMemory
+/// with the block's name, address, and (256-byte-aligned) size. One slot;
+/// installed by the game module's register_hooks (nullptr = no observer).
+using PspPartitionAllocObserver =
+    void (*)(const char* name, uint32_t addr, uint32_t size);
+void psp_kmem_set_partition_alloc_observer(PspPartitionAllocObserver fn);
 
-/// Override the game's CRT memory functions (memmove, memcpy, memset)
-/// with native implementations. The recompiled MIPS versions use
-/// LWL/LWR/SWL/SWR (unaligned access) which are emitted as no-op stubs,
-/// causing infinite loops or data corruption in copy prologues.
-void psp_crt_override_init();
+/// Bump-allocate exactly `size` bytes (caller pre-rounds; the heap position
+/// itself is NOT realigned — byte-identical to the historical layout).
+/// Returns the PSP address, or 0 on OOM / size==0.
+uint32_t psp_kmem_bump_alloc(uint32_t size);
 
-/// Override the game's CRT libc assertion handler (FUN_088133EC) that
-/// prints "no reent structure found" and calls sceKernelExitThread(1).
-/// The override returns gracefully instead of killing the thread,
-/// allowing the game to handle allocation failures without crashing.
-void psp_crt_assertion_override_init();
+/// Claim everything left in the bump heap: returns [start, end) and
+/// advances the heap position to end, so later partition allocations
+/// cannot overlap the claimed range.
+void psp_kmem_reserve_remaining(uint32_t* start, uint32_t* end);
 
 // ---- Per-Module Registration Functions ----
 // Each HLE module file provides a registration function.
@@ -192,13 +191,3 @@ void psp_hle_register_utility();
 // SAS voice state machine (issue #29)
 void psp_hle_register_sas();
 
-// ---- Phase 11.2 wrapper consolidation (Pattern F / FORM 2) ----
-// Forward declaration of the GE-gatekeeper fixup body originally defined in
-// runtime/src/hle/psp_hle_kernel_memory.cpp. The function performs the
-// GE_BASE_FIX (reconstructs r4 from RQ_GLOBAL_ADDR) + GE_GATE_FIX
-// (reconstructs r6/r8/r10 from g_current_obj_sm) and tail-calls
-// FUN_088623e0(rdram, ctx). Phase 11.2 moves the dispatch registration into
-// runtime/src/main.cpp's consolidated gatekeeper wrapper (Pattern F section
-// (a)+(b)+(e) — see main.cpp:165-207). The function body is retained as
-// callable code (NOT dead code) and invoked from the consolidated lambda.
-void hle_debug_088623E0(uint8_t* rdram, recomp_context* ctx);

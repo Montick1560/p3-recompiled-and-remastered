@@ -164,6 +164,10 @@ else()
             "'${PSPRECOMP_GAME}' (use -DPSPRECOMP_GAME=none for a generic build).")
     endif()
     list(APPEND RUNTIME_SOURCES ${PSP_GAME_SOURCES})
+    # Game-private headers (e.g. games/patapon/runtime/patapon_hooks.h,
+    # asset_bnd.h) resolve only when the game module is compiled in — the
+    # generic build cannot even include them by construction.
+    set(PSP_GAME_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../games/${PSPRECOMP_GAME}/runtime)
     message(STATUS "psprecomp: game module = ${PSPRECOMP_GAME}")
 endif()
 
@@ -174,6 +178,7 @@ target_include_directories(psprecomp_runtime PRIVATE
     ${PSPRECOMP_OUTPUT_DIR}/include  # recomp.h
     ${PSPRECOMP_OUTPUT_DIR}          # funcs.h
     ${SDL2_INCLUDE_DIRS}
+    ${PSP_GAME_INCLUDE_DIR}          # game-private headers (empty when generic)
 )
 
 target_link_libraries(psprecomp_runtime PRIVATE

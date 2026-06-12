@@ -19,6 +19,7 @@
 #include "psp_game_module.h"
 #include "hle/psp_hle.h"
 #include "asset_bnd.h"
+#include "patapon_hooks.h"
 
 #include <cstdlib>
 #include <cstdio>
