@@ -49,6 +49,16 @@ impl ModuleInfoFixture {
     }
 }
 
+/// One reloc table in the fixture: a section of the given `sh_type` (or a
+/// program header of that `p_type` for sectionless fixtures).
+struct RelocSpec {
+    name: String,
+    bytes: Vec<u8>,
+    sh_type: u32,
+    /// Section index recorded in sh_info; defaults to the first alloc section.
+    sh_info: Option<u32>,
+}
+
 /// In-memory PRX builder. Alloc sections land in the single PT_LOAD segment
 /// (va == offset within the segment, p_vaddr 0); reloc tables are non-alloc
 /// sections of `sh_type` 0x700000A0/0x700000A1 — or, for a sectionless
@@ -57,11 +67,17 @@ pub(crate) struct PrxFixture {
     seg: Vec<u8>,
     /// (section name, va, size) for in-segment sections, in layout order.
     alloc_sections: Vec<(String, u32, u32)>,
-    /// (section name, raw table bytes, sh_type / p_type).
-    relocs: Vec<(String, Vec<u8>, u32)>,
+    relocs: Vec<RelocSpec>,
     bss: u32,
     e_entry: u32,
     emit_section_headers: bool,
+    /// Emit reloc program headers even when section headers are present
+    /// (tests that phdrs are ignored when sections exist).
+    reloc_phdrs_too: bool,
+    /// VA (within the segment) that PT_LOAD p_paddr points at as a file offset.
+    p_paddr_va: Option<u32>,
+    /// OR 0x80000000 (the kernel bit) into the emitted p_paddr.
+    kernel_bit: bool,
 }
 
 impl PrxFixture {
@@ -73,6 +89,9 @@ impl PrxFixture {
             bss: 0,
             e_entry: 0,
             emit_section_headers: true,
+            reloc_phdrs_too: false,
+            p_paddr_va: None,
+            kernel_bit: false,
         }
     }
 
@@ -97,7 +116,24 @@ impl PrxFixture {
     /// `.rodata.sceModuleInfo` contents; also points PT_LOAD p_paddr at it
     /// (the PRX convention, spec R2 §1.3).
     pub fn module_info(self, mi: &ModuleInfoFixture) -> Self {
-        self.alloc_bytes(".rodata.sceModuleInfo", &mi.encode())
+        let mut this = self.alloc_bytes(".rodata.sceModuleInfo", &mi.encode());
+        this.p_paddr_va = Some(this.va_of(".rodata.sceModuleInfo"));
+        this
+    }
+
+    /// Module info reachable ONLY via the p_paddr file-offset convention —
+    /// the record lives in a section that is NOT named `.rodata.sceModuleInfo`
+    /// (the ET_EXEC-without-section / misnamed-section case).
+    pub fn module_info_via_paddr_only(self, mi: &ModuleInfoFixture) -> Self {
+        let mut this = self.alloc_bytes(".rodata.modinfo.hidden", &mi.encode());
+        this.p_paddr_va = Some(this.va_of(".rodata.modinfo.hidden"));
+        this
+    }
+
+    /// Sets the kernel bit (0x80000000) on the emitted PT_LOAD p_paddr.
+    pub fn kernel_bit_on_paddr(mut self) -> Self {
+        self.kernel_bit = true;
+        self
     }
 
     /// `.lib.stub` contents (raw PspLibStubEntry records; for the T4 walker tests).
@@ -119,6 +155,13 @@ impl PrxFixture {
         self.reloc_raw(name, bytes)
     }
 
+    /// A Type-A reloc table with an explicit sh_info section index.
+    pub fn reloc_with_info(self, name: &str, entries: &[(u32, u32)], sh_info: u32) -> Self {
+        let mut this = self.reloc(name, entries);
+        this.relocs.last_mut().expect("just pushed").sh_info = Some(sh_info);
+        this
+    }
+
     /// A Type-A reloc table from raw bytes (e.g. deliberately truncated).
     pub fn reloc_raw(self, name: &str, bytes: Vec<u8>) -> Self {
         self.reloc_typed(name, bytes, SHT_PSPREL)
@@ -126,7 +169,18 @@ impl PrxFixture {
 
     /// A reloc table with an explicit sh_type / p_type (0x700000A1 for Type-B).
     pub fn reloc_typed(mut self, name: &str, bytes: Vec<u8>, sh_type: u32) -> Self {
-        self.relocs.push((name.to_string(), bytes, sh_type));
+        self.relocs.push(RelocSpec {
+            name: name.to_string(),
+            bytes,
+            sh_type,
+            sh_info: None,
+        });
+        self
+    }
+
+    /// Emit reloc program headers even though section headers are present.
+    pub fn reloc_phdrs_alongside_sections(mut self) -> Self {
+        self.reloc_phdrs_too = true;
         self
     }
 
@@ -167,9 +221,9 @@ impl PrxFixture {
         self.write_phdrs(&mut out, &lay);
         pad_to(&mut out, lay.p_offset);
         out.extend_from_slice(&self.seg);
-        for ((_, bytes, _), &off) in self.relocs.iter().zip(&lay.reloc_offsets) {
+        for (spec, &off) in self.relocs.iter().zip(&lay.reloc_offsets) {
             pad_to(&mut out, off);
-            out.extend_from_slice(bytes);
+            out.extend_from_slice(&spec.bytes);
         }
         pad_to(&mut out, lay.shstrtab_offset);
         out.extend_from_slice(&lay.shstrtab);
@@ -180,19 +234,24 @@ impl PrxFixture {
         out
     }
 
+    /// True when reloc tables are also emitted as program headers.
+    fn emits_reloc_phdrs(&self) -> bool {
+        !self.emit_section_headers || self.reloc_phdrs_too
+    }
+
     fn layout(&self) -> Layout {
-        let phnum = if self.emit_section_headers {
-            1
-        } else {
+        let phnum = if self.emits_reloc_phdrs() {
             1 + self.relocs.len()
+        } else {
+            1
         };
         let p_offset = align(EHDR_SIZE + PHDR_SIZE * phnum, 16);
         let mut cursor = p_offset + self.seg.len();
         let mut reloc_offsets = Vec::new();
-        for (_, bytes, _) in &self.relocs {
+        for spec in &self.relocs {
             cursor = align(cursor, 4);
             reloc_offsets.push(cursor);
-            cursor += bytes.len();
+            cursor += spec.bytes.len();
         }
         let (shstrtab, name_offsets) = self.build_shstrtab();
         let shstrtab_offset = align(cursor, 4);
@@ -219,7 +278,7 @@ impl PrxFixture {
         let mut tab = vec![0u8];
         let mut offsets = Vec::new();
         let alloc_names = self.alloc_sections.iter().map(|(n, _, _)| n.as_str());
-        let reloc_names = self.relocs.iter().map(|(n, _, _)| n.as_str());
+        let reloc_names = self.relocs.iter().map(|spec| spec.name.as_str());
         for name in std::iter::once(".shstrtab")
             .chain(alloc_names)
             .chain(reloc_names)
@@ -262,11 +321,10 @@ impl PrxFixture {
 
     fn write_phdrs(&self, out: &mut Vec<u8>, lay: &Layout) {
         // PT_LOAD; p_paddr carries the modinfo file offset (PRX convention).
+        let kernel_bit = if self.kernel_bit { 0x8000_0000 } else { 0 };
         let p_paddr = self
-            .alloc_sections
-            .iter()
-            .find(|(n, _, _)| n == ".rodata.sceModuleInfo")
-            .map_or(0, |(_, va, _)| lay.p_offset as u32 + va);
+            .p_paddr_va
+            .map_or(0, |va| (lay.p_offset as u32 + va) | kernel_bit);
         let fields = [
             1, // PT_LOAD
             lay.p_offset as u32,
@@ -278,9 +336,18 @@ impl PrxFixture {
             16,
         ];
         fields.iter().for_each(|&f| push_u32(out, f));
-        if !self.emit_section_headers {
-            for ((_, bytes, p_type), &off) in self.relocs.iter().zip(&lay.reloc_offsets) {
-                let f = [*p_type, off as u32, 0, 0, bytes.len() as u32, 0, 4, 4];
+        if self.emits_reloc_phdrs() {
+            for (spec, &off) in self.relocs.iter().zip(&lay.reloc_offsets) {
+                let f = [
+                    spec.sh_type,
+                    off as u32,
+                    0,
+                    0,
+                    spec.bytes.len() as u32,
+                    0,
+                    4,
+                    4,
+                ];
                 f.iter().for_each(|&v| push_u32(out, v));
             }
         }
@@ -316,15 +383,15 @@ impl PrxFixture {
             }
             .write(out);
         }
-        for ((_, bytes, sh_type), &off) in self.relocs.iter().zip(&lay.reloc_offsets) {
+        for (spec, &off) in self.relocs.iter().zip(&lay.reloc_offsets) {
             Shdr {
                 name: names.next().unwrap(),
-                sh_type: *sh_type,
+                sh_type: spec.sh_type,
                 flags: 0,
                 addr: 0,
                 offset: off as u32,
-                size: bytes.len() as u32,
-                info: text_idx,
+                size: spec.bytes.len() as u32,
+                info: spec.sh_info.unwrap_or(text_idx),
                 entsize: 8,
             }
             .write(out);

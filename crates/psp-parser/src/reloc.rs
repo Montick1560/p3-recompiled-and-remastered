@@ -64,6 +64,19 @@ pub struct RelocStats {
     pub skipped_bad: u64,
 }
 
+impl RelocStats {
+    /// Fold another run's counters into this one (per-table application —
+    /// PPSSPP applies each reloc section independently, so HI16 pairing never
+    /// crosses table boundaries).
+    pub fn absorb(&mut self, other: RelocStats) {
+        self.handled += other.handled;
+        self.skipped_bad += other.skipped_bad;
+        for (r_type, count) in other.unhandled {
+            *self.unhandled.entry(r_type).or_insert(0) += count;
+        }
+    }
+}
+
 /// Parse Type-A relocation entries from raw 8-byte `[r_offset, r_info]` records.
 ///
 /// Bit positions per PPSSPP/PRXTool/ghidra-allegrex (plan D10):

@@ -262,39 +262,50 @@ pub fn run_analyze(
     let mut all_reloc_entries = vec![];
 
     if is_prx {
-        let (type_a_phidxs, type_b_phidxs) = prx::find_reloc_segments(&elf_obj);
-        if !type_b_phidxs.is_empty() {
+        let tables = prx::find_reloc_tables(&elf_obj);
+        let type_b: Vec<&str> = tables
+            .iter()
+            .filter(|t| t.format == prx::RelocFormat::TypeB)
+            .map(|t| t.source.as_str())
+            .collect();
+        if !type_b.is_empty() {
             bail!(
-                "Type-B (0x700000A1) packed relocations not yet supported ({} program \
-                 header(s) reference them); see .planning/research/52-prx-format-spec.md §5",
-                type_b_phidxs.len()
+                "Type-B (0x700000A1) packed relocations not yet supported (found in {}); \
+                 see .planning/research/52-prx-format-spec.md §5",
+                type_b.join(", ")
             );
         }
-        let mut type_a_entries = vec![];
-        for idx in type_a_phidxs {
-            let ph = &elf_obj.program_headers[idx];
-            let start = ph.p_offset as usize;
-            let end = start
-                .checked_add(ph.p_filesz as usize)
+        // Apply per table (PPSSPP applies each reloc section independently —
+        // HI16 pairing must not scan across table boundaries).
+        let mut reloc_stats = reloc::RelocStats::default();
+        for t in &tables {
+            let end = t
+                .file_offset
+                .checked_add(t.size)
                 .filter(|&end| end <= raw_data.len())
                 .with_context(|| {
                     format!(
-                        "reloc table phdr[{idx}] out of file bounds: offset 0x{:X} + \
-                         size 0x{:X} exceeds file size 0x{:X}",
-                        ph.p_offset,
-                        ph.p_filesz,
+                        "reloc table {} out of file bounds: offset 0x{:X} + size 0x{:X} \
+                         exceeds file size 0x{:X}",
+                        t.source,
+                        t.file_offset,
+                        t.size,
                         raw_data.len()
                     )
                 })?;
-            type_a_entries.extend(reloc::parse_type_a_entries(&raw_data[start..end])?);
+            let entries = reloc::parse_type_a_entries(&raw_data[t.file_offset..end])
+                .with_context(|| format!("parsing reloc table {}", t.source))?;
+            reloc_stats.absorb(
+                reloc::apply_relocations(&mut seg_data_vecs, &seg_bases, &entries)
+                    .with_context(|| format!("applying reloc table {}", t.source))?,
+            );
+            all_reloc_entries.extend(entries);
         }
-        all_reloc_entries.extend(type_a_entries.iter().cloned());
-
-        let reloc_stats = reloc::apply_relocations(&mut seg_data_vecs, &seg_bases, &type_a_entries)
-            .context("Relocation application failed")?;
         tracing::info!(
-            "Applied {} relocations ({} skipped, {} unhandled types — see warnings above)",
+            "Applied {} relocations from {} tables ({} skipped, {} unhandled types — \
+             see warnings above)",
             reloc_stats.handled,
+            tables.len(),
             reloc_stats.skipped_bad,
             reloc_stats.unhandled.len(),
         );
@@ -304,24 +315,25 @@ pub fn run_analyze(
     let nid_map = nid::load_nid_database(nid_db)
         .with_context(|| format!("Cannot load NID DB from {}", nid_db.display()))?;
     let import_stubs = if is_prx {
-        match prx::parse_module_info(&raw_data, &elf_obj) {
-            Ok((stub_top, stub_btm, _)) => {
-                imports::parse_import_stubs(
-                    &raw_data,
-                    &elf_obj,
-                    stub_top,
-                    stub_btm,
-                    &nid_map,
-                )
-                .unwrap_or_default()
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "SceModuleInfo not found: {e}; continuing without import stubs"
-                );
-                vec![]
-            }
-        }
+        // D6: parse module info and imports from the (relocated) image so all
+        // pointer fields are final. load_base threading lands with T5; until
+        // then PRX segments are base-0 and the image is self-consistent.
+        let image = psp_parser::image::LoadedImage::new(&seg_bases, &seg_data_vecs);
+        let mi_va =
+            prx::locate_module_info_va(&elf_obj, 0).context("PRX module info location failed")?;
+        let mi = prx::parse_module_info(&image, mi_va)
+            .with_context(|| format!("PRX import parsing failed (module info at 0x{mi_va:08X})"))?;
+        tracing::info!(
+            "SceModuleInfo '{}' at 0x{mi_va:08X}: gp=0x{:08X}, libstub 0x{:08X}..0x{:08X}",
+            mi.name,
+            mi.gp,
+            mi.libstub,
+            mi.libstub_end
+        );
+        // TODO(T4): replace with the LoadedImage-based walker; until then the
+        // legacy walker's failures stay soft (it predates the layout fix).
+        imports::parse_import_stubs(&raw_data, &elf_obj, mi.libstub, mi.libstub_end, &nid_map)
+            .unwrap_or_default()
     } else {
         vec![]
     };

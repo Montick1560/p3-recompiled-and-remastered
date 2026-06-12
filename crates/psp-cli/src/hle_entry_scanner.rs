@@ -232,11 +232,19 @@ fn find_libstub_bounds(
     data: &[u8],
     elf: &goblin::elf::Elf,
 ) -> Result<(u32, u32)> {
-    // Try standard parse_module_info first (works for PRX and
-    // section-header-based lookup)
-    if let Ok((top, btm, _name)) =
-        psp_parser::prx::parse_module_info(data, elf)
-    {
+    // Try the standard module-info lookup first (works for PRX and
+    // section-header-based lookup). TODO(T4): this whole function is replaced
+    // by the consolidated LoadedImage-based walker.
+    let section_lookup = || -> anyhow::Result<(u32, u32)> {
+        let segments = psp_parser::elf::extract_segments(data, elf);
+        let (bases, datas): (Vec<u32>, Vec<Vec<u8>>) =
+            segments.into_iter().map(|s| (s.p_vaddr, s.data)).unzip();
+        let image = psp_parser::image::LoadedImage::new(&bases, &datas);
+        let va = psp_parser::prx::locate_module_info_va(elf, 0)?;
+        let mi = psp_parser::prx::parse_module_info(&image, va)?;
+        Ok((mi.libstub, mi.libstub_end))
+    };
+    if let Ok((top, btm)) = section_lookup() {
         // Sanity check: both addresses must be in PSP user memory range
         if top >= TEXT_RANGE_START
             && top < TEXT_RANGE_END
