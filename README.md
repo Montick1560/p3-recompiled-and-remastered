@@ -33,7 +33,11 @@ the PSP Graphics Engine to OpenGL 3.3.
 
 The recompiler works in two stages. `psprecomp analyze` runs Ghidra headless analysis on the PSP
 ELF and merges it with a Rust ELF parser into `analysis.json` (functions, imports, relocations,
-mid-function entry points, xrefs, data sections). `psprecomp recompile` decodes every instruction
+mid-function entry points, xrefs, data sections). Both PSP executable formats are handled:
+ET_EXEC binaries (Patapon's BOOT.BIN) load where linked, and relocatable PRX modules
+(decrypted EBOOT.BIN, `e_type 0xFFA0`) are rebased to the PSP user-module base 0x08804000 with
+their Type-A relocation tables applied and their imports parsed from SceModuleInfo.
+`psprecomp recompile` decodes every instruction
 into a typed IR and emits C++17: one C++ function per guest function, an address-to-function
 dispatch table, and the data sections. The generated code compiles together with the runtime in
 `runtime/`, which provides guest memory, a cooperative thread scheduler, HLE stubs for the
@@ -183,8 +187,12 @@ checked with adversarial sub-agent verification before they are banked.
   game's state machine) has not yet been exercised in our runtime.
 - **A rare race** in the game's IO worker (a phantom job, roughly 1 in 20 boots) is tripwired but
   not fixed.
-- **Single target, single platform.** Developed and tested against Patapon BOOT.BIN only — other
-  PSP games will most likely not work (see the warning at the top). Developed and tested on
+- **Single runnable target, single platform.** The *runtime* has been developed and verified
+  against Patapon BOOT.BIN only — other PSP games will most likely not boot (see the warning at
+  the top). The *pipeline* is one step broader: relocatable PRX modules analyze and recompile
+  generically (verified on a second commercial binary through `clang++ -fsyntax-only` of all
+  emitted batches), but running a second game has not been attempted. Type-B (0x700000A1)
+  packed relocations are detected and rejected with an explicit error. Developed and tested on
   macOS only; Linux and Windows have never been tried (the build assumes SDL2 via pkg-config and
   OpenGL 3.3, and the render-queue threading model was designed around macOS constraints).
   Testing and supporting other operating systems is a to-do. Optimizer passes are disabled by

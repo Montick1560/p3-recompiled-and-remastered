@@ -50,6 +50,7 @@ These decisions are accumulated from 18+ completed plans. Violating them causes 
 - All addresses in analysis.json are hex strings (never u32/u64 in JSON)
 - Function size = maxAddress - entry + 1 (not address-count methods)
 - PSP memory addresses mask with `0x07FFFFFFU` (128MB address space)
+- PRX modules rebase to `PSP_USER_MODULE_BASE` 0x08804000 (`--load-base` overrides); ET_EXEC loads where linked. Canonical image = psp-parser's relocated `segments[]`; Ghidra is byte-gate-verified, never a byte source (DEBUGGING.md #52)
 
 ### Runtime Architecture
 - `rdram` is separate from `recomp_context` -- passed as separate function parameter for thread-safety

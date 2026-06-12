@@ -461,3 +461,62 @@ runs with `PSPRECOMP_CROSS_MID=1` on both sides: dumps of `entry` (0x089ACCD0, 4
 mid-entry parent `FUN_08804a4c` (11637 bytes), dedup `thunk_FUN_08864f98_0887f1c4`, and
 `FUN_0881e7a8` were each exact byte substrings of their `output/generated/batch_*.cpp`,
 with the recompile baseline (14104/2022/283) unchanged.
+
+## #52 — PRX bring-up (rebase, relocations, imports, byte-equality gate)
+
+Relocatable PSP modules (`e_type 0xFFA0` — e.g. a decrypted `EBOOT.BIN` of a game whose
+`BOOT.BIN` is a dummy) take a different analyze path than ET_EXEC binaries like Patapon:
+psp-parser rebases all segments to `PSP_USER_MODULE_BASE` (0x08804000, override with
+`analyze --load-base <hex>`), applies the Type-A relocation tables, parses SceModuleInfo +
+the `.lib.stub` import table from the *relocated* image, and pins Ghidra's loader
+(`-loader PspElfLoader -loader-imagebase <hex>`) so both engines see the same image.
+
+### Diagnosing a base-0 / no-imports analysis (the original #52 symptom)
+
+Any of these in an analyze run of a PRX means the rebase path did not engage — suspect a
+stale cache (below) or a non-0xFFA0 e_type:
+
+- functions named `FUN_000xxxxx`, `entry` missing, or a stray `FUN_00000000`
+- `heap_base` ≈ `0x005xxxxx` instead of `0x08Dxxxxx`
+- `Applied 0 relocations` / `Resolved 0 import stubs` in the log (import failures on a
+  PRX are now hard errors, never silent empty arrays)
+- 0 RAW_SCAN xrefs and 0 constructors (the Java script's PSP-range gates see base-0 addresses)
+
+### "byte-equality gate FAILED for block ..."
+
+`ExtractAnalysis.java` exports a SHA-256 per initialized memory block; analyze recomputes
+each hash over its own relocated `segments[]` slice and hard-fails on mismatch. A failure
+means the two relocation engines (psp-parser `reloc.rs` vs ghidra-allegrex) diverged —
+**do not** weaken the gate; one of the engines is wrong. To find which: dump the named
+block's first differing bytes from Ghidra (re-import the binary in the GUI with the same
+imagebase) and compare against the analysis.json segment slice at the same VA
+(`jq -r '.segments[0].data_b64' | base64 -d | xxd`). Plan
+`.planning/plans/52-prx-support-plan.md` §1 D1 records the fallback strategy (pre-relocated
+temp ELF) if a divergence cannot be fixed in `reloc.rs`. A *warning* that the gate was not
+enforced means the `blocks` key is absent — legacy `ghidra_raw.json` or a `--ghidra-dir`-less
+run.
+
+### `.ghidra_raw.meta.json` cache rule
+
+The `<output>.ghidra_raw.json` cache is reused only when its sidecar
+`<output>.ghidra_raw.meta.json` matches the run (binary sha256, loader, imagebase) — a
+pre-#52 base-0 cache can therefore never silently poison a rebased re-run. Mismatch or
+missing meta: with `--ghidra-dir`, Ghidra re-runs (one-time cost for legacy caches);
+without it, analyze errors and tells you to re-run with `--ghidra-dir` or delete the cache.
+
+### Type-B relocations
+
+`0x700000A1` packed relocation tables (stripped kernel-style PRX) are detected but
+deliberately unimplemented: analyze fails loudly naming the table. Spec for a future
+implementation: `.planning/research/52-prx-format-spec.md` §5.
+
+### Verified (2026-06-12, .hack//Link BOOT_DEC.BIN + Patapon regression)
+
+.hack//Link (6,217,020 bytes, decrypted): 188,284 Type-A relocations applied from 7 section
+tables (0 skipped / 0 unhandled), module `hacklink`, gp 0x08C89BD0, 243 import stubs across
+28 libraries (`sceDmacMemcpy` 0x617F3FE6 resolves; 9 game-specific NIDs surface in
+`unresolved_nids`), entry renamed to `entry` at 0x08BC3D98, heap 0x08D30000, byte gate
+12/12 blocks. Recompile: 22,170 functions / 3,439 mid-entries / 444 batches; **all** batch
+files pass `clang++ -std=c++17 -fsyntax-only`. Patapon: fresh analyze output byte-identical
+to a master-built run (modulo `binary_path`); gate 12/12; recompile baseline
+(14,104/2,022/283 under `PSPRECOMP_CROSS_MID=1`) unchanged.

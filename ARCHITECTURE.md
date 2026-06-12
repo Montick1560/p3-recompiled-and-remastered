@@ -18,7 +18,10 @@ Two halves: a Rust recompilation pipeline (offline) and a C++17 runtime (online)
 
 1. **Analyze** — Ghidra headless (`analysis/ExtractAnalysis.java`) exports functions, xrefs, and
    mid-function entry points; the Rust ELF parser adds imports (NIDs), relocations, and section
-   data. Merged into `analysis.json` (all addresses as hex strings).
+   data. Merged into `analysis.json` (all addresses as hex strings). Relocatable PRX modules
+   (`e_type 0xFFA0`) are first rebased to `PSP_USER_MODULE_BASE` (0x08804000; `--load-base`
+   to override) with their Type-A relocation tables applied; ET_EXEC binaries load where
+   linked and skip every PRX-only step.
 2. **Recompile** — each guest function is decoded into a typed IR and emitted as a C++ function;
    batches are emitted in parallel (rayon). Output also includes the dispatch table, data
    sections, and mid-entry wrappers.
@@ -31,7 +34,7 @@ All under `crates/`:
 
 | Crate | Responsibility |
 |-------|----------------|
-| `psp-parser` | ELF/PRX parsing, NID database, relocations (goblin 0.9.3) |
+| `psp-parser` | ELF/PRX parsing (goblin 0.9.3); PRX loading: segment rebase to `PSP_USER_MODULE_BASE`, section-first Type-A relocation discovery + PPSSPP-faithful application (`reloc.rs`), `LoadedImage` virtual-address view (`image.rs`), SceModuleInfo lookup (`prx.rs`), libstub import walking + NID resolution (`imports.rs`, `nid.rs`) |
 | `psp-ir` | `MipsOp` enum, `DecodedFunction` — typed IR for all Allegrex + FPU instructions |
 | `psp-decoder` | MIPS32 + Allegrex + FPU instruction decoding, two-pass delay-slot reordering |
 | `psp-optimizer` | Peephole passes; all disabled by default (`OptimizerConfig::default()` all false) |
@@ -127,3 +130,14 @@ These are load-bearing; violating them causes real bugs.
 11. `PSPRECOMP_CROSS_MID=1` enables cross-function mid-jump injection in the recompiler
     (`crates/psp-cli/src/recompile.rs`); the project's standard workflow sets it for both the
     recompile step and runtime runs.
+12. The canonical binary image is psp-parser's rebased + relocated `analysis.json segments[]`
+    (`data_b64`) — everything downstream (recompile byte slicing, binary scans, data sections,
+    the runtime) consumes only it. Ghidra is an *analysis oracle* (functions/xrefs/constructors),
+    never a byte source: for relocatable modules its feed is pinned
+    (`-loader PspElfLoader -loader-imagebase <hex>`), and a mandatory byte-equality gate
+    (per-block SHA-256 from `ExtractAnalysis.java`, recomputed in analyze over the relocated
+    segments) hard-fails the run if the two relocation engines (`reloc.rs` vs ghidra-allegrex)
+    ever diverge. Reasoning: two independent relocation engines exist by design — the gate makes
+    drift loud at analyze time instead of surfacing as translation bugs. The
+    `<output>.ghidra_raw.meta.json` sidecar (binary hash, loader, imagebase) prevents a stale
+    base-0 Ghidra cache from being silently reused. Details: DEBUGGING.md "#52".
