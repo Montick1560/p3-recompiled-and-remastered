@@ -494,6 +494,9 @@ pub fn emit_function(func: &DecodedFunction, gen: &mut dyn Generator, imports: &
     // only. We synthesize the missing epilogue after the terminal call so the
     // function is transparent to its C++ caller's callee-saved registers / sp.
     let reconstruct_terminal_epilogue = ra_ctx.is_none() && !func_has_jr_ra(func);
+    // Set when `emit_reconstructed_epilogue` actually emitted a teardown —
+    // MUTUALLY EXCLUSIVE with the fall-through tail below (see there).
+    let mut epilogue_reconstructed = false;
 
     for block in &func.blocks {
         let instrs = &block.instrs;
@@ -575,10 +578,34 @@ pub fn emit_function(func: &DecodedFunction, gen: &mut dyn Generator, imports: &
                 && is_last_block
                 && is_terminal_external_jal(instrs, i, func.vaddr, func_end)
             {
-                emit_reconstructed_epilogue(instrs, gen);
+                epilogue_reconstructed = emit_reconstructed_epilogue(instrs, gen);
             }
             i += 1;
         }
+    }
+
+    // Fall-through tail (dothack L5, the `FUN_08851A24` class): if the body's
+    // end is reachable, hardware falls through into the code at `func_end`,
+    // but the C++ body would run off its closing brace and silently return
+    // with stale state (e.g. a caller-preset error v0). Dispatch to the next
+    // address instead — full guest state lives in `ctx`, and the nested host
+    // frames unwind when the downstream `jr ra` finally returns. Targets
+    // absent from the dispatch table become LOUD LOOKUP_MISSes and are
+    // recorded by the #37 dispatch audit via `emit_call_lookup`.
+    //
+    // MUTUALLY EXCLUSIVE with the reconstructed terminal-jal epilogue above:
+    // that path already synthesized the downstream chain's frame teardown —
+    // also dispatching into the chain would pop the frame a second time.
+    //
+    // `func_end > func.vaddr` guards the degenerate size-0 shape against
+    // self-dispatch recursion.
+    if !epilogue_reconstructed
+        && func_end > func.vaddr
+        && body_can_fall_off_end(func, ra_ctx.is_some(), func_end)
+    {
+        gen.emit_raw("/* fall-through past function end (no terminal control flow) */");
+        gen.emit_call_lookup(func_end);
+        gen.emit_return();
     }
 
     gen.emit_function_end();
@@ -609,6 +636,67 @@ fn is_terminal_external_jal(seq: &[MipsOp], i: usize, func_start: u32, func_end:
     }
     i + 1 == seq.len()
         || (i + 2 == seq.len() && matches!(seq[i + 1], MipsOp::DelaySlot { .. }))
+}
+
+/// True if `r` is the hardwired-zero register.
+fn is_zero_reg(r: Reg) -> bool {
+    matches!(r, Reg::Zero | Reg::Gpr(0))
+}
+
+/// True if the emitted lowering of `op` unconditionally ends guest control
+/// flow — execution cannot fall past it into the next instruction slot.
+///
+/// Used by the fall-through tail decision (see `emit_function`): a function
+/// whose last meaningful op does NOT end flow would run off the C++ body and
+/// silently return with stale state (the dothack CRI-FS `FUN_08851A24` class,
+/// the function-granularity sibling of BIDS #56).
+fn op_ends_guest_flow(op: &MipsOp, ra_modeled: bool, func_start: u32, func_end: u32) -> bool {
+    match op {
+        // `jr ra` lowers to `return;` (or the internal RA switch, whose every
+        // arm gotos or returns); `jr reg` lowers to dispatch + return.
+        MipsOp::Jr { .. } => true,
+        // `j` lowers to an unconditional goto (internal target) or to
+        // dispatch + return (external tail jump).
+        MipsOp::J { .. } => true,
+        // Jump table: every case gotos; the default dispatches + returns.
+        MipsOp::JumpTable { .. } => true,
+        // RA-modeled INTERNAL `jal` lowers to a link write + unconditional
+        // goto (see `emit_coalesced_link_ra`). The baseline internal/external
+        // `jal` is a call that falls through and must NOT match here.
+        MipsOp::Jal { target } if ra_modeled && *target >= func_start && *target < func_end => {
+            true
+        }
+        // Always-taken non-linking branches: `b` (beq r,r), `bgez zero`,
+        // `blez zero` — the not-taken fall-through path is statically dead.
+        MipsOp::Beq { rs, rt, .. } if rs == rt => true,
+        MipsOp::Bgez { rs, .. } | MipsOp::Blez { rs, .. } if is_zero_reg(*rs) => true,
+        // Hazard-fused control: ends flow iff the fused op itself does
+        // (`jr` → dispatch + return; jump table → switch). A fused `jalr` is
+        // a call and fused conditional branches fall through.
+        MipsOp::BranchHazardDelay { branch, .. } => matches!(
+            branch.as_ref(),
+            MipsOp::Jr { .. } | MipsOp::JumpTable { .. }
+        ),
+        _ => false,
+    }
+}
+
+/// True if the emitted body's end is reachable: the last meaningful op of the
+/// final block (looking through a trailing `DelaySlot` to the control op that
+/// owns it) does not unconditionally end guest flow, so hardware would fall
+/// through into the code at `func_end` while the C++ body silently returns.
+fn body_can_fall_off_end(func: &DecodedFunction, ra_modeled: bool, func_end: u32) -> bool {
+    let Some(seq) = func.blocks.last().map(|b| b.instrs.as_slice()) else {
+        return true;
+    };
+    let last = match seq.last() {
+        None => return true,
+        // Trailing `DelaySlot` (a likely branch's slot kept after the branch,
+        // or a terminal call's slot): the owning control op decides.
+        Some(MipsOp::DelaySlot { .. }) if seq.len() >= 2 => &seq[seq.len() - 2],
+        Some(op) => op,
+    };
+    !op_ends_guest_flow(last, ra_modeled, func.vaddr, func_end)
 }
 
 /// Emit a fused BIDS pair (issue #56): a branch whose delay-slot ADDRESS is
@@ -662,9 +750,13 @@ fn emit_bids_pair(
     if rejoin < func_end {
         gen.emit_goto(&format!("L_{rejoin:08X}"));
     } else {
-        // Pair sits at the very end of the function: fall-through past the
-        // duplicate would run off the body — exit like any end-of-body path.
-        gen.emit_raw("return; /* BIDS skip: rejoin point beyond function end */");
+        // Pair sits at the very end of the function: the not-taken path
+        // continues at the rejoin point (== func_end) — a fall-through past
+        // the function end, same class as the end-of-body tail in
+        // `emit_function`. Dispatch there; never silently return.
+        gen.emit_raw("/* BIDS skip: rejoin beyond function end — fall through */");
+        gen.emit_call_lookup(rejoin);
+        gen.emit_return();
     }
     gen.emit_label(&format!("L_{ds_vaddr:08X}"));
     emit_op(dup, gen, imports, func_start, func_end);
@@ -2105,9 +2197,11 @@ mod tests {
     }
 
     #[test]
-    fn bids_pair_at_function_end_emits_return_skip() {
-        // Degenerate: the BIDS pair is the last word pair — no L_A8 exists,
-        // the skip must exit instead of emitting a goto to a missing label.
+    fn bids_pair_at_function_end_dispatches_fall_through() {
+        // Degenerate: the BIDS pair is the last word pair — no L_A8 exists.
+        // The skip must NOT goto a missing label, and (fall-through class)
+        // must dispatch to func_end instead of silently returning. The
+        // duplicate's own fall-off end gets the same tail.
         let ops = vec![
             MipsOp::BranchHazardDelay {
                 branch: Box::new(MipsOp::Bne {
@@ -2131,9 +2225,122 @@ mod tests {
             !out.contains("goto L_08804008"),
             "no goto to a label outside the function: {out}"
         );
+        let skip = gen.output.iter().position(|s| s == "CALL_LOOKUP:0x08804008")
+            .expect("BIDS end-of-body skip must dispatch to func_end");
+        assert_eq!(gen.output[skip + 1], "return;", "skip dispatch must return: {out}");
+        let slot_label = gen.output.iter().position(|s| s == "LABEL:L_08804004")
+            .expect("slot label");
+        assert!(skip < slot_label, "skip must precede the duplicate's label");
         assert!(
-            out.contains("return; /* BIDS skip"),
-            "end-of-body skip must exit: {out}"
+            gen.output[slot_label + 1..].contains(&"CALL_LOOKUP:0x08804008".to_string()),
+            "duplicate's fall-off end must also dispatch to func_end: {out}"
+        );
+    }
+
+    // --- Fall-through tail (function end reachable) ------------------------
+
+    #[test]
+    fn fall_off_end_emits_tail_dispatch() {
+        // The dothack L5 shape (FUN_08851A24): a single plain store, no
+        // terminal control flow — the body must dispatch to func_end (the
+        // next function's entry), never silently return with stale v0.
+        let ops = vec![MipsOp::Sw { rt: Reg::Zero, rs: Reg::Gpr(7), offset: 0 }];
+        let mut func = make_func(ops);
+        func.size = 4;
+        let mut gen = TestGenerator::new();
+        emit_function(&func, &mut gen, &ImportMap::new());
+        let lookup = gen.output.iter().position(|s| s == "CALL_LOOKUP:0x08804004")
+            .expect("fall-off end must dispatch to func_end");
+        assert_eq!(gen.output[lookup + 1], "return;", "tail must return after dispatch");
+    }
+
+    #[test]
+    fn jr_ra_end_emits_no_tail() {
+        let mut gen = TestGenerator::new();
+        let func = make_func(vec![MipsOp::Nop {}, MipsOp::Jr { rs: Reg::Gpr(31) }]);
+        emit_function(&func, &mut gen, &ImportMap::new());
+        assert!(
+            !gen.output.contains(&"CALL_LOOKUP:0x08804008".to_string()),
+            "jr-ra end must not get a fall-through tail: {:?}",
+            gen.output
+        );
+    }
+
+    #[test]
+    fn external_j_end_emits_no_tail() {
+        // Tail jump out of the function: dispatch + return already ends flow.
+        let func = make_func(vec![MipsOp::Nop {}, MipsOp::J { target: 0x08813000 }]);
+        let mut gen = TestGenerator::new();
+        emit_function(&func, &mut gen, &ImportMap::new());
+        assert!(
+            !gen.output.contains(&"CALL_LOOKUP:0x08804008".to_string()),
+            "external j end must not get a fall-through tail: {:?}",
+            gen.output
+        );
+    }
+
+    #[test]
+    fn conditional_branch_end_emits_tail() {
+        // Terminal conditional branch: the not-taken path runs off the end.
+        let ops = vec![
+            MipsOp::Nop {},
+            MipsOp::Bne { rs: Reg::Gpr(4), rt: Reg::Zero, target: 0x08804000, likely: false },
+        ];
+        let mut gen = TestGenerator::new();
+        emit_function(&make_func(ops), &mut gen, &ImportMap::new());
+        assert!(
+            gen.output.contains(&"CALL_LOOKUP:0x08804008".to_string()),
+            "not-taken fall-off must dispatch to func_end: {:?}",
+            gen.output
+        );
+    }
+
+    #[test]
+    fn always_taken_branch_end_emits_no_tail() {
+        // `b` (beq r,r): the not-taken path is statically dead — no tail.
+        let ops = vec![
+            MipsOp::Nop {},
+            MipsOp::Beq { rs: Reg::Gpr(4), rt: Reg::Gpr(4), target: 0x08804000, likely: false },
+        ];
+        let mut gen = TestGenerator::new();
+        emit_function(&make_func(ops), &mut gen, &ImportMap::new());
+        assert!(
+            !gen.output.contains(&"CALL_LOOKUP:0x08804008".to_string()),
+            "always-taken branch end must not get a tail: {:?}",
+            gen.output
+        );
+    }
+
+    #[test]
+    fn reconstructed_epilogue_suppresses_tail() {
+        // Mutual exclusion: the terminal-jal reconstructed epilogue already
+        // synthesizes the downstream chain's frame teardown — also emitting
+        // the fall-through tail would pop the frame a second time.
+        let func = terminal_jal_func();
+        let func_end = func.vaddr + func.size;
+        let mut gen = TestGenerator::new();
+        emit_function(&func, &mut gen, &ImportMap::new());
+        let out = gen.output.join("\n");
+        assert!(out.contains("reconstructed epilogue"), "epilogue expected: {out}");
+        assert!(
+            !gen.output.contains(&format!("CALL_LOOKUP:0x{func_end:08X}")),
+            "tail must be suppressed when the epilogue was reconstructed: {out}"
+        );
+    }
+
+    #[test]
+    fn terminal_external_jal_without_frame_emits_tail() {
+        // Terminal external jal with NO recoverable frame: the epilogue
+        // reconstruction declines, so the call-then-fall-through gets the
+        // dispatch tail (hardware resumes at func_end after the call).
+        let ops = vec![MipsOp::Nop {}, MipsOp::Jal { target: 0x08813000 }];
+        let mut gen = TestGenerator::new();
+        emit_function(&make_func(ops), &mut gen, &ImportMap::new());
+        let out = gen.output.join("\n");
+        assert!(!out.contains("reconstructed epilogue"), "no frame to reconstruct: {out}");
+        assert!(
+            gen.output.contains(&"CALL_LOOKUP:0x08804008".to_string()),
+            "frameless terminal jal must get the fall-through tail: {out}"
         );
     }
 

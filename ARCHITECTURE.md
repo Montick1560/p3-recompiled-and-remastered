@@ -42,7 +42,7 @@ All under `crates/`:
 | `psp-ir` | `MipsOp` enum, `DecodedFunction` — typed IR for all Allegrex + FPU instructions |
 | `psp-decoder` | MIPS32 + Allegrex + FPU instruction decoding, two-pass delay-slot reordering; a branched-into delay slot (BIDS, #56) is fused at the branch (`BranchHazardDelay`) and duplicated at the slot's own position (`DelaySlotRejoin`) so back-edges into the slot keep hardware semantics |
 | `psp-optimizer` | Peephole passes; all disabled by default (`OptimizerConfig::default()` all false) |
-| `psp-emitter` | C++ code generation, batch emission (rayon), dispatch table, generated CMakeLists |
+| `psp-emitter` | C++ code generation, batch emission (rayon), dispatch table, generated CMakeLists; a function body whose end is reachable (last op is not an unconditional control transfer — the function-granularity sibling of BIDS) gets an explicit fall-through tail `RECOMP_LOOKUP(end_vaddr); return;` so execution continues into the next function instead of silently returning; mutually exclusive with the reconstructed terminal-`jal` epilogue, which synthesizes the downstream teardown instead |
 | `psp-cli` | `psprecomp` binary with `analyze`, `recompile`, `dump` subcommands |
 
 ## Generated Output Layout
