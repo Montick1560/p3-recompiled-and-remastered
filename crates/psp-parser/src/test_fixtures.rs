@@ -49,6 +49,46 @@ impl ModuleInfoFixture {
     }
 }
 
+/// Parameterizable `PspLibStubEntry` record (spec R2 §6.2 layout).
+///
+/// `size_words` controls both the encoded length (5 → 20 bytes, 6 → +var_data,
+/// 7 → +extra) and the walker's advance; deliberately inconsistent values
+/// (e.g. 0 or 4) are encoded as 20-byte records for malformed-input tests.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LibStubEntryFixture {
+    pub name_va: u32,
+    pub size_words: u8,
+    pub num_vars: u8,
+    pub num_funcs: u16,
+    pub nid_data: u32,
+    pub first_sym_addr: u32,
+    pub var_data: u32,
+    pub extra: u32,
+}
+
+impl LibStubEntryFixture {
+    /// Encodes the on-disk record (`size_words * 4` bytes when size ≥ 5,
+    /// else the minimal 20 bytes).
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(28);
+        out.extend_from_slice(&self.name_va.to_le_bytes());
+        out.extend_from_slice(&0x0101u16.to_le_bytes()); // version
+        out.extend_from_slice(&0u16.to_le_bytes()); // flags
+        out.push(self.size_words);
+        out.push(self.num_vars);
+        out.extend_from_slice(&self.num_funcs.to_le_bytes());
+        out.extend_from_slice(&self.nid_data.to_le_bytes());
+        out.extend_from_slice(&self.first_sym_addr.to_le_bytes());
+        if self.size_words >= 6 {
+            out.extend_from_slice(&self.var_data.to_le_bytes());
+        }
+        if self.size_words >= 7 {
+            out.extend_from_slice(&self.extra.to_le_bytes());
+        }
+        out
+    }
+}
+
 /// One reloc table in the fixture: a section of the given `sh_type` (or a
 /// program header of that `p_type` for sectionless fixtures).
 struct RelocSpec {
@@ -137,7 +177,6 @@ impl PrxFixture {
     }
 
     /// `.lib.stub` contents (raw PspLibStubEntry records; for the T4 walker tests).
-    #[allow(dead_code)]
     pub fn libstub(self, bytes: &[u8]) -> Self {
         self.alloc_bytes(".lib.stub", bytes)
     }

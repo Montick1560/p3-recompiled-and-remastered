@@ -93,37 +93,50 @@ pub fn build_stub_map_from_imports(
     result
 }
 
-/// Discover import stub addresses from an ELF binary's .lib.stub section.
+/// Discover import stub addresses from a binary's `.lib.stub` table.
 ///
-/// Parses SceLibStubEntry structures regardless of PRX flag, resolves NIDs
-/// against the database, and returns a map from stub address to
-/// (function_name, target_arg_register) for HLE APIs that take func ptrs.
+/// Thin shim over the single libstub walker
+/// (`psp_parser::imports::parse_import_stubs` — the duplicate walker that
+/// used to live here is gone, issue #52 consolidation): builds a
+/// `LoadedImage` over the already-rebased segments (base 0 extra offset for
+/// ELF), locates SceModuleInfo, walks the imports, and keeps only HLE APIs
+/// that take function-pointer arguments. Failures degrade to an empty map
+/// with a loud error — the HLE scan is best-effort by design.
 pub fn discover_import_stubs_for_elf(
-    data: &[u8],
     elf: &goblin::elf::Elf,
+    seg_bases: &[u32],
+    seg_datas: &[Vec<u8>],
     nid_db: &HashMap<u32, String>,
 ) -> HashMap<u32, (String, u8)> {
-    // Build name -> register map from HLE_FUNCPTR_APIS
     let api_regs: HashMap<&str, u8> = HLE_FUNCPTR_APIS
         .iter()
         .map(|&(name, reg, _)| (name, reg))
         .collect();
 
-    // Parse .lib.stub structures from SceModuleInfo
-    let stubs = match parse_libstub_stubs(data, elf, nid_db) {
+    let walk = || -> Result<Vec<psp_parser::types::ImportStub>, psp_parser::errors::ParseError> {
+        let image = psp_parser::image::LoadedImage::new(seg_bases, seg_datas);
+        let va = psp_parser::prx::locate_module_info_va(elf, 0)?;
+        let mi = psp_parser::prx::parse_module_info(&image, va)?;
+        tracing::info!(
+            "SceModuleInfo '{}': libstub range 0x{:08X}-0x{:08X}",
+            mi.name,
+            mi.libstub,
+            mi.libstub_end
+        );
+        psp_parser::imports::parse_import_stubs(&image, &mi, nid_db)
+    };
+    let stubs = match walk() {
         Ok(s) => s,
         Err(e) => {
-            tracing::error!(
-                "Failed to parse .lib.stub for HLE stub discovery: {e}"
-            );
+            tracing::error!("Failed to parse .lib.stub for HLE stub discovery: {e}");
             return HashMap::new();
         }
     };
 
     let mut result = HashMap::new();
-    for (stub_addr, func_name) in &stubs {
-        if let Some(&reg) = api_regs.get(func_name.as_str()) {
-            result.insert(*stub_addr, (func_name.clone(), reg));
+    for stub in &stubs {
+        if let Some(&reg) = api_regs.get(stub.name.as_str()) {
+            result.insert(stub.stub_addr, (stub.name.clone(), reg));
         }
     }
 
@@ -133,196 +146,6 @@ pub fn discover_import_stubs_for_elf(
         result.len()
     );
     result
-}
-
-/// Parse .lib.stub from raw ELF bytes to get (stub_addr, func_name) pairs.
-///
-/// Works for both ELF and PRX binaries. Uses SceModuleInfo to locate
-/// the libstub table bounds, then walks SceLibStubEntry structures.
-///
-/// For ELF binaries, `p_paddr` of the first PT_LOAD segment is a direct
-/// file offset to SceModuleInfo (not a virtual address like in PRX).
-fn parse_libstub_stubs(
-    data: &[u8],
-    elf: &goblin::elf::Elf,
-    nid_db: &HashMap<u32, String>,
-) -> Result<Vec<(u32, String)>> {
-    use psp_parser::prx::vaddr_to_file_offset;
-
-    let (libstub_top, libstub_btm) =
-        find_libstub_bounds(data, elf)?;
-
-    tracing::info!(
-        "Libstub range: 0x{:08X}-0x{:08X}",
-        libstub_top,
-        libstub_btm
-    );
-
-    let mut stubs = Vec::new();
-    let mut vaddr = libstub_top;
-
-    while vaddr < libstub_btm {
-        let file_off = match vaddr_to_file_offset(elf, vaddr) {
-            Some(off) => off,
-            None => {
-                tracing::warn!(
-                    "libstub entry vaddr 0x{vaddr:08X} out of range"
-                );
-                break;
-            }
-        };
-
-        if file_off + 20 > data.len() {
-            break;
-        }
-
-        // SceLibStubEntry layout (PPSSPP convention):
-        //   u32 lib_name_addr   (+0)
-        //   u16 version          (+4)
-        //   u16 flags            (+6)
-        //   u8  size (in u32s)   (+8)  -- entry size in 32-bit words
-        //   u8  num_vars         (+9)
-        //   u16 num_funcs        (+10) -- number of function stubs
-        //   u32 nid_table_addr   (+12)
-        //   u32 stub_table_addr  (+16)
-        let entry_size_words = data[file_off + 8] as u32;
-        let func_count = u16::from_le_bytes(
-            data[file_off + 10..file_off + 12].try_into().unwrap(),
-        ) as usize;
-        let nid_table_addr = u32::from_le_bytes(
-            data[file_off + 12..file_off + 16].try_into().unwrap(),
-        );
-        let stub_table_addr = u32::from_le_bytes(
-            data[file_off + 16..file_off + 20].try_into().unwrap(),
-        );
-
-        for i in 0..func_count {
-            let nid_off_v = nid_table_addr + i as u32 * 4;
-            // Each stub is 8 bytes (jr $ra + nop), so stride is 8
-            let stub_addr = stub_table_addr + i as u32 * 8;
-
-            let nid = match read_u32_vaddr(data, elf, nid_off_v) {
-                Some(v) => v,
-                None => continue,
-            };
-
-            let name = psp_parser::nid::resolve_nid(nid_db, nid);
-            stubs.push((stub_addr, name));
-        }
-
-        // Advance by entry_size_words * 4 bytes (min 20 = 5 words)
-        let advance = if entry_size_words >= 5 {
-            entry_size_words * 4
-        } else {
-            20
-        };
-        vaddr = vaddr.saturating_add(advance);
-    }
-
-    Ok(stubs)
-}
-
-/// Find libstub table bounds from SceModuleInfo.
-///
-/// For PRX binaries, delegates to the standard `parse_module_info`.
-/// For ELF binaries (like Patapon), `p_paddr` of the first PT_LOAD
-/// segment is a direct file offset to SceModuleInfo, not a virtual
-/// address. We handle this case explicitly.
-fn find_libstub_bounds(
-    data: &[u8],
-    elf: &goblin::elf::Elf,
-) -> Result<(u32, u32)> {
-    // Try the standard module-info lookup first (works for PRX and
-    // section-header-based lookup). TODO(T4): this whole function is replaced
-    // by the consolidated LoadedImage-based walker.
-    let section_lookup = || -> anyhow::Result<(u32, u32)> {
-        let segments = psp_parser::elf::extract_segments(data, elf);
-        let (bases, datas): (Vec<u32>, Vec<Vec<u8>>) =
-            segments.into_iter().map(|s| (s.p_vaddr, s.data)).unzip();
-        let image = psp_parser::image::LoadedImage::new(&bases, &datas);
-        let va = psp_parser::prx::locate_module_info_va(elf, 0)?;
-        let mi = psp_parser::prx::parse_module_info(&image, va)?;
-        Ok((mi.libstub, mi.libstub_end))
-    };
-    if let Ok((top, btm)) = section_lookup() {
-        // Sanity check: both addresses must be in PSP user memory range
-        if top >= TEXT_RANGE_START
-            && top < TEXT_RANGE_END
-            && btm >= TEXT_RANGE_START
-            && btm < TEXT_RANGE_END
-            && btm > top
-        {
-            return Ok((top, btm));
-        }
-        tracing::warn!(
-            "parse_module_info returned suspicious libstub \
-             range 0x{:08X}-0x{:08X}; trying ELF p_paddr fallback",
-            top,
-            btm
-        );
-    }
-
-    // ELF fallback: p_paddr is a direct file offset to SceModuleInfo
-    use goblin::elf::program_header::PT_LOAD;
-    for ph in &elf.program_headers {
-        if ph.p_type != PT_LOAD {
-            continue;
-        }
-        let file_offset = ph.p_paddr as usize;
-        if file_offset + 52 > data.len() {
-            continue;
-        }
-        // Read SceModuleInfo at this offset
-        // Layout: u16 attrs, u16 ver, [27]u8 name, u8 pad,
-        //   u32 gp, u32 libent_top, u32 libent_btm,
-        //   u32 libstub_top, u32 libstub_btm
-        let libstub_top = u32::from_le_bytes(
-            data[file_offset + 44..file_offset + 48]
-                .try_into()
-                .unwrap(),
-        );
-        let libstub_btm = u32::from_le_bytes(
-            data[file_offset + 48..file_offset + 52]
-                .try_into()
-                .unwrap(),
-        );
-
-        // Validate range
-        if libstub_top >= 0x08800000
-            && libstub_btm >= 0x08800000
-            && libstub_btm > libstub_top
-        {
-            let name_bytes = &data[file_offset + 4..file_offset + 31];
-            let name_end = name_bytes
-                .iter()
-                .position(|&b| b == 0)
-                .unwrap_or(name_bytes.len());
-            let name = String::from_utf8_lossy(
-                &name_bytes[..name_end],
-            );
-            tracing::info!(
-                "ELF SceModuleInfo '{}' at file offset 0x{:X}",
-                name,
-                file_offset
-            );
-            return Ok((libstub_top, libstub_btm));
-        }
-    }
-
-    anyhow::bail!("Could not locate SceModuleInfo libstub bounds")
-}
-
-/// Read a u32 from a virtual address via ELF program headers.
-fn read_u32_vaddr(
-    data: &[u8],
-    elf: &goblin::elf::Elf,
-    vaddr: u32,
-) -> Option<u32> {
-    let off = psp_parser::prx::vaddr_to_file_offset(elf, vaddr)?;
-    if off + 4 > data.len() {
-        return None;
-    }
-    Some(u32::from_le_bytes(data[off..off + 4].try_into().ok()?))
 }
 
 /// Scan text segment bytes for JAL instructions targeting HLE stubs,

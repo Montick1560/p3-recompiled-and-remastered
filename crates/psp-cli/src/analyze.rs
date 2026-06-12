@@ -147,17 +147,13 @@ fn detect_mid_entries_from_xrefs(
 /// Builds the stub address map from either PRX imports or ELF .lib.stub,
 /// scans the .text segment for JAL call sites, and merges new entries into
 /// the functions list.
-#[allow(clippy::too_many_arguments)]
 fn run_hle_entry_scan(
-    raw_data: &[u8],
     elf_obj: &goblin::elf::Elf,
-    _is_prx: bool,
     nid_map: &std::collections::HashMap<u32, String>,
     import_stubs: &[psp_parser::types::ImportStub],
     segments: &[psp_parser::types::Segment],
     seg_data_vecs: &[Vec<u8>],
     functions: &mut Vec<JsonFunction>,
-    _output: &std::path::PathBuf,
 ) -> Result<crate::hle_entry_scanner::HleDiscoveryResult> {
     use crate::hle_entry_scanner;
 
@@ -166,9 +162,15 @@ fn run_hle_entry_scan(
         // PRX: build from analysis.json imports directly
         hle_entry_scanner::build_stub_map_from_imports(import_stubs)
     } else {
-        // ELF (like Patapon): discover from .lib.stub section
+        // ELF (like Patapon): discover via the consolidated .lib.stub walker.
+        // seg_data_vecs holds the loaded segment bytes; bases come from the
+        // (rebased, once T5 lands) segment vaddrs.
+        let seg_bases: Vec<u32> = segments.iter().map(|s| s.p_vaddr).collect();
         hle_entry_scanner::discover_import_stubs_for_elf(
-            raw_data, elf_obj, nid_map,
+            elf_obj,
+            &seg_bases,
+            seg_data_vecs,
+            nid_map,
         )
     };
 
@@ -330,10 +332,8 @@ pub fn run_analyze(
             mi.libstub,
             mi.libstub_end
         );
-        // TODO(T4): replace with the LoadedImage-based walker; until then the
-        // legacy walker's failures stay soft (it predates the layout fix).
-        imports::parse_import_stubs(&raw_data, &elf_obj, mi.libstub, mi.libstub_end, &nid_map)
-            .unwrap_or_default()
+        imports::parse_import_stubs(&image, &mi, &nid_map)
+            .with_context(|| format!("PRX import parsing failed (module info at 0x{mi_va:08X})"))?
     } else {
         vec![]
     };
@@ -384,15 +384,12 @@ pub fn run_analyze(
     // pointers passed to sceKernelCreateThread, sceKernelCreateCallback, etc.
     let functions_before = functions.len();
     let hle_result = run_hle_entry_scan(
-        &raw_data,
         &elf_obj,
-        is_prx,
         &nid_map,
         &import_stubs,
         &segments,
         &seg_data_vecs,
         &mut functions,
-        output,
     )?;
     if functions.len() > functions_before {
         tracing::info!(
