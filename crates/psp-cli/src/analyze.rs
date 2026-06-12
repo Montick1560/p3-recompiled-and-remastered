@@ -417,11 +417,14 @@ pub fn run_analyze(
         vec![]
     };
 
-    // 5. Parse NIDs and import stubs (D6: from the relocated image, so every
-    // pointer field is final; D8: hard error — never a silent empty imports[])
+    // 5. Parse NIDs and import stubs for BOTH formats (issue #40 — the
+    // generated syscall table consumes imports[]). D6: from the relocated
+    // image, so every pointer field is final. D8 (PRX): hard error — never a
+    // silent empty imports[]; ET_EXEC degrades loudly only when SceModuleInfo
+    // itself is absent (recompile refuses an import-free analysis.json).
     let nid_map = nid::load_nid_database(nid_db)
         .with_context(|| format!("Cannot load NID DB from {}", nid_db.display()))?;
-    let (import_stubs, prx_module_info) = if is_prx {
+    let (import_stubs, module_info) = if is_prx {
         let (stubs, mi) = crate::prx_load::parse_prx_imports(
             &elf_obj,
             load_base,
@@ -431,7 +434,7 @@ pub fn run_analyze(
         )?;
         (stubs, Some(mi))
     } else {
-        (vec![], None)
+        crate::prx_load::parse_elf_imports(&elf_obj, &seg_bases, &seg_data_vecs, &nid_map)?
     };
     tracing::info!("Resolved {} import stubs", import_stubs.len());
 
@@ -452,7 +455,7 @@ pub fn run_analyze(
             &image,
             load_base,
             entry_va,
-            prx_module_info.as_ref(),
+            module_info.as_ref(),
             &file_stem,
         )
     };

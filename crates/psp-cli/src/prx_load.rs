@@ -122,13 +122,56 @@ pub fn parse_prx_imports(
     Ok((stubs, mi))
 }
 
+/// Parse SceModuleInfo + the libstub import table for an ET_EXEC image
+/// (issue #40 — the generated NID binding table needs `imports[]` for every
+/// format, not just PRX).
+///
+/// Commercial ET_EXEC binaries (Patapon) carry the same SceModuleInfo and
+/// `.lib.stub` structures as PRX, so the one libstub walker serves both. A
+/// missing/unreadable SceModuleInfo degrades LOUDLY to no imports (mirrors
+/// [`build_module_facts`] — synthetic/homebrew ELFs may lack the record, and
+/// `recompile` refuses an import-free analysis.json anyway); a record that
+/// parses but whose libstub walk fails is a hard error — that is real data
+/// with a broken walk, the exact silent-empty-imports bug class of issue #52.
+pub fn parse_elf_imports(
+    elf_obj: &goblin::elf::Elf,
+    seg_bases: &[u32],
+    seg_data_vecs: &[Vec<u8>],
+    nid_map: &HashMap<u32, String>,
+) -> Result<(Vec<ImportStub>, Option<ModuleInfo>)> {
+    let image = psp_parser::image::LoadedImage::new(seg_bases, seg_data_vecs);
+    let mi = match prx::locate_module_info_va(elf_obj, 0)
+        .and_then(|va| prx::parse_module_info(&image, va))
+    {
+        Ok(mi) => mi,
+        Err(e) => {
+            tracing::warn!(
+                "No usable SceModuleInfo in ET_EXEC ({e}); imports[] stays empty — \
+                 a commercial binary should never hit this, and recompile refuses \
+                 an import-free analysis.json"
+            );
+            return Ok((vec![], None));
+        }
+    };
+    tracing::info!(
+        "SceModuleInfo '{}': gp=0x{:08X}, libstub 0x{:08X}..0x{:08X}",
+        mi.name,
+        mi.gp,
+        mi.libstub,
+        mi.libstub_end
+    );
+    let stubs = imports::parse_import_stubs(&image, &mi, nid_map)
+        .context("ET_EXEC import parsing failed (SceModuleInfo present but libstub walk broke)")?;
+    Ok((stubs, Some(mi)))
+}
+
 /// Build the analysis.json `module{}` facts block (issue #47 Phase 2).
 ///
-/// name/gp come from SceModuleInfo via the same locate+parse path the PRX
-/// import walker uses — Patapon's ET_EXEC BOOT.BIN carries the record too,
-/// so both formats are served by one code path. A PRX never reaches the
-/// fallback (its SceModuleInfo was already hard-error-parsed by
-/// [`parse_prx_imports`]); an ET_EXEC without a locatable/readable record
+/// name/gp come from SceModuleInfo via the same locate+parse path the
+/// import walkers use — Patapon's ET_EXEC BOOT.BIN carries the record too,
+/// so both formats are served by one code path. The caller passes the
+/// already-parsed record (`parse_prx_imports` / `parse_elf_imports`) when it
+/// found one; only an ET_EXEC whose record was unusable re-attempts here and
 /// degrades loudly to `name = file stem, gp = 0`. Text extent mirrors
 /// PPSSPP's `ElfReader` (see `psp_parser::elf::text_extent`).
 pub fn build_module_facts(
