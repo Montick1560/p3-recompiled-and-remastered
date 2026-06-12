@@ -94,6 +94,11 @@ constexpr uint32_t PSP_EVENT_WAITCLEARALL = 0x10;
 // ---- UID Generator ----
 int psp_next_uid();
 
+/// PSP-visible UID of the calling thread (what sceKernelGetThreadId
+/// returns): the registered thread UID, or 0x100 for the boot thread.
+/// LwMutex workareas store this value as the guest-readable owner id.
+int psp_current_thread_uid();
+
 // ---- Stack Allocator ----
 // Allocates guest stack from top of PSP user memory downward.
 uint32_t psp_alloc_stack(uint8_t* rdram, uint32_t size);
@@ -107,4 +112,5 @@ void psp_hle_register_kernel_thread();
 void psp_hle_register_kernel_memory();
 void psp_hle_register_kernel_sema();
 void psp_hle_register_kernel_mutex();
+void psp_hle_register_kernel_lwmutex();
 void psp_hle_register_kernel_eventflag();

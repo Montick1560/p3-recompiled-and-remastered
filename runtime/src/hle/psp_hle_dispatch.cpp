@@ -533,6 +533,7 @@ void psp_hle_register_all_modules() {
     // Kernel sync primitives (04-03)
     psp_hle_register_kernel_sema();
     psp_hle_register_kernel_mutex();
+    psp_hle_register_kernel_lwmutex();
     psp_hle_register_kernel_eventflag();
 
     // File I/O (04-04)

@@ -120,6 +120,7 @@ set(RUNTIME_SOURCES
     src/hle/psp_hle_kernel_memory.cpp
     src/hle/psp_hle_kernel_sema.cpp
     src/hle/psp_hle_kernel_mutex.cpp
+    src/hle/psp_hle_kernel_lwmutex.cpp
     src/hle/psp_hle_kernel_eventflag.cpp
     src/hle/psp_hle_io.cpp
     src/hle/psp_hle_display.cpp

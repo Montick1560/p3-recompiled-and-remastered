@@ -30,14 +30,26 @@ constexpr int32_t SCE_ERROR_ERRNO_ENOSPC         = (int32_t)0x8001001CU;
 // Kernel errors
 constexpr int32_t SCE_KERNEL_ERROR_OK            = 0;
 constexpr int32_t SCE_KERNEL_ERROR_ERROR         = (int32_t)0x80020001U;
+constexpr int32_t SCE_KERNEL_ERROR_ACCESS_ERROR  = (int32_t)0x8000020DU;
 constexpr int32_t SCE_KERNEL_ERROR_NO_MEMORY     = (int32_t)0x800200D8U;
 constexpr int32_t SCE_KERNEL_ERROR_ILLEGAL_ATTR  = (int32_t)0x800200CBU;
+constexpr int32_t SCE_KERNEL_ERROR_ILLEGAL_ADDR  = (int32_t)0x800200D3U;
 constexpr int32_t SCE_KERNEL_ERROR_ILLEGAL_THREAD  = (int32_t)0x800201BDU;
 constexpr int32_t SCE_KERNEL_ERROR_NOT_FOUND_THREAD = (int32_t)0x800201BEU;
 constexpr int32_t SCE_KERNEL_ERROR_WAIT_TIMEOUT  = (int32_t)0x800201A8U;
+constexpr int32_t SCE_KERNEL_ERROR_WAIT_DELETE   = (int32_t)0x800201B5U;
+constexpr int32_t SCE_KERNEL_ERROR_ILLEGAL_COUNT = (int32_t)0x800201BDU;
 constexpr int32_t SCE_KERNEL_ERROR_SEMA_ZERO     = (int32_t)0x800201AEU;
 constexpr int32_t SCE_KERNEL_ERROR_SEMA_OVERFLOW = (int32_t)0x800201AFU;
 constexpr int32_t SCE_KERNEL_ERROR_MUTEX_NOT_FOUND = (int32_t)0x800201C3U;
+// LwMutex errors (PPSSPP Core/HLE/ErrorCodes.h). The base TryLock variant
+// returns the plain-mutex TRYLOCK_FAILED code (PPSSPP parity).
+constexpr int32_t SCE_MUTEX_ERROR_TRYLOCK_FAILED    = (int32_t)0x800201C4U;
+constexpr int32_t SCE_LWMUTEX_ERROR_NO_SUCH_LWMUTEX = (int32_t)0x800201CAU;
+constexpr int32_t SCE_LWMUTEX_ERROR_NOT_LOCKED      = (int32_t)0x800201CCU;
+constexpr int32_t SCE_LWMUTEX_ERROR_LOCK_OVERFLOW   = (int32_t)0x800201CDU;
+constexpr int32_t SCE_LWMUTEX_ERROR_UNLOCK_UNDERFLOW = (int32_t)0x800201CEU;
+constexpr int32_t SCE_LWMUTEX_ERROR_ALREADY_LOCKED  = (int32_t)0x800201CFU;
 constexpr int32_t SCE_KERNEL_ERROR_EVF_NOT_FOUND = (int32_t)0x800201BFU;
 constexpr int32_t SCE_KERNEL_ERROR_NOT_FOUND_MODULE = (int32_t)0x80020196U;
 // MsgPipe errors (PPSSPP Core/HLE/ErrorCodes.h; match pspkerror.h)
@@ -153,6 +165,7 @@ void psp_hle_register_kernel_thread();
 void psp_hle_register_kernel_memory();
 void psp_hle_register_kernel_sema();
 void psp_hle_register_kernel_mutex();
+void psp_hle_register_kernel_lwmutex();
 void psp_hle_register_kernel_eventflag();
 
 // I/O module (04-04)

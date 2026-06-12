@@ -326,20 +326,22 @@ static void hle_sceKernelSleepThreadCB(
     hle_sceKernelSleepThread(rdram, ctx);
 }
 
-static void hle_sceKernelGetThreadId(
-    uint8_t* rdram, recomp_context* ctx
-) {
+int psp_current_thread_uid() {
     PspThread* t = psp_get_current_thread();
     if (t) {
         auto it = g_thid_to_uid.find(t->id);
         if (it != g_thid_to_uid.end()) {
-            ctx->r[2] = it->second;
-            (void)rdram;
-            return;
+            return it->second;
         }
     }
-    // Boot thread doesn't have a UID
-    ctx->r[2] = 0x100;
+    // Boot thread doesn't have a registered UID
+    return 0x100;
+}
+
+static void hle_sceKernelGetThreadId(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    ctx->r[2] = psp_current_thread_uid();
     (void)rdram;
 }
 
