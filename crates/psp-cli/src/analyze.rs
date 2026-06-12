@@ -263,41 +263,41 @@ pub fn run_analyze(
 
     if is_prx {
         let (type_a_phidxs, type_b_phidxs) = prx::find_reloc_segments(&elf_obj);
+        if !type_b_phidxs.is_empty() {
+            bail!(
+                "Type-B (0x700000A1) packed relocations not yet supported ({} program \
+                 header(s) reference them); see .planning/research/52-prx-format-spec.md §5",
+                type_b_phidxs.len()
+            );
+        }
         let mut type_a_entries = vec![];
         for idx in type_a_phidxs {
             let ph = &elf_obj.program_headers[idx];
-            let raw =
-                &raw_data[ph.p_offset as usize..(ph.p_offset + ph.p_filesz) as usize];
-            type_a_entries.extend(reloc::parse_type_a_entries(raw)?);
+            let start = ph.p_offset as usize;
+            let end = start
+                .checked_add(ph.p_filesz as usize)
+                .filter(|&end| end <= raw_data.len())
+                .with_context(|| {
+                    format!(
+                        "reloc table phdr[{idx}] out of file bounds: offset 0x{:X} + \
+                         size 0x{:X} exceeds file size 0x{:X}",
+                        ph.p_offset,
+                        ph.p_filesz,
+                        raw_data.len()
+                    )
+                })?;
+            type_a_entries.extend(reloc::parse_type_a_entries(&raw_data[start..end])?);
         }
         all_reloc_entries.extend(type_a_entries.iter().cloned());
 
-        let type_b_data: Vec<u8> = type_b_phidxs
-            .iter()
-            .flat_map(|&idx| {
-                let ph = &elf_obj.program_headers[idx];
-                raw_data[ph.p_offset as usize..(ph.p_offset + ph.p_filesz) as usize]
-                    .to_vec()
-            })
-            .collect();
-
-        let reloc_stats = reloc::apply_relocations(
-            &mut seg_data_vecs,
-            &seg_bases,
-            &type_a_entries,
-            &type_b_data,
-        )
-        .context("Relocation application failed")?;
+        let reloc_stats = reloc::apply_relocations(&mut seg_data_vecs, &seg_bases, &type_a_entries)
+            .context("Relocation application failed")?;
         tracing::info!(
-            "Applied {} relocations ({} unhandled types — see warnings above)",
+            "Applied {} relocations ({} skipped, {} unhandled types — see warnings above)",
             reloc_stats.handled,
+            reloc_stats.skipped_bad,
             reloc_stats.unhandled.len(),
         );
-
-        // Also collect Type-B entries for the JSON record
-        if !type_b_data.is_empty() {
-            all_reloc_entries.extend(reloc::parse_type_b_entries(&type_b_data)?);
-        }
     }
 
     // 5. Parse NIDs and import stubs
