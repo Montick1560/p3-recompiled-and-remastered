@@ -238,11 +238,22 @@ pub fn run_recompile(
     let prep = prepare_emission(analysis_path, opts.config_path.as_deref())?;
     let effective_batch_size = prep.config.functions_per_file.unwrap_or(opts.batch_size);
 
+    // Module facts (issue #47 Phase 2): resolve before anything is written —
+    // an analysis.json without them must fail loud, not emit a half-output.
+    let module_facts = module_facts_from_analysis(&prep.analysis, analysis_path)?;
+
     // Prepare output directories
     let gen_dir = output_dir.join("generated");
     let inc_dir = output_dir.join("include");
     std::fs::create_dir_all(&gen_dir)?;
     std::fs::create_dir_all(&inc_dir)?;
+
+    // Generated module-facts header consumed by the runtime boot path.
+    std::fs::write(
+        inc_dir.join("recomp_module.h"),
+        psp_emitter::emit_module_header(&module_facts),
+    )
+    .with_context(|| format!("Failed to write {}", inc_dir.join("recomp_module.h").display()))?;
 
     // Emit mid-entry wrappers
     let parent_name_map = build_parent_name_map(&prep.analysis.functions);
@@ -342,6 +353,60 @@ pub fn run_recompile(
 // -------------------------------------------------------------------------
 // Helpers
 // -------------------------------------------------------------------------
+
+/// Resolve [`psp_emitter::ModuleFacts`] from analysis.json (issue #47 P2).
+///
+/// Hard-errors with an actionable message when `module{}` is absent (the
+/// file predates Phase 2) or malformed — a silent fallback here would bake
+/// wrong constants into every runtime boot path.
+fn module_facts_from_analysis(
+    analysis: &AnalysisJson,
+    analysis_path: &Path,
+) -> anyhow::Result<psp_emitter::ModuleFacts> {
+    let module = analysis.module.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "{path} has no `module` facts block — it predates issue #47 Phase 2, \
+             so recomp_module.h (the runtime's boot facts) cannot be generated.\n\
+             Re-run analyze against the original binary:\n    \
+             cargo run --release -- analyze --ghidra-dir <ghidra>/libexec <BOOT.BIN> -o {path}\n\
+             For an augmented baseline you cannot regenerate wholesale, graft the \
+             block from a fresh analyze instead — see DEBUGGING.md \
+             \"Upgrading an analysis.json baseline (#47 Phase 2)\".",
+            path = analysis_path.display(),
+        )
+    })?;
+    let hex = |what: &str, s: &str| {
+        parse_hex_u32(s).ok_or_else(|| {
+            anyhow::anyhow!(
+                "analysis.json module.{what} is not a hex address: {s:?} — \
+                 re-run analyze (the block is machine-written, never hand-edited)"
+            )
+        })
+    };
+    let seg0 = analysis.segments.first().ok_or_else(|| {
+        anyhow::anyhow!(
+            "analysis.json has no segments[] — RECOMP_SEG0_* facts cannot be \
+             derived; re-run analyze against the original binary"
+        )
+    })?;
+    Ok(psp_emitter::ModuleFacts {
+        name: module.name.clone(),
+        entry: hex("entry", &module.entry)?,
+        gp: hex("gp", &module.gp)?,
+        text_start: hex("text_start", &module.text_start)?,
+        text_size: hex("text_size", &module.text_size)?,
+        seg0_vaddr: hex("(segments[0].p_vaddr)", &seg0.p_vaddr)?,
+        seg0_memsz: u32::try_from(seg0.p_memsz)
+            .map_err(|_| anyhow::anyhow!("segments[0].p_memsz exceeds u32"))?,
+        heap_base: hex("(heap_base)", &analysis.heap_base)?,
+        ctor_count: analysis.constructors.len() as u32,
+        first_ctor: analysis
+            .constructors
+            .first()
+            .and_then(|c| parse_hex_u32(c))
+            .unwrap_or(0),
+    })
+}
 
 /// Extract (start_vaddr, end_vaddr) range from decoded segment bytes.
 fn segment_range(segment_bytes: &[(u32, Vec<u8>)]) -> (u32, u32) {
@@ -1450,6 +1515,65 @@ fn remove_stale_batch_files(gen_dir: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use psp_parser::analysis_json::{JsonModuleInfo, JsonSegment};
+
+    fn analysis_with_module(module: Option<JsonModuleInfo>) -> AnalysisJson {
+        AnalysisJson {
+            binary_path: "BOOT.BIN".into(),
+            module_name: "boot".into(),
+            heap_base: "0x08AE0000".into(),
+            module,
+            prx: None,
+            functions: vec![],
+            imports: vec![],
+            relocations: vec![],
+            xrefs: vec![],
+            constructors: vec!["0x08804CE8".into(), "0x08804D00".into()],
+            mid_entries: vec![],
+            segments: vec![JsonSegment {
+                p_vaddr: "0x08804000".into(),
+                p_filesz: 0x244D30,
+                p_memsz: 0x2D8400,
+                p_flags: 7,
+                data_b64: String::new(),
+            }],
+        }
+    }
+
+    #[test]
+    fn module_facts_resolve_from_analysis() {
+        let analysis = analysis_with_module(Some(JsonModuleInfo {
+            name: "Labo".into(),
+            entry: "0x089ACCD0".into(),
+            gp: "0x08A50D20".into(),
+            text_start: "0x08804000".into(),
+            text_size: "0x001D4E04".into(),
+        }));
+        let facts =
+            module_facts_from_analysis(&analysis, Path::new("analysis.json")).unwrap();
+        assert_eq!(facts.name, "Labo");
+        assert_eq!(facts.entry, 0x089A_CCD0);
+        assert_eq!(facts.gp, 0x08A5_0D20);
+        assert_eq!(facts.text_start, 0x0880_4000);
+        assert_eq!(facts.text_size, 0x001D_4E04);
+        assert_eq!(facts.seg0_vaddr, 0x0880_4000);
+        assert_eq!(facts.seg0_memsz, 0x002D_8400);
+        assert_eq!(facts.heap_base, 0x08AE_0000);
+        assert_eq!(facts.ctor_count, 2);
+        assert_eq!(facts.first_ctor, 0x0880_4CE8);
+    }
+
+    #[test]
+    fn missing_module_block_is_an_actionable_hard_error() {
+        let analysis = analysis_with_module(None);
+        let err = module_facts_from_analysis(&analysis, Path::new("old/analysis.json"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("old/analysis.json"), "names the offending file: {err}");
+        assert!(err.contains("re-run analyze") || err.contains("Re-run analyze"),
+            "tells the user the fix: {err}");
+        assert!(err.contains("DEBUGGING.md"), "points at the upgrade doc: {err}");
+    }
 
     fn emit_with_words(words: &[u32]) -> (String, EmitDiagnostics) {
         let base = 0x0880_4000u32;
