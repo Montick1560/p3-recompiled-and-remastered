@@ -421,17 +421,34 @@ void ge_transform_vertices(
     if (through) {
         // Through-mode: map screen coords to NDC [-1,1]
         // PSP screen is 480x272
+        //
+        // Through-mode UVs arrive in TEXEL units (e.g. 64.0 for a
+        // 128-wide texture), but GL samples in normalized [0,1]
+        // coords. PPSSPP normalizes by the texture dimensions
+        // (GPU/Common/SoftwareTransformCommon.cpp: uscale /=
+        // curTextureWidth; vscale /= curTextureHeight). Without
+        // this, every content UV >= 1.0 clamps to the bottom-right
+        // texel under GL_CLAMP_TO_EDGE -> textured 2D content
+        // discards. tex_size[0] packs log2 dims: log2_w | (log2_h<<8).
+        const float texw = static_cast<float>(
+            1u << (state.tex_size[0] & 0xFFu));
+        const float texh = static_cast<float>(
+            1u << ((state.tex_size[0] >> 8) & 0xFFu));
         for (auto& v : verts) {
             v.pos[0] = v.pos[0] / 240.0f - 1.0f;
             v.pos[1] = 1.0f - v.pos[1] / 136.0f;
             v.pos[2] = v.pos[2] / 65535.0f;
 
-            // Apply tex scale/offset
+            // Apply tex scale/offset, then texel -> [0,1] normalize.
             if (v.has_uv) {
                 v.uv[0] = v.uv[0] * state.tex_scale_u
                           + state.tex_offset_u;
                 v.uv[1] = v.uv[1] * state.tex_scale_v
                           + state.tex_offset_v;
+                if (state.texture_enable) {
+                    if (texw > 0.0f) v.uv[0] /= texw;
+                    if (texh > 0.0f) v.uv[1] /= texh;
+                }
             }
         }
     } else {

@@ -281,6 +281,29 @@ target_compile_options(test_refer_info PRIVATE
 
 add_test(NAME refer_info_tests COMMAND test_refer_info)
 
+# GE vertex transform unit test target (dothack-L6c fix). Links the real
+# psp_ge_vertex.cpp and calls ge_transform_vertices directly to verify
+# through-mode UV texel->[0,1] normalization. No SDL2/GL/scheduler deps
+# (the function is pure float math); only needs recomp.h for the TU.
+add_executable(test_ge_vertex
+    tests/test_ge_vertex.cpp
+    src/psp_ge_vertex.cpp
+)
+
+target_include_directories(test_ge_vertex PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${PSPRECOMP_OUTPUT_DIR}/include  # recomp.h (psp_mem_read/write)
+)
+
+target_compile_options(test_ge_vertex PRIVATE
+    -O2
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+
+add_test(NAME ge_vertex_tests COMMAND test_ge_vertex)
+
 # BND parser unit test target (mirrors test_vfpu convention: no SDL2/GL,
 # links the parser plus psp_memory + system zlib only). The BND layer is
 # part of the Patapon game module (issue #47 Phase 5), so the target only
