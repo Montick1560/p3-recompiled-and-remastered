@@ -1,5 +1,6 @@
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_kernel.h"
+#include "hle/psp_hle_refer_info.h"
 #include "psp_scheduler.h"
 #include "psp_memory.h"
 #include "recomp.h"
@@ -34,10 +35,10 @@ static void hle_sceKernelCreateEventFlag(
     int32_t attr = ctx->r[5];
     uint32_t init_pattern = static_cast<uint32_t>(ctx->r[6]);
 
-    (void)attr;
-
     auto ef = std::make_unique<PspEventFlag>();
     ef->uid = psp_next_uid();
+    ef->attr = static_cast<uint32_t>(attr);
+    ef->init_pattern = init_pattern;
     ef->pattern = init_pattern;
     std::memset(ef->name, 0, sizeof(ef->name));
 
@@ -183,9 +184,13 @@ static void hle_sceKernelWaitEventFlag(
     std::unique_lock<std::mutex> lock(ef->mtx);
 
     auto wait_start = std::chrono::steady_clock::now();
+    // Waiter census for sceKernelReferEventFlagStatus's numWaitThreads
+    // (read-side bookkeeping only — no control-flow change).
+    ef->num_wait_threads++;
     bool matched = ef->cv.wait_for(lock, std::chrono::seconds(5), [&] {
         return pattern_matches(ef->pattern, bits, wait_mode);
     });
+    ef->num_wait_threads--;
     auto wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - wait_start).count();
 
@@ -256,6 +261,9 @@ static void hle_sceKernelPollEventFlag(
 static void hle_sceKernelReferEventFlagStatus(
     uint8_t* rdram, recomp_context* ctx
 ) {
+    // PPSSPP-faithful SceKernelEventFlagInfo fill (NativeEventFlag, 52B —
+    // sceKernelEventFlag.cpp:35/521). NO per-call logging (GUARD G3): the
+    // .hack worker pump's release path calls this in a polling loop.
     int uid = ctx->r[4];
     uint32_t info_ptr = static_cast<uint32_t>(ctx->r[5]);
 
@@ -264,15 +272,23 @@ static void hle_sceKernelReferEventFlagStatus(
         ctx->r[2] = SCE_KERNEL_ERROR_EVF_NOT_FOUND;
         return;
     }
-
-    auto& ef = it->second;
-    if (info_ptr != 0) {
-        psp_mem_write<int32_t>(rdram, info_ptr, 64);  // size
-        // pattern at offset 28
-        psp_mem_write<uint32_t>(
-            rdram, info_ptr + 28, ef->pattern);
+    if (info_ptr == 0) {
+        ctx->r[2] = -1;  // PPSSPP: invalid pointer -> -1
+        return;
     }
 
+    auto& ef = it->second;
+    PspNativeEventFlagImage img{};
+    img.size = sizeof(img);  // 52
+    {
+        std::unique_lock<std::mutex> lock(ef->mtx);
+        std::strncpy(img.name, ef->name, sizeof(img.name) - 1);
+        img.attr = ef->attr;
+        img.init_pattern = ef->init_pattern;
+        img.current_pattern = ef->pattern;
+        img.num_wait_threads = ef->num_wait_threads;
+    }
+    psp_write_eventflag_info(rdram, info_ptr, img);
     ctx->r[2] = SCE_OK;
 }
 

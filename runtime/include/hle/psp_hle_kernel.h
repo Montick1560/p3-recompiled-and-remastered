@@ -57,7 +57,10 @@ struct PspMutex {
 struct PspEventFlag {
     int uid;
     char name[32];
-    uint32_t pattern;  // current bit pattern
+    uint32_t attr = 0;          // creation attr (guest-visible via Refer)
+    uint32_t init_pattern = 0;  // creation pattern (guest-visible via Refer)
+    uint32_t pattern;           // current bit pattern
+    int num_wait_threads = 0;   // live WaitEventFlag waiters; guarded by mtx
     std::mutex mtx;
     std::condition_variable cv;
 };
