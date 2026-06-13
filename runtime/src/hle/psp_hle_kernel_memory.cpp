@@ -173,9 +173,20 @@ static void hle_sceKernelPrintf(
     ctx->r[2] = SCE_OK;
 }
 
+// Compiled SDK version (mirrors PPSSPP sceKernelMemory.cpp sdkVersion_):
+// recorded by the sceKernelSetCompiledSdkVersion* family, read by
+// sceKernelReferThreadStatus to pick the 104- vs 108-byte
+// SceKernelThreadInfo protocol (gate: version > 0x02060010). 0 = never set.
+static uint32_t g_compiled_sdk_version = 0;
+
+uint32_t psp_kernel_compiled_sdk_version() {
+    return g_compiled_sdk_version;
+}
+
 static void hle_sceKernelSetCompiledSdkVersion(
     uint8_t* rdram, recomp_context* ctx
 ) {
+    g_compiled_sdk_version = static_cast<uint32_t>(ctx->r[4]);
     ctx->r[2] = SCE_OK;
     (void)rdram;
 }

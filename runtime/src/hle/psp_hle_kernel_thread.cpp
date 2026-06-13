@@ -1,5 +1,6 @@
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_kernel.h"
+#include "hle/psp_hle_refer_info.h"
 #include "psp_scheduler.h"
 #include "psp_memory.h"
 #include "psp_game_module.h"
@@ -89,6 +90,7 @@ static void hle_sceKernelCreateThread(
     uint32_t entry    = static_cast<uint32_t>(ctx->r[5]);
     int32_t  priority = ctx->r[6];
     uint32_t stack_sz = static_cast<uint32_t>(ctx->r[7]);
+    uint32_t attr     = static_cast<uint32_t>(ctx->r[8]);  // t0 = arg 5
 
     const char* name = reinterpret_cast<const char*>(
         rdram + (name_ptr & PSP_ADDR_MASK));
@@ -114,6 +116,9 @@ static void hle_sceKernelCreateThread(
     info.stack_base = stack_top;
     info.stack_size = stack_sz;
     info.priority = priority;
+    // PSP firmware ORs 0xFF into the attr on create (PPSSPP
+    // sceKernelThread.cpp:1745); guest-visible via ReferThreadStatus.
+    info.attr = attr | 0xFF;
     std::strncpy(info.name, name, sizeof(info.name) - 1);
 
     g_thread_by_uid[uid] = info;
@@ -345,21 +350,113 @@ static void hle_sceKernelGetThreadId(
     (void)rdram;
 }
 
+// psp_encode_thread_status (psp_hle_refer_info.h) maps these internal
+// values by number; pin them so silent enum edits cannot skew the map.
+// GUARD G1: internal DEAD(4) == PSP THREADSTATUS_WAIT(4) — never cast
+// through, always map.
+static_assert(DORMANT == 0 && READY == 1 && RUNNING == 2 && WAIT == 3 &&
+              DEAD == 4 && WAIT_SLEEP == 5,
+              "update psp_encode_thread_status when ThreadStatus changes");
+
+/// Build the guest-visible SceKernelThreadInfo image for a registered
+/// thread. Genuinely tracked fields: name, attr, entry, stack base/size,
+/// gp, initial/current priority, status + waitType (explicit map),
+/// wakeupCount. Untracked fields and their PSP-plausible defaults:
+///   waitID            -> 0 (sema/eventflag wait-id tracking is a later leg)
+///   exitStatus        -> SCE_KERNEL_ERROR_DORMANT before start (PPSSPP
+///                        creation value), 0 once exited (real exit values
+///                        are not recorded), NOT_DORMANT while alive
+///   runClocks,
+///   preempt/release   -> 0 (PPSSPP initializes all of them to 0)
+static PspNativeThreadImage build_thread_info_image(
+    const PspThreadInfo& info
+) {
+    PspNativeThreadImage img{};
+    std::strncpy(img.name, info.name, sizeof(img.name) - 1);
+    img.attr = info.attr;
+    img.entry = info.entry_addr;
+    img.stack = info.stack_base;
+    img.stack_size = info.stack_size;
+    img.gp = psp_get_boot_module_gp();
+    img.init_priority = info.priority;
+    img.current_priority = info.priority;
+
+    int internal = DORMANT;
+    PspThread* pt = psp_get_thread(info.thid);
+    if (pt) {
+        internal = pt->status;       // racy read OK (diagnostic convention)
+        img.current_priority = pt->priority;
+        img.wakeup_count = pt->wakeup_count;
+    }
+    PspThreadStatusEncoding enc = psp_encode_thread_status(internal);
+    img.status = enc.status;
+    img.wait_type = enc.wait_type;
+    if (internal == DORMANT) {
+        img.exit_status = PSP_ERROR_DORMANT;
+    } else if (internal == DEAD) {
+        img.exit_status = 0;
+    } else {
+        img.exit_status = PSP_ERROR_NOT_DORMANT;
+    }
+    return img;
+}
+
+/// Image for the unregistered boot thread (no PspThreadInfo record): a
+/// plausible RUNNING user thread.
+static PspNativeThreadImage boot_thread_image() {
+    PspNativeThreadImage img{};
+    std::strncpy(img.name, "boot", sizeof(img.name) - 1);
+    img.attr = 0x800000FFU;  // PSP_THREAD_ATTR_USER | firmware 0xFF
+    img.gp = psp_get_boot_module_gp();
+    img.init_priority = 32;
+    img.current_priority = 32;
+    img.status = PSP_THREADSTATUS_RUNNING;
+    img.wait_type = PSP_WAITTYPE_NONE;
+    img.exit_status = PSP_ERROR_NOT_DORMANT;
+    return img;
+}
+
 static void hle_sceKernelReferThreadStatus(
     uint8_t* rdram, recomp_context* ctx
 ) {
+    // HOT PATH (GUARD G3): .hack//Link's frame pump polls this ~250k/s
+    // while a worker is busy. NO logging here, ever — call tracing is the
+    // dispatch layer's PSPRECOMP_HLE_TRACE job.
     int uid = ctx->r[4];
     uint32_t info_ptr = static_cast<uint32_t>(ctx->r[5]);
+    bool sdk_after_260 = psp_kernel_compiled_sdk_version() > 0x02060010U;
 
-    if (info_ptr != 0) {
-        // Write minimal SceKernelThreadInfo: size field at offset 0
-        psp_mem_write<int32_t>(rdram, info_ptr, 104);  // struct size
-        // Status at offset 8: RUNNING=2
-        psp_mem_write<int32_t>(rdram, info_ptr + 8, 2);
+    const PspThreadInfo* info = nullptr;
+    if (uid == 0) {
+        // uid 0 = calling thread. GUARD G4: resolve via the current thread,
+        // never via uid 0x100 (the unregistered boot thread also reports
+        // 0x100, colliding with the first registered thread).
+        PspThread* cur = psp_get_current_thread();
+        if (cur) {
+            auto u = g_thid_to_uid.find(cur->id);
+            if (u != g_thid_to_uid.end()) {
+                auto it = g_thread_by_uid.find(u->second);
+                if (it != g_thread_by_uid.end()) {
+                    info = &it->second;
+                }
+            }
+        }
+        if (!info) {
+            ctx->r[2] = psp_write_thread_info(
+                rdram, info_ptr, sdk_after_260, boot_thread_image());
+            return;
+        }
+    } else {
+        auto it = g_thread_by_uid.find(uid);
+        if (it == g_thread_by_uid.end()) {
+            // PPSSPP-faithful: unknown uid -> error, write nothing.
+            ctx->r[2] = SCE_KERNEL_ERROR_NOT_FOUND_THREAD;
+            return;
+        }
+        info = &it->second;
     }
-
-    ctx->r[2] = SCE_OK;
-    (void)uid;
+    ctx->r[2] = psp_write_thread_info(
+        rdram, info_ptr, sdk_after_260, build_thread_info_image(*info));
 }
 
 static void hle_sceKernelChangeThreadPriority(

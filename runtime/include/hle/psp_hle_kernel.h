@@ -14,7 +14,8 @@ struct PspThreadInfo {
     uint32_t entry_addr;
     uint32_t stack_base;
     uint32_t stack_size;
-    int priority;
+    int priority;      // initial priority (creation value)
+    uint32_t attr;     // creation attr | 0xFF (PSP firmware OR, PPSSPP :1745)
     char name[32];
 };
 
@@ -98,6 +99,11 @@ int psp_next_uid();
 /// returns): the registered thread UID, or 0x100 for the boot thread.
 /// LwMutex workareas store this value as the guest-readable owner id.
 int psp_current_thread_uid();
+
+/// Compiled SDK version recorded by the sceKernelSetCompiledSdkVersion*
+/// family (0 if the game never set one — PPSSPP sceKernelMemory.cpp
+/// sdkVersion_). Gates sceKernelReferThreadStatus's 104/108 size protocol.
+uint32_t psp_kernel_compiled_sdk_version();
 
 // ---- Stack Allocator ----
 // Allocates guest stack from top of PSP user memory downward.
