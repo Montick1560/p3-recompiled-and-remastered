@@ -34,15 +34,20 @@ pub fn run_ghidra_analysis(
         .to_str()
         .context("script directory path not UTF-8")?
         .to_owned();
-    let headless = ghidra_dir.join("support/analyzeHeadless");
+    let headless = if cfg!(windows) {
+        ghidra_dir.join("support/analyzeHeadless.bat")
+    } else {
+        ghidra_dir.join("support/analyzeHeadless")
+    };
 
     // Ghidra aborts if the project parent directory doesn't exist (e.g. a
     // fresh boot cleared /tmp) — create it instead of failing cryptically.
-    std::fs::create_dir_all("/tmp/ghidra_projects")
-        .context("Failed to create /tmp/ghidra_projects")?;
+    let project_dir = std::env::temp_dir().join("ghidra_projects");
+    std::fs::create_dir_all(&project_dir)
+        .with_context(|| format!("Failed to create {}", project_dir.display()))?;
 
     let mut args: Vec<String> = [
-        "/tmp/ghidra_projects",
+        project_dir.to_str().context("temp dir path not UTF-8")?,
         "psprecomp_analysis",
         "-import",
         binary.to_str().context("binary path not UTF-8")?,
