@@ -65,3 +65,6 @@ data/
 
 # Issue-52 integration gate scratch outputs
 tmp-out/
+
+# Python bytecode from script tests
+__pycache__/

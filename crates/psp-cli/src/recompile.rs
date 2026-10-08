@@ -154,7 +154,7 @@ pub(crate) fn prepare_emission_with(
     // gap addresses become functions, addresses inside a main function become
     // mid-entries of it, known ones are ignored.
     let (extra_force, extra_mid) =
-        classify_extra_entries(&analysis.functions, &analysis.mid_entries, extra_entries);
+        classify_extra_entries(&analysis.functions, &analysis.mid_entries, &segment_bytes, extra_entries);
     if !extra_entries.is_empty() {
         tracing::info!(
             "Extra entries from overlay banks: {} new functions, {} new mid-entries",
@@ -180,6 +180,14 @@ pub(crate) fn prepare_emission_with(
     // observed as repeated LOOKUP_MISS in the runtime. Mirrors force_entries but
     // for mid-function entry points inside an existing parent function.
     inject_force_mid_entries(&mut analysis, &force_mid_entries);
+
+    // Discovery may split or resize functions (forced/extra entries, gap
+    // starts, frameless growth): keep every mid-entry attached to the
+    // function that now contains it.
+    let reparented = reparent_mid_entries(&analysis.functions, &mut analysis.mid_entries);
+    if reparented > 0 {
+        tracing::info!("Re-parented or dropped {reparented} mid-entries after discovery");
+    }
 
     // Switch tables Ghidra left without DATA xrefs (e.g. in code overlays):
     // synthesize table-entry -> case xrefs from the standard MIPS idiom so the
@@ -441,6 +449,10 @@ pub fn run_recompile(
     // decode error and statically-emitted RECOMP_LOOKUP target for the report.
     let decode_errors: Mutex<Vec<DecodeErrorEntry>> = Mutex::new(Vec::new());
     let lookup_targets: Mutex<HashSet<u32>> = Mutex::new(HashSet::new());
+    // Targets called from Ghidra-identified (real) code only: what a bank
+    // exports to the main build. Heuristic "functions" decoded from data make
+    // calls to arbitrary addresses that must not become main entries.
+    let real_code_targets: Mutex<HashSet<u32>> = Mutex::new(HashSet::new());
 
     // Batch emit (parallel via rayon inside emit_function_batches)
     let batch_output = emit_function_batches(
@@ -458,6 +470,9 @@ pub fn run_recompile(
                 });
             }
             if !diag.static_lookup_targets.is_empty() {
+                if func.source == "ghidra" {
+                    real_code_targets.lock().unwrap().extend(diag.static_lookup_targets.iter().copied());
+                }
                 lookup_targets.lock().unwrap().extend(diag.static_lookup_targets);
             }
             cpp
@@ -472,15 +487,12 @@ pub fn run_recompile(
         .with_context(|| format!("hash {}", analysis_path.display()))?;
     let module_name = &prep.analysis.module_name;
     if let Some((_, lo, hi, ..)) = &bank {
-        let targets = lookup_targets.lock().unwrap();
-        let mut entries: Vec<u32> = main_side_ghidra
-            .iter()
-            .copied()
-            .chain(targets.iter().copied().filter(|&a| a < *lo || a >= *hi))
-            .collect();
-        entries.sort_unstable();
-        entries.dedup();
-        write_main_entries(&output_dir.join("main_entries.json"), &entries)?;
+        let targets = real_code_targets.lock().unwrap();
+        let mut calls: Vec<u32> =
+            targets.iter().copied().filter(|&a| a < *lo || a >= *hi).collect();
+        calls.sort_unstable();
+        main_side_ghidra.sort_unstable();
+        write_main_entries(&output_dir.join("main_entries.json"), &calls, &main_side_ghidra)?;
     }
     if let Some((name, lo, hi, id, ranges, hash)) = &bank {
         let info = psp_emitter::bank::BankInfo {
@@ -1656,6 +1668,45 @@ fn skip_nop_padding(segment_bytes: &[(u32, Vec<u8>)], addr: u32, limit: u32) -> 
     addr
 }
 
+/// Point every mid-entry at the function that contains it after discovery
+/// may have split or resized functions; drop mid-entries that are now
+/// function starts or lie in no function. Returns how many changed.
+fn reparent_mid_entries(functions: &[JsonFunction], mid_entries: &mut Vec<JsonMidEntry>) -> usize {
+    let mut spans: Vec<(u32, u32)> = functions
+        .iter()
+        .filter_map(|f| {
+            let a = parse_hex_u32(&f.address)?;
+            Some((a, a.saturating_add(f.size as u32)))
+        })
+        .collect();
+    spans.sort_unstable();
+    let starts: HashSet<u32> = spans.iter().map(|s| s.0).collect();
+    let mut changed = 0;
+    mid_entries.retain_mut(|m| {
+        let Some(a) = parse_hex_u32(&m.addr) else { return true };
+        if starts.contains(&a) {
+            changed += 1;
+            return false;
+        }
+        let idx = spans.partition_point(|s| s.0 <= a);
+        match idx.checked_sub(1).map(|i| spans[i]) {
+            Some((start, end)) if a > start && a < end => {
+                let parent = format!("0x{start:08X}");
+                if parse_hex_u32(&m.parent_addr) != Some(start) {
+                    m.parent_addr = parent;
+                    changed += 1;
+                }
+                true
+            }
+            _ => {
+                changed += 1;
+                false
+            }
+        }
+    });
+    changed
+}
+
 /// Split overlay-discovered main-side addresses against the main analysis:
 /// returns (new function starts in gaps, new (mid-entry, parent) pairs for
 /// addresses strictly inside a main function). Known starts/mid-entries are
@@ -1663,8 +1714,18 @@ fn skip_nop_padding(segment_bytes: &[(u32, Vec<u8>)], addr: u32, limit: u32) -> 
 fn classify_extra_entries(
     functions: &[JsonFunction],
     mid_entries: &[JsonMidEntry],
+    segment_bytes: &[(u32, Vec<u8>)],
     addrs: &[u32],
 ) -> (Vec<u32>, Vec<(u32, u32)>) {
+    // `j`, `jr`, or `b` (beq zero,zero) two words back: the previous code ended
+    // with an unconditional transfer + delay slot, so `a` starts a function
+    // Ghidra merged into its tail-calling predecessor.
+    let after_transfer = |a: u32| {
+        read_image_range(segment_bytes, a.wrapping_sub(8), 4).ok().is_some_and(|b| {
+            let w = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+            (w >> 26) == 0x02 || ((w >> 26) == 0 && (w & 0x3F) == 0x08) || (w >> 16) == 0x1000
+        })
+    };
     let mut spans: Vec<(u32, u32)> = functions
         .iter()
         .filter_map(|f| {
@@ -1689,16 +1750,23 @@ fn classify_extra_entries(
         }
         let idx = spans.partition_point(|s| s.0 <= a);
         match idx.checked_sub(1).map(|i| spans[i]) {
-            Some((start, end)) if a > start && a < end => mids.push((a, start)),
+            Some((start, end)) if a > start && a < end && !after_transfer(a) => {
+                mids.push((a, start))
+            }
             _ => force.push(a),
         }
     }
     (force, mids)
 }
 
-fn write_main_entries(path: &Path, entries: &[u32]) -> anyhow::Result<()> {
-    let hex: Vec<String> = entries.iter().map(|a| format!("0x{a:08X}")).collect();
-    let json = serde_json::json!({ "entries": hex });
+/// `call_targets`: static targets bank code calls outside the window (what
+/// the main build imports). `ghidra_functions`: main-side functions the
+/// combined analysis found, kept for diagnosis only — importing them all
+/// regressed Patapon 3 (some are starts Ghidra inferred from overlay jumps
+/// into the middle of main functions).
+fn write_main_entries(path: &Path, calls: &[u32], ghidra: &[u32]) -> anyhow::Result<()> {
+    let hex = |v: &[u32]| v.iter().map(|a| format!("0x{a:08X}")).collect::<Vec<_>>();
+    let json = serde_json::json!({ "call_targets": hex(calls), "ghidra_functions": hex(ghidra) });
     std::fs::write(path, serde_json::to_string_pretty(&json)?)
         .with_context(|| format!("Failed to write {}", path.display()))
 }
@@ -1708,9 +1776,9 @@ fn read_main_entries(path: &Path) -> anyhow::Result<Vec<u32>> {
         .with_context(|| format!("Cannot read {}", path.display()))?;
     let v: serde_json::Value = serde_json::from_str(&text)
         .with_context(|| format!("{} is not JSON", path.display()))?;
-    v["entries"]
+    v["call_targets"]
         .as_array()
-        .ok_or_else(|| anyhow::anyhow!("{} has no \"entries\" array", path.display()))?
+        .ok_or_else(|| anyhow::anyhow!("{} has no \"call_targets\" array", path.display()))?
         .iter()
         .map(|e| {
             e.as_str()
@@ -1959,19 +2027,44 @@ mod tests {
     }
 
     #[test]
+    fn reparent_mid_entries_follows_function_splits() {
+        // F [0x1000,0x1040) was split by a new function at 0x1020 [0x1020,0x1040):
+        // a mid-entry at 0x1030 now belongs to 0x1020; one at 0x1020 is a
+        // function start (dropped); 0x1010 keeps its parent; 0x5000 has no owner.
+        let mut f = wfn(0x1000); f.size = 0x20;
+        let mut g = wfn(0x1020); g.size = 0x20;
+        let mut mids = vec![
+            wmid(0x1010, 0x1000), wmid(0x1020, 0x1000), wmid(0x1030, 0x1000), wmid(0x5000, 0x1000),
+        ];
+        let changed = reparent_mid_entries(&[f, g], &mut mids);
+        let got: Vec<(String, String)> = mids.iter().map(|m| (m.addr.clone(), m.parent_addr.clone())).collect();
+        assert_eq!(got, vec![
+            ("0x00001010".to_string(), "0x00001000".to_string()),
+            ("0x00001030".to_string(), "0x00001020".to_string()),
+        ]);
+        assert_eq!(changed, 3);
+    }
+
+    #[test]
     fn classify_extra_entries_splits_gap_and_inside() {
         // main: F1 [0x1000, 0x1010), F2 [0x2000, 0x2100) with mid 0x2040.
+        // In F2, 0x2080 follows `j ...; nop` (a merged tail-called function:
+        // a real start), 0x20C0 follows ordinary code (a mid-entry).
         let mut f1 = wfn(0x1000);
         f1.size = 0x10;
         let mut f2 = wfn(0x2000);
         f2.size = 0x100;
         let funcs = vec![f1, f2];
         let mids = vec![wmid(0x2040, 0x2000)];
+        let mut words = vec![0x0000_0000u32; 0x40];
+        words[(0x2078 - 0x2000) / 4] = 0x0800_0400; // j 0x1000
+        words[(0x20B8 - 0x2000) / 4] = 0x2484_0001; // addiu a0, a0, 1
+        let segs = vec![(0x2000u32, words.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>())];
         let (force, mid) = classify_extra_entries(
-            &funcs, &mids, &[0x1000, 0x1018, 0x2040, 0x2080, 0x3000],
+            &funcs, &mids, &segs, &[0x1000, 0x1018, 0x2040, 0x2080, 0x20C0, 0x3000],
         );
-        assert_eq!(force, vec![0x1018, 0x3000], "gap entries become functions");
-        assert_eq!(mid, vec![(0x2080, 0x2000)], "inside entries become mid-entries");
+        assert_eq!(force, vec![0x1018, 0x2080, 0x3000], "gap and post-jump entries become functions");
+        assert_eq!(mid, vec![(0x20C0, 0x2000)], "other inside entries become mid-entries");
     }
 
     #[test]
