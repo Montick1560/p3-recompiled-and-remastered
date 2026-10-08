@@ -44,6 +44,7 @@ static void load_overlay(std::vector<uint8_t>& ram, uint32_t id, uint8_t fill) {
 }
 
 static const uint32_t k_addrs[] = {LO + 0x40, LO + 0x80};
+static const uint32_t k_ranges[] = {LO + 0x40, LO + 0x40 + TEXT};  // code only
 static const FuncPtr k_fns[] = {fn_a, fn_b};
 
 int main() {
@@ -51,7 +52,7 @@ int main() {
 
     load_overlay(ram, 1, 0xAB);
     static const PspOverlayBank bank = {
-        "ovTest", 1, LO, HI, 0x40 + TEXT, fnv1a64(window(ram), 0x40 + TEXT),
+        "ovTest", 1, LO, HI, k_ranges, 1, fnv1a64(window(ram) + 0x40, TEXT),
         k_addrs, k_fns, 2,
     };
     psp_overlay_reset_for_tests();
@@ -77,6 +78,12 @@ int main() {
     ASSERT_TRUE(psp_overlay_resolve(ram.data(), LO + 0x40, &out)
                 == PspOverlayStatus::HashMismatch, "code differs from the compiled bank");
 
+    load_overlay(ram, 1, 0xAB);
+    window(ram)[0x20] = 0x5A;  // header link field rewritten by the loader
+    ASSERT_TRUE(psp_overlay_resolve(ram.data(), LO + 0x40, &out) == PspOverlayStatus::Found,
+                "bytes outside the hashed code ranges do not matter");
+
+    load_overlay(ram, 2, 0xAB);  // switch away, then back
     load_overlay(ram, 1, 0xAB);  // the right overlay again
     ASSERT_TRUE(psp_overlay_resolve(ram.data(), LO + 0x40, &out) == PspOverlayStatus::Found
                 && out == fn_a, "reloading the matching overlay resolves again");

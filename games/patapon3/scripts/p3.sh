@@ -20,6 +20,8 @@ BUILD="$DECO/build/rtw"
 RUNTIME="${P3_RUNTIME:-$BUILD/psprecomp_runtime.exe}"   # overridable for tests
 RUNTIME_ARGS="${P3_RUNTIME_ARGS:-}"
 LOGS="$DECO/build/logs"
+OVERLAYS=(Azito Mission Title)
+OVL="$DECO/build/ovl"
 
 die() { echo "p3.sh: error: $*" >&2; exit 1; }
 need_file() { [[ -f "$1" ]] || die "$2"; }
@@ -55,12 +57,16 @@ cmd_recompile() {
     need_file "$ANALYSIS" "analysis.json missing — run: p3.sh analyze"
     (cd "$REPO" && cargo build --release -q)
     rm -rf "$OUT"   # stale batch_*.cpp files break the link (CMake globs them)
+    # Main-side entries only overlay code reaches (written by `overlays`).
+    local extra=() name
+    for name in "${OVERLAYS[@]}"; do
+        if [[ -f "$OVL/ov${name}_output/main_entries.json" ]]; then
+            extra+=(--extra-entries "$OVL/ov${name}_output/main_entries.json")
+        fi
+    done
     (cd "$REPO" && PSPRECOMP_CROSS_MID=1 ./target/release/psprecomp recompile "$ANALYSIS" \
-        --config games/patapon3/game.toml -o "$OUT" 2>&1 | tail -1)
+        --config games/patapon3/game.toml "${extra[@]}" -o "$OUT" 2>&1 | tail -1)
 }
-
-OVERLAYS=(Azito Mission Title)
-OVL="$DECO/build/ovl"
 
 # Each code overlay: combined ELF (EBOOT + overlay in its window) -> analyze
 # (Ghidra result cached by input hash) -> recompile --bank ov<Name>.
@@ -150,6 +156,6 @@ case "${1:-}" in
     recompile) cmd_recompile ;;
     build)     cmd_build ;;
     run)       shift; cmd_run "${1:-60}" ;;
-    all)       cmd_extract; cmd_analyze; cmd_recompile; cmd_overlays; cmd_build; cmd_run 60 ;;
+    all)       cmd_extract; cmd_analyze; cmd_overlays; cmd_recompile; cmd_build; cmd_run 60 ;;
     *) echo "usage: $0 {extract|analyze|recompile|overlays|build|run [seconds]|all}" >&2; exit 2 ;;
 esac

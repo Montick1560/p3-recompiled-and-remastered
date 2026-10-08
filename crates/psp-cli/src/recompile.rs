@@ -91,6 +91,9 @@ pub struct RecompileOptions {
     /// `--bank <name>`: emit only the overlay window as a self-registering
     /// bank (requires `[overlays] window` in the manifest).
     pub bank: Option<String>,
+    /// `--extra-entries <json>`: main-side entry addresses discovered by
+    /// overlay bank builds (`main_entries.json`), imported into the main build.
+    pub extra_entries: Vec<std::path::PathBuf>,
 }
 
 /// Everything the per-function emit closure consumes, computed once from
@@ -117,7 +120,7 @@ pub(crate) fn prepare_emission(
     analysis_path: &Path,
     config_path: Option<&Path>,
 ) -> anyhow::Result<PreparedEmission> {
-    prepare_emission_with(analysis_path, config_path, None)
+    prepare_emission_with(analysis_path, config_path, None, &[])
 }
 
 /// `prepare_emission`, optionally forcing the code-overlay constructor table
@@ -127,6 +130,7 @@ pub(crate) fn prepare_emission_with(
     analysis_path: &Path,
     config_path: Option<&Path>,
     bank: Option<&str>,
+    extra_entries: &[u32],
 ) -> anyhow::Result<PreparedEmission> {
     let mut analysis = load_analysis(analysis_path)?;
     let config = load_config(config_path)?;
@@ -146,8 +150,22 @@ pub(crate) fn prepare_emission_with(
             force_entries.extend(ctors);
         }
     }
+    // Main-side entries only overlay code reaches (imported from bank builds):
+    // gap addresses become functions, addresses inside a main function become
+    // mid-entries of it, known ones are ignored.
+    let (extra_force, extra_mid) =
+        classify_extra_entries(&analysis.functions, &analysis.mid_entries, extra_entries);
+    if !extra_entries.is_empty() {
+        tracing::info!(
+            "Extra entries from overlay banks: {} new functions, {} new mid-entries",
+            extra_force.len(),
+            extra_mid.len()
+        );
+    }
+    force_entries.extend(extra_force);
     let force_entries_cross_mid = config.force_entries_cross_mid()?;
-    let force_mid_entries = config.force_mid_entries(bank)?;
+    let mut force_mid_entries = config.force_mid_entries(bank)?;
+    force_mid_entries.extend(extra_mid);
 
     // Enhanced function discovery: three-pass scan replaces vtable_miss_addresses.txt sidecar
     let discovery = enhance_function_discovery(
@@ -299,25 +317,49 @@ pub fn run_recompile(
     output_dir: &Path,
     opts: &RecompileOptions,
 ) -> anyhow::Result<()> {
-    let mut prep =
-        prepare_emission_with(analysis_path, opts.config_path.as_deref(), opts.bank.as_deref())?;
+    let mut extra_entries = Vec::new();
+    for path in &opts.extra_entries {
+        extra_entries.extend(read_main_entries(path)?);
+    }
+    let mut prep = prepare_emission_with(
+        analysis_path,
+        opts.config_path.as_deref(),
+        opts.bank.as_deref(),
+        &extra_entries,
+    )?;
 
     // Code overlays (M2): the main build drops the shared overlay window (its
     // bytes are BSS zeros in the main image, decoded as thousands of junk
     // "functions"); a bank build keeps only the window. The runtime resolves
     // window addresses against the bank of the overlay loaded there.
     let overlay_window = prep.config.overlay_window()?;
+    let mut main_side_ghidra: Vec<u32> = Vec::new();
     let bank = match (&opts.bank, overlay_window) {
         (Some(name), Some((lo, hi))) => {
+            main_side_ghidra = prep
+                .analysis
+                .functions
+                .iter()
+                .filter(|f| f.source == "ghidra")
+                .filter_map(|f| parse_hex_u32(&f.address))
+                .filter(|&a| a < lo || a >= hi)
+                .collect();
             retain_by_window(&mut prep.analysis.functions, &mut prep.analysis.mid_entries, lo, hi, true);
-            let (id, text_size) = read_overlay_header(&prep.segment_bytes, lo)?;
-            let hash_len = 0x40 + text_size;
-            let bytes = read_image_range(&prep.segment_bytes, lo, hash_len)?;
+            let (id, _text_size) = read_overlay_header(&prep.segment_bytes, lo)?;
+            let file_end = lo + read_overlay_file_len(&prep.segment_bytes, lo)?;
+            let ctors = overlay_ctor_entries(&prep.segment_bytes, lo)?;
+            let ranges = bank_hash_ranges(&prep.analysis.functions, &ctors, file_end);
+            let mut bytes = Vec::new();
+            for &(start, end) in &ranges {
+                bytes.extend(read_image_range(&prep.segment_bytes, start, end - start)?);
+            }
             tracing::info!(
-                "Bank {name}: overlay id {id}, {} functions in window, hash over 0x{hash_len:X} bytes",
-                prep.analysis.functions.len()
+                "Bank {name}: overlay id {id}, {} functions in window, hash over {} code ranges (0x{:X} bytes)",
+                prep.analysis.functions.len(),
+                ranges.len(),
+                bytes.len()
             );
-            Some((name.clone(), lo, hi, id, hash_len, psp_emitter::bank::fnv1a64(&bytes)))
+            Some((name.clone(), lo, hi, id, ranges, psp_emitter::bank::fnv1a64(&bytes)))
         }
         (Some(_), None) => anyhow::bail!(
             "--bank needs an [overlays] window = [start, end] in the --config manifest"
@@ -429,9 +471,20 @@ pub fn run_recompile(
     let analysis_sha256 = fingerprint::sha256_file(analysis_path)
         .with_context(|| format!("hash {}", analysis_path.display()))?;
     let module_name = &prep.analysis.module_name;
-    if let Some((name, lo, hi, id, hash_len, hash)) = &bank {
+    if let Some((_, lo, hi, ..)) = &bank {
+        let targets = lookup_targets.lock().unwrap();
+        let mut entries: Vec<u32> = main_side_ghidra
+            .iter()
+            .copied()
+            .chain(targets.iter().copied().filter(|&a| a < *lo || a >= *hi))
+            .collect();
+        entries.sort_unstable();
+        entries.dedup();
+        write_main_entries(&output_dir.join("main_entries.json"), &entries)?;
+    }
+    if let Some((name, lo, hi, id, ranges, hash)) = &bank {
         let info = psp_emitter::bank::BankInfo {
-            name, id: *id, window_lo: *lo, window_hi: *hi, hash_len: *hash_len, hash: *hash,
+            name, id: *id, window_lo: *lo, window_hi: *hi, hash_ranges: ranges.clone(), hash: *hash,
         };
         write_bank_output_files(output_dir, &prep.analysis, &batch_output, &mid_entries_cpp,
                                 &prep.unique_names, &info)?;
@@ -1603,6 +1656,70 @@ fn skip_nop_padding(segment_bytes: &[(u32, Vec<u8>)], addr: u32, limit: u32) -> 
     addr
 }
 
+/// Split overlay-discovered main-side addresses against the main analysis:
+/// returns (new function starts in gaps, new (mid-entry, parent) pairs for
+/// addresses strictly inside a main function). Known starts/mid-entries are
+/// skipped. Sizes are the analysis (Ghidra) sizes.
+fn classify_extra_entries(
+    functions: &[JsonFunction],
+    mid_entries: &[JsonMidEntry],
+    addrs: &[u32],
+) -> (Vec<u32>, Vec<(u32, u32)>) {
+    let mut spans: Vec<(u32, u32)> = functions
+        .iter()
+        .filter_map(|f| {
+            let a = parse_hex_u32(&f.address)?;
+            Some((a, a.saturating_add(f.size as u32)))
+        })
+        .collect();
+    spans.sort_unstable();
+    let known: HashSet<u32> = spans
+        .iter()
+        .map(|s| s.0)
+        .chain(mid_entries.iter().filter_map(|m| parse_hex_u32(&m.addr)))
+        .collect();
+    let mut force = Vec::new();
+    let mut mids = Vec::new();
+    let mut sorted: Vec<u32> = addrs.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    for a in sorted {
+        if known.contains(&a) || a % 4 != 0 {
+            continue;
+        }
+        let idx = spans.partition_point(|s| s.0 <= a);
+        match idx.checked_sub(1).map(|i| spans[i]) {
+            Some((start, end)) if a > start && a < end => mids.push((a, start)),
+            _ => force.push(a),
+        }
+    }
+    (force, mids)
+}
+
+fn write_main_entries(path: &Path, entries: &[u32]) -> anyhow::Result<()> {
+    let hex: Vec<String> = entries.iter().map(|a| format!("0x{a:08X}")).collect();
+    let json = serde_json::json!({ "entries": hex });
+    std::fs::write(path, serde_json::to_string_pretty(&json)?)
+        .with_context(|| format!("Failed to write {}", path.display()))
+}
+
+fn read_main_entries(path: &Path) -> anyhow::Result<Vec<u32>> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("Cannot read {}", path.display()))?;
+    let v: serde_json::Value = serde_json::from_str(&text)
+        .with_context(|| format!("{} is not JSON", path.display()))?;
+    v["entries"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("{} has no \"entries\" array", path.display()))?
+        .iter()
+        .map(|e| {
+            e.as_str()
+                .and_then(parse_hex_u32)
+                .ok_or_else(|| anyhow::anyhow!("bad entry {e} in {}", path.display()))
+        })
+        .collect()
+}
+
 /// Keep only functions/mid-entries inside (`inside = true`) or outside the
 /// overlay window `[lo, hi)`.
 fn retain_by_window(
@@ -1643,6 +1760,38 @@ fn overlay_ctor_entries(segment_bytes: &[(u32, Vec<u8>)], lo: u32) -> anyhow::Re
     }
     let table = read_image_range(segment_bytes, start, end - start)?;
     Ok((0..table.len()).step_by(4).map(|i| word(&table, i)).collect())
+}
+
+/// Code ranges a bank's hash covers: functions Ghidra found (real code) plus
+/// the constructor-table functions, merged and clipped to the overlay file
+/// bytes. Heuristic finds elsewhere (often data) are excluded so run-time
+/// writes to data never trip the check.
+fn bank_hash_ranges(functions: &[JsonFunction], ctors: &[u32], file_end: u32) -> Vec<(u32, u32)> {
+    let mut spans: Vec<(u32, u32)> = functions
+        .iter()
+        .filter_map(|f| {
+            let a = parse_hex_u32(&f.address)?;
+            (f.source == "ghidra" || ctors.contains(&a))
+                .then(|| (a, a.saturating_add(f.size as u32).min(file_end)))
+        })
+        .filter(|(a, e)| a < e)
+        .collect();
+    spans.sort_unstable();
+    let mut merged: Vec<(u32, u32)> = Vec::new();
+    for (a, e) in spans {
+        match merged.last_mut() {
+            Some(last) if a <= last.1 => last.1 = last.1.max(e),
+            _ => merged.push((a, e)),
+        }
+    }
+    merged
+}
+
+/// Overlay file length from the MWo3 header: 0x40 + text_size + data_size.
+fn read_overlay_file_len(segment_bytes: &[(u32, Vec<u8>)], lo: u32) -> anyhow::Result<u32> {
+    let h = read_image_range(segment_bytes, lo, 0x18)?;
+    let word = |i: usize| u32::from_le_bytes([h[i], h[i + 1], h[i + 2], h[i + 3]]);
+    Ok(0x40 + word(12) + word(16))
 }
 
 /// Parse the MWo3 overlay header at the window base: (id, text_size).
@@ -1795,6 +1944,34 @@ mod tests {
 
     fn wmid(addr: u32, parent: u32) -> JsonMidEntry {
         JsonMidEntry { addr: format!("0x{addr:08X}"), parent_addr: format!("0x{parent:08X}") }
+    }
+
+    #[test]
+    fn bank_hash_ranges_cover_code_only() {
+        // ghidra fns [0x100,0x110) and [0x110,0x120) merge; a binary_scan fn
+        // in data is skipped unless it is a constructor; clipped to file end.
+        let mut a = wfn(0x100); a.size = 0x10;
+        let mut b = wfn(0x110); b.size = 0x10;
+        let mut junk = wfn(0x200); junk.size = 0x20; junk.source = "binary_scan".into();
+        let mut ctor = wfn(0x300); ctor.size = 0x40; ctor.source = "binary_scan".into();
+        let ranges = bank_hash_ranges(&[a, b, junk, ctor], &[0x300], 0x330);
+        assert_eq!(ranges, vec![(0x100, 0x120), (0x300, 0x330)]);
+    }
+
+    #[test]
+    fn classify_extra_entries_splits_gap_and_inside() {
+        // main: F1 [0x1000, 0x1010), F2 [0x2000, 0x2100) with mid 0x2040.
+        let mut f1 = wfn(0x1000);
+        f1.size = 0x10;
+        let mut f2 = wfn(0x2000);
+        f2.size = 0x100;
+        let funcs = vec![f1, f2];
+        let mids = vec![wmid(0x2040, 0x2000)];
+        let (force, mid) = classify_extra_entries(
+            &funcs, &mids, &[0x1000, 0x1018, 0x2040, 0x2080, 0x3000],
+        );
+        assert_eq!(force, vec![0x1018, 0x3000], "gap entries become functions");
+        assert_eq!(mid, vec![(0x2080, 0x2000)], "inside entries become mid-entries");
     }
 
     #[test]

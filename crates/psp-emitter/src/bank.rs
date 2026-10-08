@@ -15,8 +15,9 @@ pub struct BankInfo<'a> {
     pub id: u32,
     pub window_lo: u32,
     pub window_hi: u32,
-    /// Bytes `[window_lo, window_lo + hash_len)` (header + text) are hashed.
-    pub hash_len: u32,
+    /// `[start, end)` ranges of the compiled code; their bytes, concatenated
+    /// in order, are hashed (data the game mutates at run time is excluded).
+    pub hash_ranges: Vec<(u32, u32)>,
     pub hash: u64,
 }
 
@@ -77,14 +78,21 @@ pub fn emit_bank_dispatch(info: &BankInfo, entries: &[(u32, String)]) -> String 
     if entries.is_empty() {
         out.push_str("    nullptr,\n");
     }
+    out.push_str("};\nstatic const uint32_t k_bank_hash_ranges[] = {\n");
+    for (start, end) in &info.hash_ranges {
+        out.push_str(&format!("    0x{start:08X}U, 0x{end:08X}U,\n"));
+    }
+    if info.hash_ranges.is_empty() {
+        out.push_str("    0x00000000U, 0x00000000U,\n");
+    }
     out.push_str("};\n");
     out.push_str(&format!(
         "static const PspOverlayBank k_bank = {{\n    \"{n}\", 0x{id:08X}U, 0x{lo:08X}U, 0x{hi:08X}U,\n    \
-         0x{len:08X}U, 0x{hash:016X}ULL,\n    k_bank_addrs, k_bank_fns, {count}U,\n}};\n",
+         k_bank_hash_ranges, {nr}U, 0x{hash:016X}ULL,\n    k_bank_addrs, k_bank_fns, {count}U,\n}};\n",
         id = info.id,
         lo = info.window_lo,
         hi = info.window_hi,
-        len = info.hash_len,
+        nr = info.hash_ranges.len(),
         hash = info.hash,
         count = entries.len(),
     ));
@@ -141,7 +149,7 @@ mod tests {
             id: 1,
             window_lo: 0x08ABB180,
             window_hi: 0x08BC6480,
-            hash_len: 0x20F3C,
+            hash_ranges: vec![(0x08ABB1C0, 0x08ABB200), (0x08ADDD00, 0x08ADDD94)],
             hash: 0x0123_4567_89AB_CDEF,
         };
         let d = emit_bank_dispatch(&info, &[(0x08ABB1C0, "FUN_08abb1c0".into())]);
@@ -149,7 +157,10 @@ mod tests {
         assert!(d.contains("0x08ABB1C0U,"), "{d}");
         assert!(d.contains("    FUN_08abb1c0,"), "{d}");
         assert!(d.contains("\"ovAzito\", 0x00000001U, 0x08ABB180U, 0x08BC6480U"), "{d}");
-        assert!(d.contains("0x00020F3CU, 0x0123456789ABCDEFULL"), "{d}");
+        assert!(d.contains("k_bank_hash_ranges[] = {"), "{d}");
+        assert!(d.contains("    0x08ABB1C0U, 0x08ABB200U,"), "{d}");
+        assert!(d.contains("    0x08ADDD00U, 0x08ADDD94U,"), "{d}");
+        assert!(d.contains("k_bank_hash_ranges, 2U, 0x0123456789ABCDEFULL"), "{d}");
         assert!(d.contains("psp_overlay_register_bank(&k_bank)"), "{d}");
         assert!(!d.contains("RECOMP_LOOKUP(uint32_t"), "bank must not define RECOMP_LOOKUP");
     }

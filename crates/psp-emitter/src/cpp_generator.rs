@@ -102,8 +102,9 @@ struct PspOverlayBank {
     uint32_t id;            // MWo3 header id (window base + 4)
     uint32_t window_lo;
     uint32_t window_hi;
-    uint32_t hash_len;      // FNV-1a 64 over [window_lo, window_lo + hash_len)
-    uint64_t hash;
+    const uint32_t* hash_ranges;  // [start, end) pairs of compiled code
+    uint32_t hash_range_count;
+    uint64_t hash;          // FNV-1a 64 over the ranges' bytes, in order
     const uint32_t* addrs;
     const FuncPtr* fns;
     uint32_t count;
@@ -560,7 +561,8 @@ mod tests {
         assert!(h.contains("void psp_overlay_register_bank(const PspOverlayBank* bank);"));
         let b = &h[h.find("struct PspOverlayBank {").unwrap()..];
         for field in ["const char* name;", "uint32_t id;", "uint32_t window_lo;",
-                      "uint32_t window_hi;", "uint32_t hash_len;", "uint64_t hash;",
+                      "uint32_t window_hi;", "const uint32_t* hash_ranges;",
+                      "uint32_t hash_range_count;", "uint64_t hash;",
                       "const uint32_t* addrs;", "const FuncPtr* fns;", "uint32_t count;"] {
             assert!(b.contains(field), "missing field {field}");
         }

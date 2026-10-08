@@ -62,6 +62,10 @@ enum Commands {
         /// of a combined ELF built by scripts/overlay_elf.py.
         #[arg(long, value_name = "NAME")]
         bank: Option<String>,
+        /// Main-side entries reached only from overlay code (a bank build's
+        /// main_entries.json); repeatable.
+        #[arg(long = "extra-entries", value_name = "JSON")]
+        extra_entries: Vec<std::path::PathBuf>,
     },
     /// Dump analysis.json fields, or one function's generated C++ (0xADDR)
     Dump {
@@ -102,6 +106,7 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Recompile {
             analysis, output, config, batch_size, expect_functions, expect_mid_entries, bank,
+            extra_entries,
         } => {
             tracing_subscriber::fmt()
                 .with_env_filter(
@@ -115,6 +120,7 @@ fn main() -> anyhow::Result<()> {
                 expect_functions,
                 expect_mid_entries,
                 bank,
+                extra_entries,
             };
             crate::recompile::run_recompile(&analysis, &output, &opts)?;
         }
