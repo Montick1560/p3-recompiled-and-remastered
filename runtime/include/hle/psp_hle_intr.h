@@ -9,6 +9,10 @@
 
 PspSubIntrTable& psp_subintr_table();
 
+/// Microseconds since the display clock started (first use). Shared by the
+/// vblank waits, sceDisplayGetVcount and the vblank interrupt dispatch.
+int64_t psp_display_elapsed_us();
+
 /// Run every enabled vblank sub-interrupt handler once for the current
 /// display frame (60 Hz, wall clock). Called from the vblank waits; extra
 /// calls within the same frame are no-ops, so several waiting threads do

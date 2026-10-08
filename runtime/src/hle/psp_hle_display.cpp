@@ -1,5 +1,6 @@
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_intr.h"
+#include "psp_vblank_clock.h"
 #include "psp_render_queue.h"
 #include "psp_scheduler.h"
 #include "psp_memory.h"
@@ -13,7 +14,6 @@
 static uint32_t g_fb_addr = 0;
 static uint32_t g_fb_stride = 512;
 static uint32_t g_fb_format = 3;  // 8888
-static uint32_t g_vcount = 0;
 
 // ---- HLE Functions ----
 
@@ -50,13 +50,13 @@ static void hle_sceDisplaySetFrameBuf(
 static void hle_sceDisplayWaitVblankStart(
     uint8_t* rdram, recomp_context* ctx
 ) {
-
     sched_yield_point();
 
-    // Simulate 60Hz vblank (~16.67ms)
-    std::this_thread::sleep_for(
-        std::chrono::microseconds(16667));
-    g_vcount++;
+    // Block until the next vblank boundary of the 59.94 Hz display clock
+    // (not a fixed period after the call: the frame's own work time is
+    // part of the frame, as on hardware).
+    std::this_thread::sleep_for(std::chrono::microseconds(
+        psp_us_until_next_vblank(psp_display_elapsed_us())));
     // Vblank interrupt: games hang per-frame work (e.g. waking a loader
     // thread) on PSP_VBLANK_INT sub-interrupt handlers.
     psp_intr_dispatch_vblank(rdram, ctx);
@@ -99,7 +99,8 @@ static void hle_sceDisplayGetFrameBuf(
 static void hle_sceDisplayGetVcount(
     uint8_t* rdram, recomp_context* ctx
 ) {
-    ctx->r[2] = static_cast<int32_t>(g_vcount);
+    ctx->r[2] = static_cast<int32_t>(
+        psp_vblank_index(psp_display_elapsed_us()));
     (void)rdram;
 }
 
@@ -115,11 +116,12 @@ static void hle_sceDisplaySetMode(
 static void hle_sceDisplayGetFramePerSec(
     uint8_t* rdram, recomp_context* ctx
 ) {
-    // Return 59.94 as float in v0 (PSP returns float via register)
-    // Actually PSP returns a float, but the ABI puts it in $f0.
-    // For simplicity, store the float representation.
+    // The MIPS ABI returns floats in $f0 (callers convert from there).
+    // v0 also carries the bit pattern, as before, for any caller that
+    // reads the integer register.
     union { float f; int32_t i; } u;
     u.f = 59.94f;
+    ctx->f[0] = u.f;
     ctx->r[2] = u.i;
     (void)rdram;
 }

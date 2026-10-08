@@ -441,6 +441,22 @@ target_compile_options(test_subintr PRIVATE
 
 add_test(NAME subintr_tests COMMAND test_subintr)
 
+# 59.94 Hz vblank clock unit test (header-only integer math).
+add_executable(test_vblank_clock tests/test_vblank_clock.cpp)
+
+target_include_directories(test_vblank_clock PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_compile_options(test_vblank_clock PRIVATE
+    -O2
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+
+add_test(NAME vblank_clock_tests COMMAND test_vblank_clock)
+
 # SAS synthesis core unit test (pure: VAG decode, ADSR, mixing, bad-pointer
 # safety) -- no SDL, no game files.
 add_executable(test_sas_core tests/test_sas_core.cpp src/hle/psp_sas_core.cpp)
