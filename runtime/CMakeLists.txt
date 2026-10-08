@@ -4,15 +4,35 @@ project(psprecomp_runtime CXX C)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Find SDL2 via pkg-config (Homebrew installs pkg-config file)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
+if(WIN32)
+    # Windows (MinGW clang): SDL2 from the official SDL2-devel-*-mingw package
+    # (pass -DSDL2_DIR=<pkg>/x86_64-w64-mingw32/lib/cmake/SDL2); zlib is built
+    # from source since MinGW toolchains do not ship it.
+    find_package(SDL2 REQUIRED CONFIG)
+    set(PSP_SDL2_LIBS SDL2::SDL2)
+    add_compile_definitions(SDL_MAIN_HANDLED)
+    include(FetchContent)
+    FetchContent_Declare(zlib
+        URL https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+        URL_HASH SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23)
+    set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(zlib)
+    target_include_directories(zlibstatic INTERFACE ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR})
+    add_library(ZLIB::ZLIB ALIAS zlibstatic)
+    set(PSP_SOCKET_LIBS ws2_32)
+else()
+    # Find SDL2 via pkg-config (Homebrew installs pkg-config file)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
+    set(PSP_SDL2_LIBS PkgConfig::SDL2)
+
+    # Find zlib (system zlib on macOS; pkg-config-discoverable on Linux)
+    find_package(ZLIB REQUIRED)
+    set(PSP_SOCKET_LIBS)
+endif()
 
 # Find OpenGL
 find_package(OpenGL REQUIRED)
-
-# Find zlib (system zlib on macOS; pkg-config-discoverable on Linux)
-find_package(ZLIB REQUIRED)
 
 # ── Recompiled game output directory (issue #47 Phase 1) ────────────────────
 # The runtime is game-agnostic: it builds against ANY `psprecomp recompile`
@@ -184,10 +204,11 @@ target_include_directories(psprecomp_runtime PRIVATE
 
 target_link_libraries(psprecomp_runtime PRIVATE
     psp::recomp
-    PkgConfig::SDL2
+    ${PSP_SDL2_LIBS}
     OpenGL::GL
     ZLIB::ZLIB
     pthread
+    ${PSP_SOCKET_LIBS}
 )
 
 # Suppress OpenGL deprecation warnings on macOS
@@ -251,6 +272,7 @@ target_include_directories(test_debug_socket PRIVATE
 
 target_link_libraries(test_debug_socket PRIVATE
     pthread
+    ${PSP_SOCKET_LIBS}
 )
 
 target_compile_options(test_debug_socket PRIVATE

@@ -201,12 +201,17 @@ static void signal_handler(int sig) {
 }
 
 void psp_install_signal_handlers() {
+#ifdef _WIN32
+    std::signal(SIGTERM, signal_handler);
+    std::signal(SIGINT, signal_handler);
+#else
     struct sigaction sa{};
     sa.sa_handler = signal_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     sigaction(SIGTERM, &sa, nullptr);
     sigaction(SIGINT, &sa, nullptr);
+#endif
 }
 
 // ---------------------------------------------------------------------------
