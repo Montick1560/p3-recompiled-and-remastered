@@ -269,6 +269,7 @@ flags toggle individual experimental fixes/band-aids in the Patapon game module.
 | `PSPRECOMP_GE_TRACE` | `runtime/src/psp_ge.cpp` | first char `'1'` | Enables GE command tracing. |
 | `PSPRECOMP_HLE_TRACE` | `runtime/src/hle/psp_hle_dispatch.cpp` (declared `runtime/include/hle/psp_hle.h`); used by `scripts/diff_traces.sh` | `=1` | Every HLE call logs thread name + function name to stderr. Used to produce the runtime trace for the PPSSPP differential. |
 | `PSPRECOMP_SEMA_TRACE` | `runtime/src/hle/psp_hle_kernel_sema.cpp` | `=1` | Gates the per-call WaitSema/Signal logs (≈1 GB/min during stalls) behind a flag. |
+| `PSPRECOMP_OVERLAY_TRACE` | `runtime/src/psp_dispatch.cpp` | `=1` | Logs the first 64 overlay-window lookups and their bank-resolution status. |
 
 > `PSPRECOMP_SPLEAK` no longer exists — the shadow-stack sp-leak detector it
 > gated was a Patapon-tuned probe deleted in issue #47 Phase 5

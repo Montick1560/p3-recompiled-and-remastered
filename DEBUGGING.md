@@ -222,6 +222,7 @@ the socket for scripted/agent input.
 | `PSPRECOMP_PC_TRACE=1` | Per-function frequency counters + atexit top-20 |
 | `PSPRECOMP_GE_TRACE=1` | GE command-stream logging |
 | `PSPRECOMP_SEMA_TRACE=1` | Per-call sema logging (off by default — floods ~1 GB/min) |
+| `PSPRECOMP_OVERLAY_TRACE=1` | Logs the first 64 overlay-window lookups with their bank-resolution status (0 NotInWindow, 1 NoBank, 2 HashMismatch, 3 NotFound, 4 Found) |
 | `PSPRECOMP_SCREENSHOT=path` | One-shot TGA after first prims + shutdown capture |
 | `PSPRECOMP_CROSS_MID=1` | (recompile-time) cross-function mid-entry emission — must match workflow |
 

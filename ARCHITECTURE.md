@@ -10,6 +10,7 @@ see [README.md](README.md).
 - [Generated Output Layout](#generated-output-layout)
 - [Per-Game Layer (games/)](#per-game-layer-games)
 - [Runtime Subsystems](#runtime-subsystems)
+- [Code Overlays (banks)](#code-overlays-banks)
 - [Key Data Flow](#key-data-flow)
 - [Invariants and Conventions](#invariants-and-conventions)
 
@@ -144,16 +145,45 @@ All under `runtime/` (headers in `runtime/include/`, sources in `runtime/src/`):
 | Boot / main loop | `main.cpp` | Generic boot sequence (module start, thread creation), SDL2 main loop — contains zero address-keyed hooks (they live in `games/<id>/runtime/`, Phase 4) |
 | Game modules | `psp_game_module.h`, `psp_game_default.cpp`, `games/<id>/runtime/` | Per-game hook seam — see [Per-Game Layer](#per-game-layer-games) |
 | Memory | `psp_memory.cpp` | 128 MB `rdram` allocation; all guest addresses masked with `0x07FFFFFFU` |
-| Dispatch | `psp_dispatch.cpp` | `RECOMP_LOOKUP` address→function resolution; miss handler; `PSPRECOMP_STRICT` abort mode |
+| Dispatch | `psp_dispatch.cpp` | `RECOMP_LOOKUP` address→function resolution; miss handler (consults overlay banks first); `PSPRECOMP_STRICT` abort mode |
+| Overlay banks | `psp_overlay.cpp`, `psp_overlay.h` | Registry of self-registered overlay banks; resolves overlay-window addresses against the bank whose MWo3 id is loaded, after a once-per-activation code hash check — see [Code Overlays](#code-overlays-banks) |
 | Scheduler | `psp_scheduler.cpp` | Cooperative threading (`PspThread`, yield points); `thread_local PspThread* g_current` |
 | HLE | `src/hle/psp_hle_*.cpp` | Firmware NID implementations: io, kernel (thread/sema/mutex/lwmutex/eventflag/memory), display, ge, ctrl, power, utility; name-based registration wired to the generated `syscall_table.cpp` stub addresses via dispatch overrides (issue #40 — no per-game stub addresses in the runtime; unbound stubs get a loud per-NID unimplemented no-op that returns a deterministic `v0 = 0`; NID→stub lookup for runtime code via `psp_hle_stub_addr_for_nid`) |
 | GE list processor | `psp_ge.cpp` | Display-list interpretation, including SIGNAL flow-control behaviors 0x10–0x12 (JUMP/CALL/RET) |
-| Renderer | `psp_ge_draw.cpp`, `psp_ge_vertex.cpp`, `psp_ge_texture.cpp`, `psp_ge_shader.cpp` | Vertex decode/transform (column-major PSP matrices), CLUT/texture decode, shaders, GL draw — deep-dive in [docs/GRAPHICS.md](docs/GRAPHICS.md) |
+| Renderer | `psp_ge_draw.cpp`, `psp_ge_vertex.cpp`, `psp_ge_texture.cpp`, `psp_ge_texdecode.cpp`, `psp_ge_shader.cpp` | Vertex decode/transform (column-major PSP matrices), texture decode (pure, unit-tested: buffer-width stride, swizzle, CLUT transform) and GL texture cache, shaders, GL draw — deep-dive in [docs/GRAPHICS.md](docs/GRAPHICS.md) |
 | Render queue | `psp_render_queue.cpp` | Condvar request queue — the only path by which GL work reaches the main thread |
 | Event loop | `psp_event_loop.cpp` | SDL2 event pump, quit handling, render-queue drain |
 | VFPU | `psp_vfpu_*.cpp` | VFPU instruction implementations (arith, convert, matrix, mem, trig, misc) |
 | Asset/BND | `games/patapon/runtime/asset_bnd.cpp` | Patapon BND archive parsing (`DATA_CMN.BND`) — lives wholly in the Patapon game module (#47 Phase 5), reached from core only through the `PspIoPolicy` seam; arena constants in `games/patapon/runtime/asset_bnd.h` |
 | Debug socket | `psp_debug_socket.cpp` | TCP server on port 9999, multiple concurrent clients, OK/ERR-framed line protocol: memory read/write, runtime-info JSON, button injection, screenshots (serviced by the render thread). Protocol reference: DEBUGGING.md §6 |
+
+## Code Overlays (banks)
+
+Some titles (Patapon 3) load extra code at run time: overlay files that all
+load into one fixed window of guest memory (Patapon 3: `OL_*.bin`, "MWo3"
+header, window `0x08ABB180..0x08BC6480`). Each overlay is recompiled as a
+**bank**:
+
+1. `scripts/overlay_elf.py` builds a *combined* ELF — the main EXEC image with
+   one overlay filled into its window (the ELF's empty overlay section and
+   PT_NULL placeholder become real data / PT_LOAD) — so the unchanged
+   `analyze` pipeline sees the overlay code where the game runs it.
+2. `recompile --bank <name>` (with `[overlays] window` in the manifest) keeps
+   only the window's functions, forces the MWo3 constructor-table entries,
+   wraps all generated code in `namespace <name>` (banks reuse addresses) and
+   emits `bank_dispatch.cpp`: an address table plus a `PspOverlayBank` record
+   (`recomp.h`) that self-registers at static init. The bank is a CMake OBJECT
+   library so the registration object is always linked. It also writes
+   `main_entries.json`: main-side addresses only overlay code reaches.
+3. The main recompile drops the window (BSS in the main image) and imports
+   every bank's `main_entries.json` (`--extra-entries`): gap addresses become
+   functions, addresses inside a main function become its mid-entries.
+4. At run time a main-dispatch miss inside a window goes to
+   `psp_overlay_resolve`: the bank whose id matches the MWo3 header in memory
+   answers, after its code ranges (functions Ghidra found + constructors,
+   clipped to the file) hash to the value recorded at build time. A mismatch
+   aborts with an explicit message — stale code never runs. The runtime CMake
+   rejects banks whose fingerprint or `recomp.h` differs from the main output.
 
 ## Key Data Flow
 
