@@ -1,8 +1,8 @@
 # Platform Support
 
 This page states, factually, where psprecomp is known to work today. The
-project is developed and tested on macOS only; Linux and Windows have never
-been run. See [ARCHITECTURE.md](../ARCHITECTURE.md) for the structure these
+project is developed on macOS; Windows (MinGW clang) builds and runs; Linux
+has never been run. See [ARCHITECTURE.md](../ARCHITECTURE.md) for the structure these
 notes refer to and [README.md](../README.md) for build/run instructions.
 
 ## Summary
@@ -11,7 +11,7 @@ notes refer to and [README.md](../README.md) for build/run instructions.
 |---------------|-----------------------------------|----------------------------------|
 | macOS         | Verified                          | Verified                         |
 | Linux         | Expected to work (untested)       | Likely portable, untested        |
-| Windows       | Untested                          | Untested                         |
+| Windows       | Verified (Ghidra via `.bat`)      | Builds, unit tests pass, boots   |
 
 "Verified" means it is the platform on which the project is actively built and
 run. "Untested" means exactly that — it has not been tried, not that it is
@@ -74,25 +74,48 @@ been built or run on Linux, so this is unverified.
   - The GL 3.3 core context request must be honored by the Linux GL driver;
     Mesa supports it, but this has not been exercised.
 
-## Windows (untested)
+## Windows (MinGW clang)
 
-The runtime has never been built on Windows and several assumptions would need
-review first:
+Built and run on Windows 11 with the llvm-mingw clang toolchain (UCRT), Ninja
+and Git Bash. The Rust pipeline needs no changes beyond launching Ghidra's
+`support/analyzeHeadless.bat` and using the OS temp dir for its project.
+Everything Windows-specific in the runtime is behind `#ifdef _WIN32` /
+`if(WIN32)`, so the POSIX paths are unchanged.
 
-- The build links `pthread` directly (`runtime/CMakeLists.txt`), which has no
-  native Windows equivalent without a compatibility layer.
-- SDL2 discovery via `pkg-config` is uncommon on a stock MSVC toolchain and
-  would likely need a different discovery path.
-- The threading model (`runtime/src/psp_scheduler.cpp`) and debug socket
-  (`runtime/src/psp_debug_socket.cpp`) use POSIX-style primitives that have not
-  been checked against Windows.
+- **SDL2**: the official `SDL2-devel-<ver>-mingw` package, found through its
+  CMake config package (`-DSDL2_DIR=<pkg>/x86_64-w64-mingw32/lib/cmake/SDL2`);
+  SDL2main is not linked (`SDL_MAIN_HANDLED`). Copy `SDL2.dll` next to the exe.
+- **zlib**: MinGW toolchains do not ship it; CMake builds it from source via
+  FetchContent (`-DFETCHCONTENT_SOURCE_DIR_ZLIB=<zlib-1.3.1>` for an offline
+  tree).
+- **Sockets**: the debug socket uses Winsock2 through
+  `runtime/include/psp_socket_compat.h` (links `ws2_32`). `stop()` closes the
+  client sockets on Windows because `shutdown()` does not wake a blocked
+  `recv()` there.
+- **Memory / files / signals**: guest RAM comes from `VirtualAlloc`; host files
+  are opened with `O_BINARY` (text mode would cut reads at 0x1A and translate
+  CRLF); `std::signal` replaces `sigaction`.
+- **pthreads**: provided by MinGW's winpthreads; `<unistd.h>`, `<dirent.h>` and
+  `<fcntl.h>` come from the MinGW headers.
+- **Smart App Control**: when enabled it may block freshly linked unsigned
+  executables; relinking produces a new file that is usually allowed.
+- **Not yet ported**: the `patapon` (Patapon 1) game module still uses `mmap`
+  and opens files without `O_BINARY`; build other games with their own module
+  or `-DPSPRECOMP_GAME=none`.
 
-No effort has been spent on Windows; treat it as unsupported until someone
-tries it.
+Example configure (paths are illustrative):
+
+```bash
+cmake -G Ninja -B build/rt -S runtime -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+  -DPSPRECOMP_GAME=none -DPSPRECOMP_OUTPUT_DIR=/abs/path/to/output \
+  -DSDL2_DIR=/path/SDL2-2.32.10/x86_64-w64-mingw32/lib/cmake/SDL2 \
+  -DFETCHCONTENT_SOURCE_DIR_ZLIB=/path/zlib-1.3.1
+```
 
 ## Contributing platform support
 
-Porting to Linux or Windows is welcome. The Rust pipeline is the easy half (it
-already runs in Linux CI); the work is in the C++ runtime's SDL2/GL/threading
-assumptions listed above. The honest state is that only macOS has been
-exercised end to end.
+Porting to Linux is welcome. The Rust pipeline is the easy half (it already
+runs in Linux CI); the work is in the C++ runtime's SDL2/GL/threading
+assumptions listed above. The honest state is that macOS has been exercised end
+to end, Windows through boot of Patapon 3, and Linux not at all.

@@ -148,13 +148,14 @@ PPSSPP — not "should work."
 |------|--------|-------|
 | **Patapon (USA)** — `BOOT.BIN`, UCUS-98643 | Boots + renders title screen (verified, macOS) | The reference title. Recompiles to 14,104 functions / 2,022 mid-entries; reaches the PATAPON logo + NEW GAME/CONTINUE menu. Gameplay beyond the title screen is unexplored. |
 | **.hack//Link** — ULJS-00266 | Boots + draws its loading screen (in progress) | A second commercial binary, recompiled against the generic runtime (`-DPSPRECOMP_GAME=none`) with no per-game runtime code. Boots through `module_start`, runs its main thread, and reaches the GE render loop — drawing its in-game loading panel (shown below). The real menu/scene is still gated behind a loading-progression wall (#63), and boots are not yet deterministic. Config-only so far (`games/dothack/game.toml`). |
+| **Patapon 3** — UCES-01421 base (user's own mod) | Boots on Windows (in progress) | EBOOT recompiled with `-DPSPRECOMP_GAME=patapon3` (empty hook module). Boots through `module_start`, loads `DATA_CMN.BND`/`DATAMS.BND` and presents its first frames (clears only); overlays, audio and title screen are the next milestones. Pipeline: `games/patapon3/scripts/p3.sh`. |
 
 ![.hack//Link (ULJS-00266) loading screen rendered by psprecomp_runtime](docs/dothack-render.png)
 
 *Second game in the generic runtime: `.hack//Link` boots and reaches its render loop, drawing its loading panel — no Patapon-specific code involved. Full menu/scene rendering is still in progress ([#63](https://github.com/wizardengineer/psprecomp/issues/63)).*
 
-The single platform is macOS — see [Limitations](#limitations) and
-[docs/PLATFORMS.md](docs/PLATFORMS.md). To bring up another title, see
+macOS is the reference platform; Windows (MinGW clang) builds, passes the runtime unit tests
+and boots Patapon 3 — see [Limitations](#limitations) and [docs/PLATFORMS.md](docs/PLATFORMS.md). To bring up another title, see
 [docs/ADDING_A_GAME.md](docs/ADDING_A_GAME.md).
 
 ## Current Status
@@ -217,7 +218,7 @@ labels mark scope and priority.
 - [ ] Faithful kernel callback delivery (#11) and the event-flag wait-mode fix (#64).
 - [ ] Second game: drive `.hack//Link` past its loading wall (#63) and generalize the runtime for
       more titles.
-- [ ] Cross-platform: build and verify on Linux and Windows (#70 — see
+- [ ] Cross-platform: Windows builds and boots (MinGW clang); Linux still unverified (#70 — see
       [docs/PLATFORMS.md](docs/PLATFORMS.md)).
 
 ## Building and Running
@@ -231,6 +232,9 @@ brew install cmake sdl2 pkg-config
 ```
 
 - **Rust** (stable) and a **C++17 compiler**; CMake 3.16+, SDL2 (found via pkg-config), OpenGL 3.3.
+- **Windows:** MinGW clang (llvm-mingw), Ninja, the official `SDL2-devel-*-mingw` package and a
+  local zlib source tree — see [docs/PLATFORMS.md](docs/PLATFORMS.md#windows-mingw-clang). Patapon 3
+  has a one-command pipeline: `games/patapon3/scripts/p3.sh all`.
 
 #### Ghidra (for the `analyze` step only)
 
@@ -376,10 +380,9 @@ checked with adversarial sub-agent verification before they are banked.
   its main thread, and reaches the GE render loop drawing its loading screen, but has not rendered
   its real menu/scene yet (bring-up is ongoing — see [Supported games](#supported-games)).
   Type-B (0x700000A1) packed relocations are detected and rejected with an explicit error.
-  Developed and tested on macOS only; Linux and Windows have never been tried (the build
-  assumes SDL2 via pkg-config and OpenGL 3.3, and the render-queue threading model was
-  designed around macOS constraints). Testing and supporting other operating systems is a
-  to-do — see [docs/PLATFORMS.md](docs/PLATFORMS.md). Optimizer passes are disabled by design
+  Developed on macOS; Windows (MinGW clang) builds, passes the runtime unit tests and boots
+  Patapon 3, while Linux has never been tried. The render-queue threading model was designed
+  around macOS constraints — see [docs/PLATFORMS.md](docs/PLATFORMS.md). Optimizer passes are disabled by design
   until a later phase. Per-game render coverage is summarized in
   [Supported games](#supported-games).
 
