@@ -160,8 +160,15 @@ static void hle_sceKernelWaitEventFlag(
     uint32_t bits = static_cast<uint32_t>(ctx->r[5]);
     uint32_t wait_mode = static_cast<uint32_t>(ctx->r[6]);
     uint32_t out_bits_ptr = static_cast<uint32_t>(ctx->r[7]);
+    uint32_t timeout_ptr = static_cast<uint32_t>(ctx->r[8]);
 
     sched_yield_point();
+
+    // PPSSPP sceKernelWaitEventFlag: an empty pattern is rejected outright.
+    if (bits == 0) {
+        ctx->r[2] = SCE_KERNEL_ERROR_EVF_ILPAT;
+        return;
+    }
 
     auto it = g_eventflags.find(uid);
     if (it == g_eventflags.end()) {
@@ -187,9 +194,29 @@ static void hle_sceKernelWaitEventFlag(
     // Waiter census for sceKernelReferEventFlagStatus's numWaitThreads
     // (read-side bookkeeping only — no control-flow change).
     ef->num_wait_threads++;
-    bool matched = ef->cv.wait_for(lock, std::chrono::seconds(5), [&] {
+    // A non-NULL timeout pointer holds the timeout in microseconds; games
+    // use short timeouts as a poll loop (e.g. a loader thread that checks
+    // its async IO between waits), so it must be honoured exactly. A NULL
+    // pointer keeps the old 5-second safety valve.
+    auto timeout = std::chrono::microseconds(5000000);
+    if (timeout_ptr != 0) {
+        timeout = std::chrono::microseconds(
+            psp_mem_read<uint32_t>(rdram, timeout_ptr));
+    }
+    bool matched = ef->cv.wait_for(lock, timeout, [&] {
         return pattern_matches(ef->pattern, bits, wait_mode);
     });
+    if (timeout_ptr != 0) {
+        uint32_t remaining = 0;
+        if (matched) {
+            auto left = timeout - std::chrono::duration_cast<
+                std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - wait_start);
+            remaining = left.count() > 0
+                ? static_cast<uint32_t>(left.count()) : 0;
+        }
+        psp_mem_write<uint32_t>(rdram, timeout_ptr, remaining);
+    }
     ef->num_wait_threads--;
     auto wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - wait_start).count();
@@ -202,9 +229,11 @@ static void hle_sceKernelWaitEventFlag(
     if (wait_return_log_count < 40) {
         std::fprintf(stderr,
             "[HLE] sceKernelWaitEventFlag return uid=%d '%s' matched=%d "
-            "elapsed_ms=%lld pattern=0x%08X caller=0x%08X\n",
+            "elapsed_ms=%lld bits=0x%08X pattern=0x%08X timeout_ptr=0x%08X "
+            "caller=0x%08X\n",
             uid, ef->name, matched ? 1 : 0,
-            static_cast<long long>(wait_ms), ef->pattern, g_last_func_addr);
+            static_cast<long long>(wait_ms), bits, ef->pattern, timeout_ptr,
+            g_last_func_addr);
         wait_return_log_count++;
     }
 

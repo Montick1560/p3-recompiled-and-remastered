@@ -51,6 +51,7 @@ constexpr int32_t SCE_LWMUTEX_ERROR_LOCK_OVERFLOW   = (int32_t)0x800201CDU;
 constexpr int32_t SCE_LWMUTEX_ERROR_UNLOCK_UNDERFLOW = (int32_t)0x800201CEU;
 constexpr int32_t SCE_LWMUTEX_ERROR_ALREADY_LOCKED  = (int32_t)0x800201CFU;
 constexpr int32_t SCE_KERNEL_ERROR_EVF_NOT_FOUND = (int32_t)0x800201BFU;
+constexpr int32_t SCE_KERNEL_ERROR_EVF_ILPAT     = (int32_t)0x800201B5U;
 constexpr int32_t SCE_KERNEL_ERROR_NOT_FOUND_MODULE = (int32_t)0x80020196U;
 // MsgPipe errors (PPSSPP Core/HLE/ErrorCodes.h; match pspkerror.h)
 constexpr int32_t SCE_KERNEL_ERROR_UNKNOWN_MPPID = (int32_t)0x8002019EU;

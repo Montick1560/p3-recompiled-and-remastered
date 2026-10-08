@@ -129,6 +129,7 @@ set(RUNTIME_SOURCES
     src/psp_overlay.cpp
     src/psp_audio_mixer.cpp
     src/psp_audio_out.cpp
+    src/psp_subintr.cpp
     src/psp_scheduler.cpp
     src/psp_render_queue.cpp
     src/psp_event_loop.cpp
@@ -149,6 +150,7 @@ set(RUNTIME_SOURCES
     src/hle/psp_hle_kernel_eventflag.cpp
     src/hle/psp_hle_io.cpp
     src/hle/psp_hle_display.cpp
+    src/hle/psp_hle_intr.cpp
     src/hle/psp_hle_ge.cpp
     src/hle/psp_hle_power.cpp
     src/hle/psp_hle_ctrl.cpp
@@ -421,6 +423,22 @@ target_compile_options(test_audio_mixer PRIVATE
 )
 
 add_test(NAME audio_mixer_tests COMMAND test_audio_mixer)
+
+# Sub-interrupt handler table unit test (pure bookkeeping, no guest code).
+add_executable(test_subintr tests/test_subintr.cpp src/psp_subintr.cpp)
+
+target_include_directories(test_subintr PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_compile_options(test_subintr PRIVATE
+    -O2
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+
+add_test(NAME subintr_tests COMMAND test_subintr)
 
 # GE vertex transform unit test target (dothack-L6c fix). Links the real
 # psp_ge_vertex.cpp and calls ge_transform_vertices directly to verify

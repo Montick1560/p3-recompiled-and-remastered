@@ -1,4 +1,5 @@
 #include "hle/psp_hle.h"
+#include "hle/psp_hle_intr.h"
 #include "hle/psp_hle_kernel.h"
 #include "psp_audio_out.h"
 #include "psp_memory.h"
@@ -1352,25 +1353,36 @@ static void hle_sceKernelStderr(
 }
 
 // ---- Interrupt Manager ----
+// Sub-interrupt handlers live in psp_subintr_table(); the vblank ones are
+// run once per frame by psp_intr_dispatch_vblank (psp_hle_display.cpp).
 
 static void hle_sceKernelRegisterSubIntrHandler(
     uint8_t* rdram, recomp_context* ctx
 ) {
-    ctx->r[2] = SCE_OK;
+    int intr = ctx->r[4];
+    int sub = ctx->r[5];
+    uint32_t handler = static_cast<uint32_t>(ctx->r[6]);
+    uint32_t arg = static_cast<uint32_t>(ctx->r[7]);
+    int rc = psp_subintr_table().register_handler(intr, sub, handler, arg);
+    std::fprintf(stderr,
+        "[HLE] sceKernelRegisterSubIntrHandler(intr=%d sub=%d handler=0x%08X "
+        "arg=0x%08X) -> 0x%08X\n",
+        intr, sub, handler, arg, static_cast<uint32_t>(rc));
+    ctx->r[2] = rc;
     (void)rdram;
 }
 
 static void hle_sceKernelReleaseSubIntrHandler(
     uint8_t* rdram, recomp_context* ctx
 ) {
-    ctx->r[2] = SCE_OK;
+    ctx->r[2] = psp_subintr_table().release(ctx->r[4], ctx->r[5]);
     (void)rdram;
 }
 
 static void hle_sceKernelEnableSubIntr(
     uint8_t* rdram, recomp_context* ctx
 ) {
-    ctx->r[2] = SCE_OK;
+    ctx->r[2] = psp_subintr_table().enable(ctx->r[4], ctx->r[5]);
     (void)rdram;
 }
 

@@ -1,4 +1,5 @@
 #include "hle/psp_hle.h"
+#include "hle/psp_hle_intr.h"
 #include "psp_render_queue.h"
 #include "psp_scheduler.h"
 #include "psp_memory.h"
@@ -49,7 +50,6 @@ static void hle_sceDisplaySetFrameBuf(
 static void hle_sceDisplayWaitVblankStart(
     uint8_t* rdram, recomp_context* ctx
 ) {
-    (void)rdram;
 
     sched_yield_point();
 
@@ -57,6 +57,9 @@ static void hle_sceDisplayWaitVblankStart(
     std::this_thread::sleep_for(
         std::chrono::microseconds(16667));
     g_vcount++;
+    // Vblank interrupt: games hang per-frame work (e.g. waking a loader
+    // thread) on PSP_VBLANK_INT sub-interrupt handlers.
+    psp_intr_dispatch_vblank(rdram, ctx);
 
     ctx->r[2] = SCE_OK;
 }
