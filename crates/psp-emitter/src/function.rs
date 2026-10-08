@@ -1697,6 +1697,16 @@ fn emit_op(
                 "ctx->fi[{fd_n}] = (int32_t)truncf({fs_s});"
             ));
         }
+        MipsOp::RoundWS { fd, fs } | MipsOp::CeilWS { fd, fs } | MipsOp::FloorWS { fd, fs } => {
+            let func = match op {
+                MipsOp::RoundWS { .. } => "rintf",
+                MipsOp::CeilWS { .. } => "ceilf",
+                _ => "floorf",
+            };
+            let fd_n = fd.0;
+            let fs_s = gen.emit_fpr_read(*fs);
+            gen.emit_raw(&format!("ctx->fi[{fd_n}] = (int32_t){func}({fs_s});"));
+        }
         MipsOp::CCond { cond, fs, ft } => {
             let fs_s = gen.emit_fpr_read(*fs);
             let ft_s = gen.emit_fpr_read(*ft);
@@ -1881,7 +1891,7 @@ pub fn emit_function_comment(func: &DecodedFunction, gen: &mut dyn Generator) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use psp_ir::{BasicBlock, DecodedFunction, MipsOp, Reg};
+    use psp_ir::{BasicBlock, DecodedFunction, FpReg, MipsOp, Reg};
     use crate::generator::TestGenerator;
 
     fn make_func(ops: Vec<MipsOp>) -> DecodedFunction {
@@ -1904,6 +1914,15 @@ mod tests {
         emit_function(&func, &mut gen, &ImportMap::new());
         // Only FUNC_START, LABEL, FUNC_END — no NOP output
         assert!(!gen.output.iter().any(|s| s.contains("nop")));
+    }
+
+    #[test]
+    fn floor_w_s_emits_floorf() {
+        let mut gen = TestGenerator::new();
+        let func = make_func(vec![MipsOp::FloorWS { fd: FpReg(1), fs: FpReg(0) }]);
+        emit_function(&func, &mut gen, &ImportMap::new());
+        let joined = gen.output.join("\n");
+        assert!(joined.contains("ctx->fi[1] = (int32_t)floorf("), "{joined}");
     }
 
     #[test]

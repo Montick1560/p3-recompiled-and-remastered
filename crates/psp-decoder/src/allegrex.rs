@@ -35,6 +35,8 @@ pub(crate) fn decode_special3(word: u32, vaddr: u32) -> Result<MipsOp, DecodeErr
             let sub = (word >> 6) & 0x1F;
             let rd = reg_rd(word);
             match sub {
+                2 => Ok(MipsOp::Wsbh { rd, rt }),   // bits[10:6] == 2
+                3 => Ok(MipsOp::Wsbw { rd, rt }),   // bits[10:6] == 3
                 16 => Ok(MipsOp::Seb { rd, rt }),   // bits[10:6] == 16
                 24 => Ok(MipsOp::Seh { rd, rt }),   // bits[10:6] == 24
                 20 => Ok(MipsOp::Bitrev { rd, rt }), // bits[10:6] == 20
@@ -70,5 +72,40 @@ pub(crate) fn decode_allegrex_special2(word: u32, vaddr: u32) -> Result<MipsOp, 
                 _ => Err(DecodeError::Unknown(word, vaddr)),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use psp_ir::Reg;
+
+    /// Encode a SPECIAL3 BSHFL word: opcode 0x1F, rt, rd, sub-op in [10:6], func 0x20.
+    fn encode_bshfl(rt: u8, rd: u8, sub: u8) -> u32 {
+        (0x1Fu32 << 26) | ((rt as u32) << 16) | ((rd as u32) << 11)
+            | ((sub as u32) << 6) | 0x20
+    }
+
+    #[test]
+    fn wsbh_decodes_from_special3() {
+        // Real word from Patapon 3 EBOOT at 0x089B6770: wsbh v0, v0
+        assert_eq!(encode_bshfl(2, 2, 2), 0x7C0210A0);
+        let op = decode_special3(0x7C0210A0, 0x089B6770).unwrap();
+        assert!(matches!(op, MipsOp::Wsbh { rd: Reg::Gpr(2), rt: Reg::Gpr(2) }), "{op:?}");
+    }
+
+    #[test]
+    fn wsbw_decodes_from_special3() {
+        // Real word from Patapon 3 EBOOT at 0x0886C640: wsbw t0, t2
+        assert_eq!(encode_bshfl(10, 8, 3), 0x7C0A40E0);
+        let op = decode_special3(0x7C0A40E0, 0x0886C640).unwrap();
+        assert!(matches!(op, MipsOp::Wsbw { rd: Reg::Gpr(8), rt: Reg::Gpr(10) }), "{op:?}");
+    }
+
+    #[test]
+    fn seb_seh_bitrev_unchanged() {
+        assert!(matches!(decode_special3(encode_bshfl(4, 5, 16), 0).unwrap(), MipsOp::Seb { .. }));
+        assert!(matches!(decode_special3(encode_bshfl(4, 5, 24), 0).unwrap(), MipsOp::Seh { .. }));
+        assert!(matches!(decode_special3(encode_bshfl(4, 5, 20), 0).unwrap(), MipsOp::Bitrev { .. }));
     }
 }

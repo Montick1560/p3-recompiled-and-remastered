@@ -42,7 +42,10 @@ pub(crate) fn decode_cop1(word: u32, vaddr: u32) -> Result<MipsOp, DecodeError> 
                 0x05 => Ok(MipsOp::AbsS { fd, fs }),
                 0x06 => Ok(MipsOp::MovS { fd, fs }),
                 0x07 => Ok(MipsOp::NegS { fd, fs }),
+                0x0C => Ok(MipsOp::RoundWS { fd, fs }),
                 0x0D => Ok(MipsOp::TruncWS { fd, fs }),
+                0x0E => Ok(MipsOp::CeilWS { fd, fs }),
+                0x0F => Ok(MipsOp::FloorWS { fd, fs }),
                 0x20 => Ok(MipsOp::CvtSW { fd, fs }),
                 0x24 => Ok(MipsOp::CvtWS { fd, fs }),
                 // c.cond.s: func 0x30–0x3F; cond = lower 4 bits
@@ -135,5 +138,16 @@ mod tests {
             }
             _ => panic!("Expected CCond, got {op:?}"),
         }
+    }
+
+    #[test]
+    fn test_decode_round_ceil_floor_w_s() {
+        let round = decode_cop1(encode_cop1_s(0, 4, 2, 0x0C), 0x08800000).unwrap();
+        assert!(matches!(round, MipsOp::RoundWS { fd: FpReg(2), fs: FpReg(4) }), "{round:?}");
+        let ceil = decode_cop1(encode_cop1_s(0, 4, 2, 0x0E), 0x08800000).unwrap();
+        assert!(matches!(ceil, MipsOp::CeilWS { fd: FpReg(2), fs: FpReg(4) }), "{ceil:?}");
+        // Real word from Patapon 3 EBOOT at 0x089DBA08: floor.w.s f1, f0
+        let floor = decode_cop1(0x4600004F, 0x089DBA08).unwrap();
+        assert!(matches!(floor, MipsOp::FloorWS { fd: FpReg(1), fs: FpReg(0) }), "{floor:?}");
     }
 }

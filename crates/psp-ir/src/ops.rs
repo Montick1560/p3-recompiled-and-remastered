@@ -329,6 +329,12 @@ pub enum MipsOp {
     CvtWS { fd: FpReg, fs: FpReg },
     /// Truncate float to integer: fd = trunc(fs) (always truncates toward zero)
     TruncWS { fd: FpReg, fs: FpReg },
+    /// Round float to nearest integer (ties to even): fd = rint(fs)
+    RoundWS { fd: FpReg, fs: FpReg },
+    /// Round float toward +inf: fd = ceil(fs)
+    CeilWS { fd: FpReg, fs: FpReg },
+    /// Round float toward -inf: fd = floor(fs)
+    FloorWS { fd: FpReg, fs: FpReg },
     /// FPU compare condition: fpu_cc = compare(fs, ft) with given condition code.
     CCond { cond: u8, fs: FpReg, ft: FpReg },
     /// Branch if FPU condition code is true; `likely` controls delay slot.
