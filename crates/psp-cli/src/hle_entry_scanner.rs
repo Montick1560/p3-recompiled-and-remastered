@@ -529,6 +529,38 @@ fn framed_function_size(
     first_epilogue
 }
 
+/// Size of a frameless function starting at `entry`, scanning no further
+/// than `limit` (exclusive): the first `jr $ra` (+ delay slot) that lies at
+/// or after every forward branch target seen so far. Returns None if no such
+/// return exists below `limit` (the extent is then unknown).
+fn frameless_function_size(
+    entry: u32,
+    limit: u32,
+    segment_bytes: &[(u32, Vec<u8>)],
+) -> Option<u64> {
+    let mut va = entry;
+    let mut max_fwd_target: u32 = 0;
+    while va < limit {
+        let Some(w) = read_word_at(va, segment_bytes) else { break };
+        // Data is not code: an undecodable word would turn the whole grown
+        // function into an empty stub, so the extent stays unknown.
+        if psp_decoder::decode_word(w, va).is_err() {
+            return None;
+        }
+        if let Some(t) = branch_target(w, va) {
+            if t > va && t < limit {
+                max_fwd_target = max_fwd_target.max(t);
+            }
+        }
+        if w == 0x03E0_0008 && va >= max_fwd_target {
+            let end = va.wrapping_add(8); // past the delay slot
+            return (end <= limit).then(|| (end - entry) as u64);
+        }
+        va += 4;
+    }
+    None
+}
+
 /// Static control-flow target of `w` at `va`: a PC-relative conditional
 /// branch target or an absolute `j`/`jal` target. `jal` is included
 /// because the emitter lowers a call to an unknown target to
@@ -652,6 +684,11 @@ pub fn resize_truncated_framed_functions(
 
     let mut corrections = Vec::new();
 
+    let starts: Vec<u32> = functions
+        .iter()
+        .filter_map(|f| parse_hex_addr(&f.address))
+        .collect();
+
     for f in functions.iter_mut() {
         if !HEURISTIC_SOURCES.contains(&f.source.as_str()) {
             continue;
@@ -662,7 +699,33 @@ pub fn resize_truncated_framed_functions(
         };
         let frame_n = match frame_prologue_size(entry, segment_bytes) {
             Some(n) => n,
-            None => continue, // frameless: cannot corrupt callee-saved regs
+            None => {
+                // Frameless: truncation cannot corrupt callee-saved registers,
+                // but it drops the tail of the body (Patapon 3's static
+                // initializers in .data run past the 256-byte placeholder and
+                // the rest of the init was skipped). Grow to the function's
+                // return, never past the next known function start.
+                let next = starts.iter().copied().find(|&a| a > entry);
+                let limit = next.unwrap_or(u32::MAX).min(entry.saturating_add(SCAN_CAP));
+                if let Some(true_size) = frameless_function_size(entry, limit, segment_bytes) {
+                    if true_size > f.size {
+                        let old_size = f.size;
+                        f.size = true_size;
+                        tracing::info!(
+                            "Grew frameless {} from {} to {} bytes (return scan)",
+                            f.name, old_size, true_size,
+                        );
+                        corrections.push(SizeCorrection {
+                            function: f.name.clone(),
+                            address: f.address.clone(),
+                            old_size,
+                            new_size: true_size,
+                            reason: "grown_frameless_to_return".into(),
+                        });
+                    }
+                }
+                continue;
+            }
         };
         let true_size = match framed_function_size(
             entry,
@@ -942,6 +1005,82 @@ mod tests {
         words.resize(0x80, NOP); // nops only; no terminator covers 0x100
         let s = seg(0x08800000, &words);
         assert_eq!(framed_function_size(0x08800000, 0x10, 0x200, &s), Some(0x14));
+    }
+
+    fn heuristic_fn(addr: u32, size: u64, source: &str) -> JsonFunction {
+        JsonFunction {
+            name: format!("FUN_{addr:08X}"),
+            address: format!("0x{addr:08X}"),
+            size,
+            is_external: false,
+            is_thunk: false,
+            source: source.into(),
+        }
+    }
+
+    #[test]
+    fn test_frameless_heuristic_grows_to_its_return() {
+        // Patapon 3 static initializers in .data: frameless, longer than the
+        // 256-byte placeholder. jr ra at 0x140 -> true size 0x148.
+        let mut words = vec![NOP; 0x80];
+        words[0x50] = JR_RA;
+        let s = seg(0x08800000, &words);
+        let mut funcs = vec![
+            heuristic_fn(0x08800000, 256, "binary_scan"),
+            heuristic_fn(0x08800180, 0x10, "binary_scan"),
+        ];
+        resize_truncated_framed_functions(&mut funcs, &s);
+        assert_eq!(funcs[0].size, 0x148);
+    }
+
+    #[test]
+    fn test_frameless_heuristic_skips_early_return() {
+        // bnez at 0x08 jumps past an early jr ra at 0x40; the body ends at
+        // the jr ra (0x1C0) that follows the forward branch target (0x180).
+        let mut words = vec![NOP; 0x80];
+        words[2] = bnez_v0(2, 0x60); // at 0x08 -> 0x180
+        words[0x10] = JR_RA;         // 0x40 early return
+        words[0x70] = JR_RA;         // 0x1C0 final return
+        let s = seg(0x08800000, &words);
+        let mut funcs = vec![heuristic_fn(0x08800000, 256, "binary_scan")];
+        resize_truncated_framed_functions(&mut funcs, &s);
+        assert_eq!(funcs[0].size, 0x1C8);
+    }
+
+    #[test]
+    fn test_frameless_heuristic_without_return_before_next_is_unchanged() {
+        let mut words = vec![NOP; 0x80];
+        words[0x60] = JR_RA; // 0x180, beyond the next known function
+        let s = seg(0x08800000, &words);
+        let mut funcs = vec![
+            heuristic_fn(0x08800000, 256, "binary_scan"),
+            heuristic_fn(0x08800140, 0x10, "binary_scan"),
+        ];
+        resize_truncated_framed_functions(&mut funcs, &s);
+        assert_eq!(funcs[0].size, 256);
+    }
+
+    #[test]
+    fn test_frameless_heuristic_does_not_grow_over_undecodable_words() {
+        // 0x41000000 (seen in Patapon 3 .data) is not an Allegrex instruction:
+        // growing over it would turn the whole function into an empty stub.
+        let mut words = vec![NOP; 0x80];
+        words[0x48] = 0x4100_0000; // 0x120, past the 256-byte placeholder
+        words[0x50] = JR_RA;
+        let s = seg(0x08800000, &words);
+        let mut funcs = vec![heuristic_fn(0x08800000, 256, "binary_scan")];
+        resize_truncated_framed_functions(&mut funcs, &s);
+        assert_eq!(funcs[0].size, 256);
+    }
+
+    #[test]
+    fn test_frameless_ghidra_function_is_untouched() {
+        let mut words = vec![NOP; 0x80];
+        words[0x50] = JR_RA;
+        let s = seg(0x08800000, &words);
+        let mut funcs = vec![heuristic_fn(0x08800000, 256, "ghidra")];
+        resize_truncated_framed_functions(&mut funcs, &s);
+        assert_eq!(funcs[0].size, 256);
     }
 
     #[test]
