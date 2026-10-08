@@ -1,0 +1,12 @@
+# games/patapon3/game.toml — Patapon 3 (UCES-01421 base, "DxD Edition v1.1.4" mod).
+# Start empty and add [recompile] entries only after a concrete failure.
+# Overlays (USRDIR/overlay/OL_*.bin, "MWo3", load at 0x08ABB180) are handled
+# in milestone M2.
+
+[game]
+id    = "patapon3"
+title = "Patapon 3 DxD (UCES-01421)"
+
+[boot]
+# Retail BOOT.BIN on this disc is zero-filled; the game boots from EBOOT.BIN.
+boot_path = "disc0:/PSP_GAME/SYSDIR/EBOOT.BIN"
