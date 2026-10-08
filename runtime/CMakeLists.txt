@@ -458,6 +458,23 @@ target_compile_options(test_sas_core PRIVATE
 
 add_test(NAME sas_core_tests COMMAND test_sas_core)
 
+# PSMF header parser unit test (pure: parser + synthetic/malformed headers; the
+# real-data case reads the user's DATA_CMN.BND and is skipped when absent).
+add_executable(test_psmf tests/test_psmf.cpp src/hle/psp_psmf.cpp)
+
+target_include_directories(test_psmf PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_compile_options(test_psmf PRIVATE
+    -O2
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+
+add_test(NAME psmf_tests COMMAND test_psmf)
+
 # GE vertex transform unit test target (dothack-L6c fix). Links the real
 # psp_ge_vertex.cpp and calls ge_transform_vertices directly to verify
 # through-mode UV texel->[0,1] normalization. No SDL2/GL/scheduler deps
