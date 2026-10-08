@@ -117,6 +117,17 @@ pub(crate) fn prepare_emission(
     analysis_path: &Path,
     config_path: Option<&Path>,
 ) -> anyhow::Result<PreparedEmission> {
+    prepare_emission_with(analysis_path, config_path, None)
+}
+
+/// `prepare_emission`, optionally forcing the code-overlay constructor table
+/// entries (`bank = true`): an overlay's static initializers live in its data
+/// section, where Ghidra finds no functions, but the MWo3 header lists them.
+pub(crate) fn prepare_emission_with(
+    analysis_path: &Path,
+    config_path: Option<&Path>,
+    bank: Option<&str>,
+) -> anyhow::Result<PreparedEmission> {
     let mut analysis = load_analysis(analysis_path)?;
     let config = load_config(config_path)?;
     tracing::info!("Loaded {} functions from {}", analysis.functions.len(), analysis_path.display());
@@ -127,9 +138,16 @@ pub(crate) fn prepare_emission(
 
     // Curated per-game force entries come from the --config manifest
     // (games/<id>/game.toml [recompile], issue #46) — empty without one.
-    let force_entries = config.force_entries()?;
+    let mut force_entries = config.force_entries()?;
+    if bank.is_some() {
+        if let Some((lo, _)) = config.overlay_window()? {
+            let ctors = overlay_ctor_entries(&segment_bytes, lo)?;
+            tracing::info!("Forcing {} overlay constructor entries (MWo3 ctor table)", ctors.len());
+            force_entries.extend(ctors);
+        }
+    }
     let force_entries_cross_mid = config.force_entries_cross_mid()?;
-    let force_mid_entries = config.force_mid_entries()?;
+    let force_mid_entries = config.force_mid_entries(bank)?;
 
     // Enhanced function discovery: three-pass scan replaces vtable_miss_addresses.txt sidecar
     let discovery = enhance_function_discovery(
@@ -144,6 +162,38 @@ pub(crate) fn prepare_emission(
     // observed as repeated LOOKUP_MISS in the runtime. Mirrors force_entries but
     // for mid-function entry points inside an existing parent function.
     inject_force_mid_entries(&mut analysis, &force_mid_entries);
+
+    // Switch tables Ghidra left without DATA xrefs (e.g. in code overlays):
+    // synthesize table-entry -> case xrefs from the standard MIPS idiom so the
+    // decoder promotes their `jr` to a C++ switch instead of a dispatch miss.
+    {
+        let known: HashSet<(u32, u32)> = analysis
+            .xrefs
+            .iter()
+            .filter(|x| x.ref_type == "DATA")
+            .filter_map(|x| Some((parse_hex_u32(&x.from_addr)?, parse_hex_u32(&x.to_addr)?)))
+            .collect();
+        let mut added = 0usize;
+        let mut synthesized = Vec::new();
+        for f in &analysis.functions {
+            let Some(start) = parse_hex_u32(&f.address) else { continue };
+            let end = start.saturating_add(f.size as u32);
+            for (from, to) in
+                crate::jump_tables::discover_jump_table_xrefs(&segment_bytes, start, end)
+            {
+                if !known.contains(&(from, to)) {
+                    synthesized.push(psp_parser::analysis_json::JsonXref {
+                        from_addr: format!("0x{from:08X}"),
+                        to_addr: format!("0x{to:08X}"),
+                        ref_type: "DATA".to_string(),
+                    });
+                    added += 1;
+                }
+            }
+        }
+        analysis.xrefs.extend(synthesized);
+        tracing::info!("Jump-table scan: {added} synthesized DATA xrefs");
+    }
 
     // PSPRECOMP_CROSS_MID=1: coalesce Ghidra-over-split shared-frame siblings,
     // then run systematic cross-function mid-jump recovery (D2+D3a, 19G/19H).
@@ -249,7 +299,8 @@ pub fn run_recompile(
     output_dir: &Path,
     opts: &RecompileOptions,
 ) -> anyhow::Result<()> {
-    let mut prep = prepare_emission(analysis_path, opts.config_path.as_deref())?;
+    let mut prep =
+        prepare_emission_with(analysis_path, opts.config_path.as_deref(), opts.bank.as_deref())?;
 
     // Code overlays (M2): the main build drops the shared overlay window (its
     // bytes are BSS zeros in the main image, decoded as thousands of junk
@@ -665,7 +716,13 @@ fn enhance_function_discovery(
             && !all_known.contains(&end_curr)
             && !is_inside_function(end_curr, &func_intervals)
         {
-            discovered.insert(end_curr);
+            // Alignment nops between functions are not an entry: start the
+            // gap function at the first real instruction (e.g. a `j` thunk
+            // taken as a function pointer).
+            let start = skip_nop_padding(segment_bytes, end_curr, start_next);
+            if start == end_curr || (!all_known.contains(&start)) {
+                discovered.insert(start);
+            }
         }
     }
     let gap_count = discovered.len() - pre_gap;
@@ -1532,6 +1589,20 @@ fn make_progress_bar(len: u64) -> ProgressBar {
     pb
 }
 
+/// First non-nop word address in `[addr, limit)`, or `addr` if the whole
+/// range is nop padding.
+fn skip_nop_padding(segment_bytes: &[(u32, Vec<u8>)], addr: u32, limit: u32) -> u32 {
+    let mut a = addr;
+    while a < limit {
+        match read_image_range(segment_bytes, a, 4) {
+            Ok(w) if w == [0, 0, 0, 0] => a += 4,
+            Ok(_) => return a,
+            Err(_) => return addr,
+        }
+    }
+    addr
+}
+
 /// Keep only functions/mid-entries inside (`inside = true`) or outside the
 /// overlay window `[lo, hi)`.
 fn retain_by_window(
@@ -1556,6 +1627,22 @@ fn read_image_range(segment_bytes: &[(u32, Vec<u8>)], addr: u32, len: u32) -> an
         }
     }
     anyhow::bail!("image range 0x{addr:08X}+0x{len:X} is not inside one loaded segment")
+}
+
+/// Entries of the MWo3 constructor table `[header+0x18, header+0x1C)`: the
+/// overlay's static-initializer functions.
+fn overlay_ctor_entries(segment_bytes: &[(u32, Vec<u8>)], lo: u32) -> anyhow::Result<Vec<u32>> {
+    let h = read_image_range(segment_bytes, lo, 0x20)?;
+    let word = |b: &[u8], i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+    if &h[0..4] != b"MWo3" {
+        anyhow::bail!("no MWo3 overlay header at 0x{lo:08X}");
+    }
+    let (start, end) = (word(&h, 0x18), word(&h, 0x1C));
+    if end < start || end - start > 0x10000 {
+        anyhow::bail!("implausible MWo3 ctor table 0x{start:08X}..0x{end:08X}");
+    }
+    let table = read_image_range(segment_bytes, start, end - start)?;
+    Ok((0..table.len()).step_by(4).map(|i| word(&table, i)).collect())
 }
 
 /// Parse the MWo3 overlay header at the window base: (id, text_size).
@@ -1708,6 +1795,34 @@ mod tests {
 
     fn wmid(addr: u32, parent: u32) -> JsonMidEntry {
         JsonMidEntry { addr: format!("0x{addr:08X}"), parent_addr: format!("0x{parent:08X}") }
+    }
+
+    #[test]
+    fn gap_start_skips_nop_padding() {
+        // jr ra; delay; nop (padding); j thunk; nop  -> the gap starts at the j.
+        let base = 0x08ABBA74u32;
+        let words: [u32; 5] = [0x03E0_0008, 0x27BD_0030, 0x0000_0000, 0x0A2A_FD2C, 0x0000_0000];
+        let segs = vec![(base, words.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>())];
+        assert_eq!(skip_nop_padding(&segs, 0x08ABBA7C, 0x08ABBA88), 0x08ABBA80);
+        // All padding up to the next function: stay at the gap start.
+        assert_eq!(skip_nop_padding(&segs, 0x08ABBA7C, 0x08ABBA80), 0x08ABBA7C);
+    }
+
+    #[test]
+    fn overlay_ctor_entries_reads_the_mwo3_table() {
+        // MWo3 header at 0x08ABB180 with a 2-entry ctor table at +0x40.
+        let lo = 0x08ABB180u32;
+        let mut bytes = vec![0u8; 0x60];
+        let mut put = |off: usize, v: u32| bytes[off..off + 4].copy_from_slice(&v.to_le_bytes());
+        put(0, u32::from_le_bytes(*b"MWo3"));
+        put(4, 1);
+        put(8, lo);
+        put(0x18, lo + 0x40); // ctor_start
+        put(0x1C, lo + 0x48); // ctor_end
+        put(0x40, 0x08ADDD00);
+        put(0x44, 0x08ADDD94);
+        let segs = vec![(lo, bytes)];
+        assert_eq!(overlay_ctor_entries(&segs, lo).unwrap(), vec![0x08ADDD00, 0x08ADDD94]);
     }
 
     #[test]

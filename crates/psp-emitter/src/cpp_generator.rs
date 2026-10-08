@@ -421,13 +421,13 @@ impl Generator for CppGenerator {
                 ));
             }
         }
-        // Default: lookup via dispatch table.
-        // NOT recorded in static_lookup_targets: last_addr is an in-function
-        // jump-table label, by design absent from dispatch — recording it would
-        // flood the dispatch audit with intentional non-entries.
-        if let Some((last_addr, _)) = cases.last() {
+        // Default: `jr rX` goes wherever rX points, so a value matching no
+        // case is resolved through the dispatch table (a tail jump to another
+        // function, or an overlay-bank address). Dynamic, so not recorded in
+        // static_lookup_targets.
+        if !cases.is_empty() {
             self.writeln(&format!(
-                "default: RECOMP_LOOKUP(0x{last_addr:08X})(rdram, ctx); return;"
+                "default: RECOMP_LOOKUP((uint32_t)({index_expr}))(rdram, ctx); return;"
             ));
         }
         self.indent -= 1;
@@ -540,6 +540,17 @@ mod tests {
         assert!(body.contains("std::isnan(v) || v >= 2147483648.0f"), "{body}");
         assert!(body.contains("return 0x7FFFFFFF;"), "{body}");
         assert!(body.contains("v < -2147483648.0f"), "{body}");
+    }
+
+    #[test]
+    fn switch_default_jumps_to_the_register_value() {
+        // `jr rX` goes wherever rX points: a value matching no case must be
+        // looked up, not sent to the last case's (in-function) address.
+        let mut g = CppGenerator::new();
+        g.emit_switch("ctx->r[3]", &[(0x08800028, "L_08800028".into()), (0x08800030, "L_08800030".into())]);
+        let out = g.take_output();
+        assert!(out.contains("default: RECOMP_LOOKUP((uint32_t)(ctx->r[3]))(rdram, ctx); return;"), "{out}");
+        assert!(!out.contains("RECOMP_LOOKUP(0x08800030)"), "{out}");
     }
 
     #[test]

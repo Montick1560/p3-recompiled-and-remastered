@@ -3,6 +3,7 @@ mod config;
 mod dump;
 mod fingerprint;
 mod hle_entry_scanner;
+mod jump_tables;
 mod prx_load;
 mod recompile;
 mod report;

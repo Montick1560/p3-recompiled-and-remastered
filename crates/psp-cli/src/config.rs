@@ -143,6 +143,11 @@ pub struct ForceMidEntry {
     pub entry: String,
     /// Parent function start address (hex string).
     pub parent: String,
+    /// Restrict to one overlay bank (`recompile --bank <name>`). Overlays
+    /// share the window's addresses, so an unscoped window entry would leak
+    /// into every bank.
+    #[serde(default)]
+    pub bank: Option<String>,
 }
 
 /// A function name to replace with an HLE no-op stub.
@@ -249,7 +254,8 @@ impl GameConfig {
     }
 
     /// `[recompile] force_mid_entries` as (entry, parent) pairs, parsed.
-    pub fn force_mid_entries(&self) -> anyhow::Result<Vec<(u32, u32)>> {
+    /// Entries scoped to another bank are skipped; unscoped entries always apply.
+    pub fn force_mid_entries(&self, bank: Option<&str>) -> anyhow::Result<Vec<(u32, u32)>> {
         let entries = self
             .recompile
             .as_ref()
@@ -257,6 +263,7 @@ impl GameConfig {
             .unwrap_or(&[]);
         entries
             .iter()
+            .filter(|fme| fme.bank.is_none() || fme.bank.as_deref() == bank)
             .map(|fme| {
                 let entry = parse_hex(&fme.entry).ok_or_else(|| {
                     anyhow::anyhow!("force_mid_entries entry is not hex: {:?}", fme.entry)
@@ -303,6 +310,24 @@ pub fn load_config(path: Option<&std::path::Path>) -> anyhow::Result<GameConfig>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn force_mid_entries_scoped_to_bank() {
+        let c: GameConfig = toml::from_str(concat!(
+            "[[recompile.force_mid_entries]]
+entry = \"0x100\"
+parent = \"0xF0\"
+",
+            "[[recompile.force_mid_entries]]
+entry = \"0x200\"
+parent = \"0x1F0\"
+bank = \"ovAzito\"
+",
+        )).unwrap();
+        assert_eq!(c.force_mid_entries(None).unwrap(), vec![(0x100, 0xF0)]);
+        assert_eq!(c.force_mid_entries(Some("ovAzito")).unwrap(), vec![(0x100, 0xF0), (0x200, 0x1F0)]);
+        assert_eq!(c.force_mid_entries(Some("ovTitle")).unwrap(), vec![(0x100, 0xF0)]);
+    }
 
     #[test]
     fn overlay_window_parses_pair() {
@@ -352,7 +377,7 @@ window = [\"zz\", \"0x1\"]
         assert!(!cfg.asset_layer_is_bnd().unwrap());
         assert!(cfg.force_entries().unwrap().is_empty());
         assert!(cfg.force_entries_cross_mid().unwrap().is_empty());
-        assert!(cfg.force_mid_entries().unwrap().is_empty());
+        assert!(cfg.force_mid_entries(None).unwrap().is_empty());
     }
 
     #[test]
@@ -408,7 +433,7 @@ window = [\"zz\", \"0x1\"]
             vec![0x0882_7470, 0x0882_744C]
         );
         assert_eq!(
-            cfg.force_mid_entries().unwrap(),
+            cfg.force_mid_entries(None).unwrap(),
             vec![(0x0882_7F44, 0x0882_7E7C)]
         );
     }
