@@ -21,6 +21,20 @@ PT_NULL, PT_LOAD = 0, 1
 PF_RWX = 7
 
 
+def pick_placeholder(phdrs, load_addr, memsz):
+    """Index of the PT_NULL placeholder for an overlay of `memsz` bytes at
+    `load_addr`: the smallest one that fits (overlays share the window, so
+    "first large enough" would hand a small overlay a larger one's slot).
+    `phdrs` is a list of (p_type, p_vaddr, p_memsz). None if none fits."""
+    best = None
+    for i, (p_type, p_vaddr, p_memsz) in enumerate(phdrs):
+        # 0x100 of slack for the linker's end-of-section alignment.
+        if p_type == PT_NULL and p_vaddr == load_addr and p_memsz >= memsz - 0x100:
+            if best is None or p_memsz < phdrs[best][2]:
+                best = i
+    return best
+
+
 def main() -> int:
     if len(sys.argv) != 5:
         print(__doc__, file=sys.stderr)
@@ -65,19 +79,21 @@ def main() -> int:
     sec[4], sec[5] = ovl_off, len(ovl)
     put_sh(names[section], sec)
 
-    # Program headers: trim the main PT_LOAD, promote the matching PT_NULL.
+    # Program headers: trim the main PT_LOAD, promote this overlay's PT_NULL.
     memsz = len(ovl) + bss_size
-    promoted = trimmed = False
-    for i in range(phnum):
-        o = phoff + i * phentsize
-        p = list(struct.unpack("<8I", elf[o:o + 32]))
+    headers = [list(struct.unpack("<8I", elf[phoff + i * phentsize:phoff + i * phentsize + 32]))
+               for i in range(phnum)]
+    slot = pick_placeholder([(p[0], p[2], p[5]) for p in headers], load_addr, memsz)
+    promoted = slot is not None
+    trimmed = False
+    for i, p in enumerate(headers):
         p_type, p_off, p_vaddr, p_paddr, p_filesz, p_memsz, p_flags, p_align = p
         if p_type == PT_LOAD and p_vaddr < load_addr < p_vaddr + p_memsz and not trimmed:
             p[5] = load_addr - p_vaddr
             trimmed = True
-        elif p_type == PT_NULL and p_vaddr == load_addr and not promoted and p_memsz >= memsz - 0x100:
+        elif i == slot:
             p = [PT_LOAD, ovl_off, load_addr, load_addr, len(ovl), max(p_memsz, memsz), PF_RWX, 16]
-            promoted = True
+        o = phoff + i * phentsize
         elf[o:o + 32] = struct.pack("<8I", *p)
     if not (promoted and trimmed):
         print(f"error: could not rewrite program headers (promoted={promoted}, trimmed={trimmed})",
