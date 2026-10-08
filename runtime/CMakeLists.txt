@@ -133,6 +133,7 @@ set(RUNTIME_SOURCES
     src/psp_ge.cpp
     src/psp_ge_vertex.cpp
     src/psp_ge_texture.cpp
+    src/psp_ge_texdecode.cpp
     src/psp_ge_shader.cpp
     src/psp_ge_draw.cpp
     src/psp_ge_viewport.cpp
@@ -359,6 +360,23 @@ target_compile_options(test_overlay PRIVATE
 )
 
 add_test(NAME overlay_tests COMMAND test_overlay)
+
+# Pure GE texture decoder unit test (stride, swizzle, CLUT transform): no GL.
+add_executable(test_ge_texdecode tests/test_ge_texdecode.cpp src/psp_ge_texdecode.cpp)
+
+target_include_directories(test_ge_texdecode PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${PSPRECOMP_OUTPUT_DIR}/include
+)
+
+target_compile_options(test_ge_texdecode PRIVATE
+    -O2
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+
+add_test(NAME ge_texdecode_tests COMMAND test_ge_texdecode)
 
 # GE vertex transform unit test target (dothack-L6c fix). Links the real
 # psp_ge_vertex.cpp and calls ge_transform_vertices directly to verify
