@@ -156,6 +156,7 @@ set(RUNTIME_SOURCES
     src/hle/psp_hle_ctrl.cpp
     src/hle/psp_hle_utility.cpp
     src/hle/psp_hle_sas.cpp
+    src/hle/psp_sas_core.cpp
     src/psp_vfpu_core.cpp
     src/psp_vfpu_arith.cpp
     src/psp_vfpu_trig.cpp
@@ -439,6 +440,23 @@ target_compile_options(test_subintr PRIVATE
 )
 
 add_test(NAME subintr_tests COMMAND test_subintr)
+
+# SAS synthesis core unit test (pure: VAG decode, ADSR, mixing, bad-pointer
+# safety) -- no SDL, no game files.
+add_executable(test_sas_core tests/test_sas_core.cpp src/hle/psp_sas_core.cpp)
+
+target_include_directories(test_sas_core PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_compile_options(test_sas_core PRIVATE
+    -O2
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+
+add_test(NAME sas_core_tests COMMAND test_sas_core)
 
 # GE vertex transform unit test target (dothack-L6c fix). Links the real
 # psp_ge_vertex.cpp and calls ge_transform_vertices directly to verify
