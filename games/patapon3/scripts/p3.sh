@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Patapon 3 build orchestration (Windows / Git Bash).
-#   p3.sh extract | analyze | recompile | build | run [seconds] | all
+#   p3.sh extract | analyze | recompile | overlays | build | run [seconds] | all
 # Env overrides: DECO (project root), P3_ISO, P3_EBOOT, JAVA_HOME.
 set -euo pipefail
 
@@ -59,6 +59,43 @@ cmd_recompile() {
         --config games/patapon3/game.toml -o "$OUT" 2>&1 | tail -1)
 }
 
+OVERLAYS=(Azito Mission Title)
+OVL="$DECO/build/ovl"
+
+# Each code overlay: combined ELF (EBOOT + overlay in its window) -> analyze
+# (Ghidra result cached by input hash) -> recompile --bank ov<Name>.
+cmd_overlays() {
+    need_file "$P3_EBOOT" "decrypted EBOOT not found at '$P3_EBOOT' (see: p3.sh analyze)"
+    [[ -d "$DISC0/PSP_GAME/USRDIR/overlay" ]] || die "disc0 missing — run: p3.sh extract"
+    (cd "$REPO" && cargo build --release -q)
+    mkdir -p "$OVL"
+    local name lower
+    for name in "${OVERLAYS[@]}"; do
+        lower="$(echo "$name" | tr '[:upper:]' '[:lower:]')"
+        python -I "$REPO/scripts/overlay_elf.py" "$P3_EBOOT" \
+            "$DISC0/PSP_GAME/USRDIR/overlay/OL_$name.bin" "OL_$name.bin" "$OVL/$lower.elf"
+        mkdir -p "$REPO/data/patapon3/ov_$lower"
+        (cd "$REPO" && PATH="$JAVA_HOME/bin:$PATH" JAVA_HOME="$JAVA_HOME" \
+            ./target/release/psprecomp analyze --ghidra-dir "$GHIDRA" \
+            --output "data/patapon3/ov_$lower/analysis.json" "$OVL/$lower.elf" 2>&1 | tail -1)
+        rm -rf "$OVL/ov${name}_output"
+        (cd "$REPO" && PSPRECOMP_CROSS_MID=1 ./target/release/psprecomp recompile \
+            "data/patapon3/ov_$lower/analysis.json" --config games/patapon3/game.toml \
+            --bank "ov$name" -o "$OVL/ov${name}_output" 2>&1 | tail -1)
+    done
+}
+
+# ';'-separated Windows-style bank dirs for CMake (empty if none built).
+bank_dirs() {
+    local name dirs=()
+    for name in "${OVERLAYS[@]}"; do
+        if [[ -f "$OVL/ov${name}_output/bank_dispatch.cpp" ]]; then
+            dirs+=("$(cygpath -m "$OVL/ov${name}_output" 2>/dev/null || echo "$OVL/ov${name}_output")")
+        fi
+    done
+    (IFS=';'; echo "${dirs[*]}")
+}
+
 cmd_build() {
     [[ -f "$OUT/CMakeLists.txt" ]] || die "generated C++ missing — run: p3.sh recompile"
     [[ -d "$SDL2_PKG" ]] || die "SDL2 mingw package not found at $SDL2_PKG"
@@ -67,7 +104,8 @@ cmd_build() {
         -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
         -DPSPRECOMP_GAME=patapon3 -DPSPRECOMP_OUTPUT_DIR="$OUT" \
         -DSDL2_DIR="$SDL2_PKG/lib/cmake/SDL2" \
-        -DFETCHCONTENT_SOURCE_DIR_ZLIB="$ZLIB_SRC" >/dev/null
+        -DFETCHCONTENT_SOURCE_DIR_ZLIB="$ZLIB_SRC" \
+        -DPSPRECOMP_BANK_DIRS="$(bank_dirs)" >/dev/null
     cmake --build "$BUILD" --target psprecomp_runtime
     cp -u "$SDL2_PKG/bin/SDL2.dll" "$BUILD/"
 }
@@ -107,10 +145,11 @@ cmd_run() {
 
 case "${1:-}" in
     extract)   cmd_extract ;;
+    overlays)  cmd_overlays ;;
     analyze)   cmd_analyze ;;
     recompile) cmd_recompile ;;
     build)     cmd_build ;;
     run)       shift; cmd_run "${1:-60}" ;;
-    all)       cmd_extract; cmd_analyze; cmd_recompile; cmd_build; cmd_run 60 ;;
-    *) echo "usage: $0 {extract|analyze|recompile|build|run [seconds]|all}" >&2; exit 2 ;;
+    all)       cmd_extract; cmd_analyze; cmd_recompile; cmd_overlays; cmd_build; cmd_run 60 ;;
+    *) echo "usage: $0 {extract|analyze|recompile|overlays|build|run [seconds]|all}" >&2; exit 2 ;;
 esac
