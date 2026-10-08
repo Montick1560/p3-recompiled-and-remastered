@@ -304,6 +304,24 @@ target_compile_options(test_refer_info PRIVATE
 
 add_test(NAME refer_info_tests COMMAND test_refer_info)
 
+# Volatile-memory lock protocol unit test (hle/psp_hle_volatile_mem.h):
+# pure protocol logic over guest memory, test_refer_info convention.
+add_executable(test_volatile_mem tests/test_volatile_mem.cpp)
+
+target_include_directories(test_volatile_mem PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${PSPRECOMP_OUTPUT_DIR}/include  # recomp.h (psp_mem_read/write)
+)
+
+target_compile_options(test_volatile_mem PRIVATE
+    -O2
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+
+add_test(NAME volatile_mem_tests COMMAND test_volatile_mem)
+
 # GE vertex transform unit test target (dothack-L6c fix). Links the real
 # psp_ge_vertex.cpp and calls ge_transform_vertices directly to verify
 # through-mode UV texel->[0,1] normalization. No SDL2/GL/scheduler deps
