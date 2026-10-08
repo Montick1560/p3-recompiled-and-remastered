@@ -1,6 +1,7 @@
 #include "recomp.h"
 #include "funcs.h"
 #include "psp_memory.h"
+#include "psp_audio_out.h"
 #include "psp_overlay.h"
 #include "psp_scheduler.h"
 #include "psp_render_queue.h"
@@ -236,6 +237,12 @@ int main(int argc, char* argv[]) {
     // shader/FBO init sequence, but we also call it explicitly here
     // in case draw_init changes in the future.
     ge_texture_init();
+
+    // 5a. Audio output device (falls back to timing-only when unavailable).
+    // Closed at exit so a PSPRECOMP_AUDIO_DUMP WAV gets its final sizes.
+    if (psp_audio_out_init()) {
+        std::atexit(psp_audio_out_shutdown);
+    }
 
     // 5c. GE self-test (if PSPRECOMP_GE_TEST=1)
     // When PSPRECOMP_GE_TEST_ONLY=1, capture the test frame and exit

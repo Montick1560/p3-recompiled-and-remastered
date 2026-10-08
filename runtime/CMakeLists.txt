@@ -127,6 +127,8 @@ set(RUNTIME_SOURCES
     src/psp_memory.cpp
     src/psp_dispatch.cpp
     src/psp_overlay.cpp
+    src/psp_audio_mixer.cpp
+    src/psp_audio_out.cpp
     src/psp_scheduler.cpp
     src/psp_render_queue.cpp
     src/psp_event_loop.cpp
@@ -403,6 +405,22 @@ target_compile_options(test_ge_texdecode PRIVATE
 )
 
 add_test(NAME ge_texdecode_tests COMMAND test_ge_texdecode)
+
+# sceAudio output mixer unit test (pure: FIFOs, volume, saturation) — no SDL.
+add_executable(test_audio_mixer tests/test_audio_mixer.cpp src/psp_audio_mixer.cpp)
+
+target_include_directories(test_audio_mixer PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_compile_options(test_audio_mixer PRIVATE
+    -O2
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+
+add_test(NAME audio_mixer_tests COMMAND test_audio_mixer)
 
 # GE vertex transform unit test target (dothack-L6c fix). Links the real
 # psp_ge_vertex.cpp and calls ge_transform_vertices directly to verify
