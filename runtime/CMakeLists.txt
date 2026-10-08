@@ -157,6 +157,7 @@ set(RUNTIME_SOURCES
     src/hle/psp_hle_utility.cpp
     src/hle/psp_hle_sas.cpp
     src/hle/psp_sas_core.cpp
+    src/hle/psp_savedata.cpp
     src/psp_vfpu_core.cpp
     src/psp_vfpu_arith.cpp
     src/psp_vfpu_trig.cpp
@@ -457,6 +458,23 @@ target_compile_options(test_sas_core PRIVATE
 )
 
 add_test(NAME sas_core_tests COMMAND test_sas_core)
+
+# sceUtilitySavedata back end unit test (pure: PSF writer/parser, savedata
+# modes against a temp directory and a fake guest RAM) -- no SDL, no game files.
+add_executable(test_savedata tests/test_savedata.cpp src/hle/psp_savedata.cpp)
+
+target_include_directories(test_savedata PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_compile_options(test_savedata PRIVATE
+    -O2
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+
+add_test(NAME savedata_tests COMMAND test_savedata)
 
 # GE vertex transform unit test target (dothack-L6c fix). Links the real
 # psp_ge_vertex.cpp and calls ge_transform_vertices directly to verify
