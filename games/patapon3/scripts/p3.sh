@@ -13,22 +13,29 @@ TOOLS="$DECO/tools"
 GHIDRA="$TOOLS/ghidra_12.0.2_PUBLIC"
 SDL2_PKG="$TOOLS/SDL2-2.32.10/x86_64-w64-mingw32"
 ZLIB_SRC="$TOOLS/zlib-1.3.1"
-DISC0="$DECO/disc0"
+DISC0="${P3_DISC0:-$DECO/disc0}"
 ANALYSIS="$REPO/data/patapon3/analysis.json"
 OUT="$DECO/build/p3_output"
 BUILD="$DECO/build/rtw"
+RUNTIME="${P3_RUNTIME:-$BUILD/psprecomp_runtime.exe}"   # overridable for tests
+RUNTIME_ARGS="${P3_RUNTIME_ARGS:-}"
 LOGS="$DECO/build/logs"
 
 die() { echo "p3.sh: error: $*" >&2; exit 1; }
 need_file() { [[ -f "$1" ]] || die "$2"; }
 
 cmd_extract() {
-    need_file "$P3_ISO" "ISO not found at '$P3_ISO' (set P3_ISO=/path/to/your.iso)"
-    if [[ -f "$DISC0/PSP_GAME/PARAM.SFO" ]]; then
+    # The marker is written last, so an interrupted extraction is redone.
+    if [[ -f "$DISC0/.complete" ]]; then
         echo "disc0 already extracted at $DISC0 (delete it to re-extract)"
         return
     fi
-    python -I "$REPO/scripts/iso_extract.py" "$P3_ISO" "$DISC0"
+    need_file "$P3_ISO" "ISO not found at '$P3_ISO' (set P3_ISO=/path/to/your.iso)"
+    rm -rf "$DISC0.partial"
+    python -I "$REPO/scripts/iso_extract.py" "$P3_ISO" "$DISC0.partial"
+    rm -rf "$DISC0"
+    mv "$DISC0.partial" "$DISC0"
+    touch "$DISC0/.complete"
 }
 
 cmd_analyze() {
@@ -65,25 +72,37 @@ cmd_build() {
     cp -u "$SDL2_PKG/bin/SDL2.dll" "$BUILD/"
 }
 
+launch_runtime() {   # $1 = seconds, $2 = log; prints the exit status
+    local rc=0
+    (cd "$(dirname "$RUNTIME")" && PSPRECOMP_DISC0="$DISC0"         timeout "$1" "$RUNTIME" $RUNTIME_ARGS >"$2" 2>&1) || rc=$?
+    echo "$rc"
+}
+
 cmd_run() {
     local secs="${1:-60}"
-    need_file "$BUILD/psprecomp_runtime.exe" "runtime not built — run: p3.sh build"
+    need_file "$RUNTIME" "runtime not built — run: p3.sh build"
     [[ -d "$DISC0/PSP_GAME" ]] || die "disc0 missing — run: p3.sh extract"
     mkdir -p "$LOGS"
     local log="$LOGS/run-$(date +%Y%m%d-%H%M%S).log"
     echo "running for ${secs}s, log: $log"
-    (cd "$BUILD" && PSPRECOMP_DISC0="$DISC0" timeout "$secs" ./psprecomp_runtime.exe >"$log" 2>&1) || true
-    if grep -q 'Permission denied' "$log" && [[ $(wc -c <"$log") -lt 200 ]]; then
+    local rc
+    rc="$(launch_runtime "$secs" "$log")"
+    if [[ -z "${P3_RUNTIME:-}" ]] && grep -q 'Permission denied' "$log" && [[ $(wc -c <"$log") -lt 200 ]]; then
         # Windows Smart App Control blocks some unsigned builds by file hash;
         # a relink yields a new file that is usually allowed. Retry once.
         echo "exe blocked by Windows (Smart App Control?) — relinking and retrying once"
-        rm -f "$BUILD/psprecomp_runtime.exe"
+        rm -f "$RUNTIME"
         cmake --build "$BUILD" --target psprecomp_runtime >/dev/null
-        (cd "$BUILD" && PSPRECOMP_DISC0="$DISC0" timeout "$secs" ./psprecomp_runtime.exe >"$log" 2>&1) || true
+        rc="$(launch_runtime "$secs" "$log")"
+        if grep -q 'Permission denied' "$log" && [[ $(wc -c <"$log") -lt 200 ]]; then
+            die "exe blocked by Windows Smart App Control (turn SAC off or sign the binary)"
+        fi
     fi
     ln -sf "$log" "$LOGS/latest.log" 2>/dev/null || cp "$log" "$LOGS/latest.log"
     grep -E '\[PRESENT\] Frame' "$log" | tail -1 || true
     echo "log size: $(wc -c <"$log") bytes"
+    # 124 = still running when the timeout hit, which is the normal case.
+    [[ "$rc" == 0 || "$rc" == 124 ]] || die "runtime exited with status $rc (see $log)"
 }
 
 case "${1:-}" in
