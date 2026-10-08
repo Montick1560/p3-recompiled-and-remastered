@@ -15,10 +15,8 @@
 #include <string>
 #include <vector>
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#include "psp_socket_compat.h"
+#include <unistd.h>  // usleep (MinGW and POSIX)
 
 static int failures = 0;
 static int tests_run = 0;
@@ -276,6 +274,7 @@ static void test_info_json(uint8_t* rdram) {
 // ===================================================================
 
 static int connect_client() {
+    psp_sock_startup();
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return -1;
     struct sockaddr_in addr{};
@@ -289,7 +288,7 @@ static int connect_client() {
         }
         ::usleep(20000);
     }
-    ::close(fd);
+    psp_sock_close(fd);
     return -1;
 }
 
@@ -312,7 +311,7 @@ static std::vector<uint8_t> recv_exact(int fd, size_t n) {
     std::vector<uint8_t> buf(n);
     size_t got = 0;
     while (got < n) {
-        ssize_t r = ::recv(fd, buf.data() + got, n - got, 0);
+        ssize_t r = ::recv(fd, reinterpret_cast<char*>(buf.data() + got), n - got, 0);
         if (r <= 0) break;
         got += static_cast<size_t>(r);
     }
@@ -364,8 +363,8 @@ static void test_concurrent_clients(uint8_t* rdram) {
                   "connection survives an oversized line");
     recv_exact(a, 2);
 
-    ::close(a);
-    ::close(b);
+    psp_sock_close(a);
+    psp_sock_close(b);
     psp_debug_socket_stop();
     tests_run++;  // reaching here without hanging is the assertion
 }

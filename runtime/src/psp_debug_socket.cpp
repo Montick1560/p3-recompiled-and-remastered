@@ -10,9 +10,7 @@
 #include <thread>
 #include <vector>
 
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <unistd.h>
+#include "psp_socket_compat.h"
 
 static constexpr uint32_t PSP_DBG_ADDR_MASK = 0x07FFFFFFU;
 static constexpr size_t   MAX_READ_BYTES    = 65536;
@@ -344,7 +342,7 @@ static bool send_all(int fd, const void* data, size_t len) {
     const uint8_t* p = static_cast<const uint8_t*>(data);
     size_t sent = 0;
     while (sent < len) {
-        ssize_t w = ::send(fd, p + sent, len - sent, 0);
+        ssize_t w = ::send(fd, reinterpret_cast<const char*>(p + sent), len - sent, 0);
         if (w <= 0) return false;
         sent += static_cast<size_t>(w);
     }
@@ -363,7 +361,7 @@ static void handle_client(int client_fd) {
         // Read one byte at a time until '\n' (commands are tiny; the
         // bottleneck is the human/agent on the other end, not syscalls)
         char ch;
-        ssize_t n = ::recv(client_fd, &ch, 1, 0);
+        ssize_t n = ::recv(client_fd, reinterpret_cast<char*>(&ch), 1, 0);
         if (n <= 0) {
             break;
         }
@@ -409,7 +407,7 @@ static void handle_client(int client_fd) {
             if (*it == client_fd) { g_client_fds.erase(it); break; }
         }
     }
-    ::close(client_fd);
+    psp_sock_close(client_fd);
 }
 
 /// Main loop for the background accept thread.
@@ -423,7 +421,7 @@ static void server_loop(int port) {
     g_server_fd = fd;
 
     int opt = 1;
-    ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&opt), sizeof(opt));
 
     struct sockaddr_in addr{};
     addr.sin_family      = AF_INET;
@@ -433,14 +431,14 @@ static void server_loop(int port) {
     if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
         std::fprintf(stderr,
             "[DEBUG] Failed to bind debug socket on port %d\n", port);
-        ::close(fd);
+        psp_sock_close(fd);
         g_server_fd = -1;
         return;
     }
 
     if (::listen(fd, 4) < 0) {
         std::fprintf(stderr, "[DEBUG] Failed to listen on debug socket\n");
-        ::close(fd);
+        psp_sock_close(fd);
         g_server_fd = -1;
         return;
     }
@@ -470,11 +468,12 @@ static void server_loop(int port) {
         g_client_threads.emplace_back(handle_client, client_fd);
     }
 
-    ::close(fd);
+    psp_sock_close(fd);
     g_server_fd = -1;
 }
 
 void psp_debug_socket_start(uint8_t* rdram, size_t rdram_size, int port) {
+    psp_sock_startup();
     g_rdram      = rdram;
     g_rdram_size = rdram_size;
     g_start_time = std::chrono::steady_clock::now();
