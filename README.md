@@ -212,7 +212,7 @@ labels mark scope and priority.
 
 **Beyond the title — broader goals**
 
-- [ ] Audio: real ATRAC/SAS decode and a periodic audio IRQ / buffer drain (#29).
+- [x] Audio: SDL2 output, SAS synthesis and ATRAC3plus decode ported from PPSSPP (#29).
 - [ ] GE/render fidelity: block transfers (#21), texture sampling (#22), the per-fragment pipeline
       (#24), 3D features — lighting / skinning / patches (#25), and display-list gaps (#26).
 - [ ] Faithful kernel callback delivery (#11) and the event-flag wait-mode fix (#64).
@@ -365,7 +365,8 @@ checked with adversarial sub-agent verification before they are banked.
   (`games/patapon/runtime/hooks_ge.cpp` provides Patapon's ortho; generic builds pass world
   space through with a warning). This is adequate for the 2D title/menu screens but must be
   fixed before 3D gameplay: the mapping hardcodes Patapon's viewport and has no depth ordering.
-- **No audio.** ATRAC and SAS are crude stubs (0 samples decoded, instant end-of-stream).
+- **Audio is partial.** sceAudio output, SAS and ATRAC3plus are implemented (ported from
+  PPSSPP); ATRAC voices inside SAS, low-level ATRAC decode and movie audio are not.
 - **GE gaps.** SIGNAL relative/offset variants (0x13–0x18), lighting, texture matrix, bone/morph
   skinning, bezier surfaces, and block transfers (TRANSFERSTART) are unimplemented.
 - **Beyond the title screen is unexplored.** Title-screen interactivity (menu input advancing the
