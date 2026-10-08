@@ -143,6 +143,26 @@ void vfpu_vbfy2(recomp_context* ctx, uint8_t*,
 // Reduction operations
 // ---------------------------------------------------------------------------
 
+void vfpu_vocp(recomp_context* ctx, uint8_t*,
+               uint8_t vd, uint8_t vs, uint8_t size) {
+    // d = 1 - s (PPSSPP Int_Vocp: the S prefix is forced to negate and T is
+    // forced to the constant 1, so a user negate flag cannot flip it to 1+s).
+    // NaN inputs yield a positive NaN.
+    float s[4];
+    vfpu_read_vector(s, size, vs, ctx->vfpu);
+    const uint32_t sprefix_no_negate =
+        ctx->vfpu_ctrl[VFPU_CTRL_SPREFIX] & ~(0xFu << 16);
+    vfpu_apply_prefix_st(s, sprefix_no_negate, size);
+    float d[4];
+    for (int i = 0; i < size; i++) {
+        d[i] = std::isnan(s[i]) ? std::fabs(s[i]) : 1.0f - s[i];
+    }
+    vfpu_apply_prefix_d(d, ctx->vfpu_ctrl[VFPU_CTRL_DPREFIX], size);
+    vfpu_write_vector(d, size, vd, ctx->vfpu,
+                      ctx->vfpu_ctrl[VFPU_CTRL_DPREFIX]);
+    vfpu_eat_prefixes(ctx);
+}
+
 void vfpu_vsocp(recomp_context* ctx, uint8_t*,
                 uint8_t vd, uint8_t vs, uint8_t size) {
     // Saturating opposite clamp pair

@@ -768,6 +768,40 @@ static void test_vtfm_last_row_prefix() {
 // main
 // ===================================================================
 
+// ===================================================================
+// vocp / vuc2i — PPSSPP InterpreterVFPU.cpp Int_Vocp / Int_Vx2i
+// ===================================================================
+static void test_vocp_quad() {
+    std::printf("  test_vocp_quad...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    ctx.vfpu[0] = 0.25f; ctx.vfpu[1] = 1.0f; ctx.vfpu[2] = -0.5f; ctx.vfpu[3] = 0.0f;
+    vfpu_vocp(&ctx, nullptr, 0x08, 0x00, 4);  // vocp.q C200, C000
+    ASSERT_EXACT(ctx.vfpu[32], 0.75f, "vocp 1-0.25");
+    ASSERT_EXACT(ctx.vfpu[33], 0.0f, "vocp 1-1");
+    ASSERT_EXACT(ctx.vfpu[34], 1.5f, "vocp 1-(-0.5)");
+    ASSERT_EXACT(ctx.vfpu[35], 1.0f, "vocp 1-0");
+}
+
+static uint32_t vfpu_bits(const recomp_context& ctx, int i) {
+    uint32_t u;
+    std::memcpy(&u, &ctx.vfpu[i], 4);
+    return u;
+}
+
+static void test_vuc2i_replicates_and_halves() {
+    std::printf("  test_vuc2i_replicates_and_halves...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    uint32_t packed = 0x80FF0001u;  // bytes (lsb first): 01 00 FF 80
+    std::memcpy(&ctx.vfpu[0], &packed, 4);
+    vfpu_vuc2i(&ctx, nullptr, 0x08, 0x00, 1);  // vuc2i.s -> C200 quad
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0x00808080u, "vuc2i byte 0x01");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 33), 0x00000000u, "vuc2i byte 0x00");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 34), 0x7FFFFFFFu, "vuc2i byte 0xFF");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 35), 0x40404040u, "vuc2i byte 0x80");
+}
+
 int main() {
     std::printf("Running VFPU runtime tests...\n\n");
 
@@ -789,6 +823,8 @@ int main() {
     test_lookat_forward_normalize();
     test_vmmul_last_element_prefix();
     test_vtfm_last_row_prefix();
+    test_vocp_quad();
+    test_vuc2i_replicates_and_halves();
 
     std::printf("\n%d tests run, %d failures\n",
                 tests_run, failures);

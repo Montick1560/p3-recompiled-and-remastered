@@ -186,8 +186,9 @@ void vfpu_vuc2i(recomp_context* ctx, uint8_t*,
     std::memcpy(&u, &s_in, 4);
     float d[4];
     for (int i = 0; i < 4; i++) {
-        uint32_t val = ((u >> (i * 8)) & 0xFF) << 24;
-        val |= val >> 8;  // replicate
+        // PPSSPP Int_Vx2i: replicate the byte into all four, then shift to
+        // 31-bit range (0xFF -> 0x7FFFFFFF, 0x80 -> 0x40404040).
+        uint32_t val = (((u >> (i * 8)) & 0xFFu) * 0x01010101u) >> 1;
         std::memcpy(&d[i], &val, 4);
     }
     vfpu_write_vector(d, 4, vd, ctx->vfpu, 0);

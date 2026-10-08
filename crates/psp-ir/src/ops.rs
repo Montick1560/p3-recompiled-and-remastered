@@ -49,6 +49,7 @@ pub enum VfpuUnaryOp {
     Vsrt4,
     Vbfy1,
     Vbfy2,
+    Vocp,
     Vsocp,
     Vfad,
     Vavg,

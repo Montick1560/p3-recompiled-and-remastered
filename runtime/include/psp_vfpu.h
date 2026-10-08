@@ -264,6 +264,8 @@ void vfpu_vbfy1(recomp_context* ctx, uint8_t* rdram,
                 uint8_t vd, uint8_t vs, uint8_t size);
 void vfpu_vbfy2(recomp_context* ctx, uint8_t* rdram,
                 uint8_t vd, uint8_t vs, uint8_t size);
+void vfpu_vocp(recomp_context* ctx, uint8_t* rdram,
+               uint8_t vd, uint8_t vs, uint8_t size);
 void vfpu_vsocp(recomp_context* ctx, uint8_t* rdram,
                 uint8_t vd, uint8_t vs, uint8_t size);
 void vfpu_vfad(recomp_context* ctx, uint8_t* rdram,

@@ -446,17 +446,18 @@ fn decode_vfpu7(
         1 => VfpuUnaryOp::Vrndi,
         2 => VfpuUnaryOp::Vrndf1,
         3 => VfpuUnaryOp::Vrndf2,
-        // 4 => vsbz (uncommon), 5 => vlgb (uncommon)
-        8 => VfpuUnaryOp::Vf2h,
-        9 => VfpuUnaryOp::Vh2f,
-        12 => VfpuUnaryOp::Vuc2i,
-        13 => VfpuUnaryOp::Vc2i,
-        14 => VfpuUnaryOp::Vus2i,
-        15 => VfpuUnaryOp::Vs2i,
-        16 => VfpuUnaryOp::Vi2uc,
-        17 => VfpuUnaryOp::Vi2c,
-        18 => VfpuUnaryOp::Vi2us,
-        19 => VfpuUnaryOp::Vi2s,
+        // PPSSPP tableVFPU7: 4-17 and 20-21 are INVALID; 22 vsbz and
+        // 23 vlgb are not modelled.
+        18 => VfpuUnaryOp::Vf2h,
+        19 => VfpuUnaryOp::Vh2f,
+        24 => VfpuUnaryOp::Vuc2i,
+        25 => VfpuUnaryOp::Vc2i,
+        26 => VfpuUnaryOp::Vus2i,
+        27 => VfpuUnaryOp::Vs2i,
+        28 => VfpuUnaryOp::Vi2uc,
+        29 => VfpuUnaryOp::Vi2c,
+        30 => VfpuUnaryOp::Vi2us,
+        31 => VfpuUnaryOp::Vi2s,
         _ => {
             return Ok(MipsOp::VfpuUnknown {
                 opcode: word,
@@ -488,8 +489,7 @@ fn decode_vfpu9(
         1 => VfpuUnaryOp::Vsrt2,
         2 => VfpuUnaryOp::Vbfy1,
         3 => VfpuUnaryOp::Vbfy2,
-        // 4 => vocp (1-x, same size) is NOT modelled and must NOT be
-        // aliased to vsocp (which doubles the vector) -- emit a stub.
+        4 => VfpuUnaryOp::Vocp, // 1-x, same size (never vsocp, which doubles)
         5 => VfpuUnaryOp::Vsocp,
         6 => VfpuUnaryOp::Vfad,
         7 => VfpuUnaryOp::Vavg,
@@ -925,6 +925,38 @@ mod tests {
         (b7, b15)
     }
 
+    fn unary_op_of(word: u32) -> Option<VfpuUnaryOp> {
+        match decode_vfpu4(word, 0x08800000).unwrap() {
+            MipsOp::VfpuUnary { op, .. } => Some(op),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn test_vfpu7_table_matches_ppsspp() {
+        // PPSSPP tableVFPU7: 18 vf2h, 19 vh2f, 24..31 vuc2i/vc2i/vus2i/vs2i/
+        // vi2uc/vi2c/vi2us/vi2s. Real Patapon 3 words where noted.
+        assert_eq!(unary_op_of(0xD0380100), Some(VfpuUnaryOp::Vuc2i)); // 0x08835D64
+        assert_eq!(unary_op_of(0xD0390100), Some(VfpuUnaryOp::Vc2i));
+        assert_eq!(unary_op_of(0xD03A0100), Some(VfpuUnaryOp::Vus2i));
+        assert_eq!(unary_op_of(0xD03B0100), Some(VfpuUnaryOp::Vs2i));
+        assert_eq!(unary_op_of(0xD03C8080), Some(VfpuUnaryOp::Vi2uc)); // 0x08835D4C
+        assert_eq!(unary_op_of(0xD03D8080), Some(VfpuUnaryOp::Vi2c));
+        assert_eq!(unary_op_of(0xD03E8080), Some(VfpuUnaryOp::Vi2us));
+        assert_eq!(unary_op_of(0xD03F8080), Some(VfpuUnaryOp::Vi2s));
+        assert_eq!(unary_op_of(0xD0328080), Some(VfpuUnaryOp::Vf2h));
+        assert_eq!(unary_op_of(0xD0338080), Some(VfpuUnaryOp::Vh2f));
+        // Former (wrong) slots are invalid in PPSSPP.
+        assert_eq!(unary_op_of(0xD02C0100), None);
+        assert_eq!(unary_op_of(0xD0280100), None);
+    }
+
+    #[test]
+    fn test_vfpu9_vocp() {
+        // Real Patapon 3 word at 0x089DB904: vocp.q
+        assert_eq!(unary_op_of(0xD0444242), Some(VfpuUnaryOp::Vocp));
+    }
+
     #[test]
     fn test_vec_size_helper() {
         // size=1: b7=0, b15=0
@@ -1343,13 +1375,12 @@ mod tests {
 
     #[test]
     fn test_vfpu4_vocp_not_aliased_to_vsocp() {
-        // idx 2 sub 4 = vocp (1-x, same size). We do not model vocp and
-        // must NOT alias it to vsocp (which doubles the vector). It must
-        // decode to VfpuUnknown rather than silently wrong math.
+        // idx 2 sub 4 = vocp (1-x, same size). It must NOT alias to vsocp
+        // (which doubles the vector).
         // 0xD0442303 @ 0x088338FC: idx=2, sub=4.
         match decode_vfpu4(0xD0442303, 0x088338FC).unwrap() {
-            MipsOp::VfpuUnknown { .. } => {}
-            other => panic!("vocp must be VfpuUnknown, got {other:?}"),
+            MipsOp::VfpuUnary { op: VfpuUnaryOp::Vocp, .. } => {}
+            other => panic!("vocp must decode to Vocp, got {other:?}"),
         }
     }
 }

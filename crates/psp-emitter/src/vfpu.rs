@@ -353,6 +353,9 @@ fn emit_unary_op(
         VfpuUnaryOp::Vbfy2 => {
             emit_unary(gen, "vfpu_vbfy2", vd, vs, size);
         }
+        VfpuUnaryOp::Vocp => {
+            emit_unary(gen, "vfpu_vocp", vd, vs, size);
+        }
         VfpuUnaryOp::Vsocp => {
             emit_unary(gen, "vfpu_vsocp", vd, vs, size);
         }
@@ -549,6 +552,15 @@ fn emit_mat_unary_op(
 mod tests {
     use super::*;
     use crate::generator::TestGenerator;
+
+    #[test]
+    fn emit_vocp_calls_runtime_vocp() {
+        let mut gen = TestGenerator::new();
+        let op = MipsOp::VfpuUnary { vd: 8, vs: 0, op: VfpuUnaryOp::Vocp, size: 4, imm: 0 };
+        emit_vfpu_op(&op, &mut gen, 0, 0x1000);
+        assert!(gen.output[0].contains("vfpu_vocp("), "{:?}", gen.output);
+        assert!(!gen.output[0].contains("vfpu_vsocp"), "{:?}", gen.output);
+    }
 
     #[test]
     fn emit_prefix() {
