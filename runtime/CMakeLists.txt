@@ -157,6 +157,8 @@ set(RUNTIME_SOURCES
     src/hle/psp_hle_utility.cpp
     src/hle/psp_hle_sas.cpp
     src/hle/psp_sas_core.cpp
+    src/hle/psp_atrac_ctx.cpp
+    src/hle/psp_hle_atrac.cpp
     src/psp_vfpu_core.cpp
     src/psp_vfpu_arith.cpp
     src/psp_vfpu_trig.cpp
@@ -198,6 +200,26 @@ else()
     set(PSP_GAME_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../games/${PSPRECOMP_GAME}/runtime)
     message(STATUS "psprecomp: game module = ${PSPRECOMP_GAME}")
 endif()
+
+# Vendored standalone ATRAC3/ATRAC3plus decoder (PPSSPP ext/at3_standalone,
+# LGPL-2.1+; see third_party/at3_standalone/README.txt). Built as a static lib
+# and linked into the runtime and the ATRAC unit test.
+add_library(at3_standalone STATIC
+    third_party/at3_standalone/atrac.cpp
+    third_party/at3_standalone/atrac3.cpp
+    third_party/at3_standalone/atrac3plus.cpp
+    third_party/at3_standalone/atrac3plusdec.cpp
+    third_party/at3_standalone/atrac3plusdsp.cpp
+    third_party/at3_standalone/get_bits.cpp
+    third_party/at3_standalone/compat.cpp
+    third_party/at3_standalone/fft.cpp
+    third_party/at3_standalone/mem.cpp
+)
+target_include_directories(at3_standalone PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/at3_standalone
+)
+# Third-party code: no warnings, always optimised (the decoder is hot).
+target_compile_options(at3_standalone PRIVATE -w $<IF:$<CONFIG:Debug>,-O1,-O2>)
 
 add_executable(psprecomp_runtime ${RUNTIME_SOURCES})
 
@@ -256,6 +278,7 @@ target_include_directories(psprecomp_runtime PRIVATE
 
 target_link_libraries(psprecomp_runtime PRIVATE
     psp::recomp
+    at3_standalone
     ${PSP_SDL2_LIBS}
     OpenGL::GL
     ZLIB::ZLIB
@@ -473,6 +496,30 @@ target_compile_options(test_sas_core PRIVATE
 )
 
 add_test(NAME sas_core_tests COMMAND test_sas_core)
+
+# ATRAC3/ATRAC3plus playback context + sceAtrac HLE glue unit test: pure
+# context, the vendored decoder and psp_hle_atrac.cpp; no SDL/GL/scheduler.
+add_executable(test_atrac_ctx
+    tests/test_atrac_ctx.cpp
+    src/hle/psp_atrac_ctx.cpp
+    src/hle/psp_hle_atrac.cpp   # real handlers, driven through a stub registry
+)
+
+target_include_directories(test_atrac_ctx PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${PSPRECOMP_OUTPUT_DIR}/include  # recomp.h (recomp_context, psp_mem_*)
+)
+
+target_link_libraries(test_atrac_ctx PRIVATE at3_standalone)
+
+target_compile_options(test_atrac_ctx PRIVATE
+    -O2
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+
+add_test(NAME atrac_ctx_tests COMMAND test_atrac_ctx)
 
 # GE vertex transform unit test target (dothack-L6c fix). Links the real
 # psp_ge_vertex.cpp and calls ge_transform_vertices directly to verify
