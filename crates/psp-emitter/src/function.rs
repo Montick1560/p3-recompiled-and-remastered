@@ -1684,17 +1684,18 @@ fn emit_op(
             gen.emit_fpr_write(*fd, &format!("(float)(int32_t)ctx->fi[{fs_n}]"));
         }
         MipsOp::CvtWS { fd, fs } => {
-            // Convert float to int (truncate): fd_int = (int32_t)fs
+            // Convert float to int. TODO(M1/M3): the PSP honours the FCR31
+            // rounding mode (default: nearest); this truncates (spec §5).
             let fd_n = fd.0;
             let fs_s = gen.emit_fpr_read(*fs);
-            gen.emit_raw(&format!("ctx->fi[{fd_n}] = (int32_t)({fs_s});"));
+            gen.emit_raw(&format!("ctx->fi[{fd_n}] = psp_f2i({fs_s});"));
         }
         MipsOp::TruncWS { fd, fs } => {
-            // Truncate float to int (always toward zero)
+            // Truncate float to int (always toward zero), PSP saturation
             let fd_n = fd.0;
             let fs_s = gen.emit_fpr_read(*fs);
             gen.emit_raw(&format!(
-                "ctx->fi[{fd_n}] = (int32_t)truncf({fs_s});"
+                "ctx->fi[{fd_n}] = psp_f2i(truncf({fs_s}));"
             ));
         }
         MipsOp::RoundWS { fd, fs } | MipsOp::CeilWS { fd, fs } | MipsOp::FloorWS { fd, fs } => {
@@ -1705,7 +1706,7 @@ fn emit_op(
             };
             let fd_n = fd.0;
             let fs_s = gen.emit_fpr_read(*fs);
-            gen.emit_raw(&format!("ctx->fi[{fd_n}] = (int32_t){func}({fs_s});"));
+            gen.emit_raw(&format!("ctx->fi[{fd_n}] = psp_f2i({func}({fs_s}));"));
         }
         MipsOp::CCond { cond, fs, ft } => {
             let fs_s = gen.emit_fpr_read(*fs);
@@ -1922,7 +1923,30 @@ mod tests {
         let func = make_func(vec![MipsOp::FloorWS { fd: FpReg(1), fs: FpReg(0) }]);
         emit_function(&func, &mut gen, &ImportMap::new());
         let joined = gen.output.join("\n");
-        assert!(joined.contains("ctx->fi[1] = (int32_t)floorf("), "{joined}");
+        assert!(joined.contains("ctx->fi[1] = psp_f2i(floorf("), "{joined}");
+    }
+
+    fn emit_one(op: MipsOp) -> String {
+        let mut gen = TestGenerator::new();
+        emit_function(&make_func(vec![op]), &mut gen, &ImportMap::new());
+        gen.output.join("
+")
+    }
+
+    #[test]
+    fn float_to_int_conversions_use_psp_f2i() {
+        let (fd, fs) = (FpReg(1), FpReg(0));
+        let cases = [
+            (MipsOp::RoundWS { fd, fs }, "ctx->fi[1] = psp_f2i(rintf("),
+            (MipsOp::CeilWS { fd, fs }, "ctx->fi[1] = psp_f2i(ceilf("),
+            (MipsOp::TruncWS { fd, fs }, "ctx->fi[1] = psp_f2i(truncf("),
+            (MipsOp::CvtWS { fd, fs }, "ctx->fi[1] = psp_f2i("),
+        ];
+        for (op, want) in cases {
+            let out = emit_one(op.clone());
+            assert!(out.contains(want), "{op:?}: want {want}, got {out}");
+            assert!(!out.contains("(int32_t)"), "{op:?}: bare cast left: {out}");
+        }
     }
 
     #[test]

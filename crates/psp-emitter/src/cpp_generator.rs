@@ -54,6 +54,7 @@ impl CppGenerator {
     /// relocation macros, and VFPU stub declaration.
     pub fn emit_recomp_h() -> String {
         r#"#pragma once
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <unordered_map>
@@ -136,6 +137,16 @@ inline void psp_mem_write(uint8_t* rdram, uint32_t addr, T val) {
 #define MEM_W_WRITE(rdram, addr, val) psp_mem_write<int32_t>(rdram, addr, val)
 #define MEM_H_WRITE(rdram, addr, val) psp_mem_write<int16_t>(rdram, addr, val)
 #define MEM_B_WRITE(rdram, addr, val) psp_mem_write<int8_t>(rdram, addr, val)
+
+// PSP float->int conversion (cvt/trunc/round/ceil/floor.w.s): saturates
+// like the Allegrex FPU — NaN and values >= 2^31 give 0x7FFFFFFF, values
+// below -2^31 give 0x80000000. A bare (int32_t) cast is UB out of range and
+// yields different results on x86 and ARM hosts.
+static inline int32_t psp_f2i(float v) {
+    if (std::isnan(v) || v >= 2147483648.0f) return 0x7FFFFFFF;
+    if (v < -2147483648.0f) return (int32_t)0x80000000;
+    return (int32_t)v;
+}
 
 // Relocation macros (EMIT-10)
 #define RELOC_HI16(base, off) ((uint32_t)((base) + (off)) >> 16)
@@ -498,6 +509,21 @@ mod tests {
         let union_body = &h[union_start..union_end];
         assert!(union_body.contains("float f[32]"), "f[32] must be inside the union");
         assert!(union_body.contains("uint32_t fi[32]"), "fi[32] must be inside the union");
+    }
+
+    #[test]
+    fn emit_recomp_h_has_psp_f2i_with_psp_saturation() {
+        // PSP float->int conversions saturate: NaN and too-large values give
+        // 0x7FFFFFFF, too-small values 0x80000000 (PPSSPP interpreter/JIT).
+        // A bare (int32_t) cast is UB there and differs between x86 and ARM.
+        let h = CppGenerator::emit_recomp_h();
+        assert!(h.contains("#include <cmath>"), "psp_f2i needs <cmath>");
+        let start = h.find("static inline int32_t psp_f2i(float v)").expect("psp_f2i must exist");
+        let body = &h[start..start + h[start..].find("
+}").expect("end of psp_f2i")];
+        assert!(body.contains("std::isnan(v) || v >= 2147483648.0f"), "{body}");
+        assert!(body.contains("return 0x7FFFFFFF;"), "{body}");
+        assert!(body.contains("v < -2147483648.0f"), "{body}");
     }
 
     #[test]
