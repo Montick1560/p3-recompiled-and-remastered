@@ -126,6 +126,7 @@ set(RUNTIME_SOURCES
     src/main.cpp
     src/psp_memory.cpp
     src/psp_dispatch.cpp
+    src/psp_overlay.cpp
     src/psp_scheduler.cpp
     src/psp_render_queue.cpp
     src/psp_event_loop.cpp
@@ -193,6 +194,25 @@ else()
 endif()
 
 add_executable(psprecomp_runtime ${RUNTIME_SOURCES})
+
+# ── Code-overlay banks (M2) ────────────────────────────────────────────────
+# Each `psprecomp recompile --bank <name>` output dir defines an OBJECT
+# library <name> whose objects self-register with psp_overlay.cpp.
+set(PSPRECOMP_BANK_DIRS "" CACHE STRING
+    "Overlay bank output directories (recompile --bank), ';'-separated")
+set(_bank_index 0)
+foreach(_bank_dir IN LISTS PSPRECOMP_BANK_DIRS)
+    get_filename_component(_bank_dir "${_bank_dir}" ABSOLUTE)
+    if(NOT EXISTS "${_bank_dir}/bank_dispatch.cpp")
+        message(FATAL_ERROR "${_bank_dir} is not a recompile --bank output")
+    endif()
+    add_subdirectory(${_bank_dir} ${CMAKE_CURRENT_BINARY_DIR}/bank_${_bank_index})
+    file(STRINGS "${_bank_dir}/CMakeLists.txt" _bank_line REGEX "^add_library\\(")
+    string(REGEX REPLACE "^add_library\\(([A-Za-z0-9_]+) OBJECT.*" "\\1" _bank_target "${_bank_line}")
+    target_link_libraries(psprecomp_runtime PRIVATE ${_bank_target})
+    message(STATUS "psprecomp: overlay bank ${_bank_target} from ${_bank_dir}")
+    math(EXPR _bank_index "${_bank_index} + 1")
+endforeach()
 
 target_include_directories(psprecomp_runtime PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -321,6 +341,24 @@ target_compile_options(test_volatile_mem PRIVATE
 )
 
 add_test(NAME volatile_mem_tests COMMAND test_volatile_mem)
+
+# Code-overlay bank resolution unit test (psp_overlay.cpp): links only the
+# resolver — no SDL/GL/scheduler.
+add_executable(test_overlay tests/test_overlay.cpp src/psp_overlay.cpp)
+
+target_include_directories(test_overlay PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${PSPRECOMP_OUTPUT_DIR}/include  # recomp.h (PspOverlayBank, FuncPtr)
+)
+
+target_compile_options(test_overlay PRIVATE
+    -O2
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+
+add_test(NAME overlay_tests COMMAND test_overlay)
 
 # GE vertex transform unit test target (dothack-L6c fix). Links the real
 # psp_ge_vertex.cpp and calls ge_transform_vertices directly to verify

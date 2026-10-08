@@ -56,6 +56,11 @@ enum Commands {
         /// Fail (exit nonzero) unless the final mid-entry count equals N
         #[arg(long)]
         expect_mid_entries: Option<usize>,
+        /// Emit only the [overlays] window as a self-registering overlay bank
+        /// named NAME (C++ namespace + CMake OBJECT target), from the analysis
+        /// of a combined ELF built by scripts/overlay_elf.py.
+        #[arg(long, value_name = "NAME")]
+        bank: Option<String>,
     },
     /// Dump analysis.json fields, or one function's generated C++ (0xADDR)
     Dump {
@@ -95,7 +100,7 @@ fn main() -> anyhow::Result<()> {
             crate::analyze::run_analyze(&binary, &output, ghidra_dir.as_ref(), &nid_db, load_base)?;
         }
         Commands::Recompile {
-            analysis, output, config, batch_size, expect_functions, expect_mid_entries,
+            analysis, output, config, batch_size, expect_functions, expect_mid_entries, bank,
         } => {
             tracing_subscriber::fmt()
                 .with_env_filter(
@@ -108,6 +113,7 @@ fn main() -> anyhow::Result<()> {
                 batch_size,
                 expect_functions,
                 expect_mid_entries,
+                bank,
             };
             crate::recompile::run_recompile(&analysis, &output, &opts)?;
         }

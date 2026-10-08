@@ -95,6 +95,21 @@ struct recomp_context {
 using FuncPtr = void(*)(uint8_t*, recomp_context*);
 FuncPtr RECOMP_LOOKUP(uint32_t vaddr);
 
+// Code-overlay bank (recompile --bank): functions for one overlay that the
+// runtime resolves when the overlay with this id occupies the window.
+struct PspOverlayBank {
+    const char* name;
+    uint32_t id;            // MWo3 header id (window base + 4)
+    uint32_t window_lo;
+    uint32_t window_hi;
+    uint32_t hash_len;      // FNV-1a 64 over [window_lo, window_lo + hash_len)
+    uint64_t hash;
+    const uint32_t* addrs;
+    const FuncPtr* fns;
+    uint32_t count;
+};
+void psp_overlay_register_bank(const PspOverlayBank* bank);
+
 // Memory accessors — type-safe rdram access (EMIT-13)
 // Bounds-checked: masked offset + sizeof(T) must fit within 128MB rdram.
 // NULL-page guard (issue #29): checked on the UNMASKED virtual address —
@@ -525,6 +540,19 @@ mod tests {
         assert!(body.contains("std::isnan(v) || v >= 2147483648.0f"), "{body}");
         assert!(body.contains("return 0x7FFFFFFF;"), "{body}");
         assert!(body.contains("v < -2147483648.0f"), "{body}");
+    }
+
+    #[test]
+    fn emit_recomp_h_declares_overlay_bank_registry() {
+        let h = CppGenerator::emit_recomp_h();
+        assert!(h.contains("struct PspOverlayBank {"), "PspOverlayBank must be declared");
+        assert!(h.contains("void psp_overlay_register_bank(const PspOverlayBank* bank);"));
+        let b = &h[h.find("struct PspOverlayBank {").unwrap()..];
+        for field in ["const char* name;", "uint32_t id;", "uint32_t window_lo;",
+                      "uint32_t window_hi;", "uint32_t hash_len;", "uint64_t hash;",
+                      "const uint32_t* addrs;", "const FuncPtr* fns;", "uint32_t count;"] {
+            assert!(b.contains(field), "missing field {field}");
+        }
     }
 
     #[test]

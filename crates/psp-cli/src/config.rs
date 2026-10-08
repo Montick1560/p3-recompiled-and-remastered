@@ -67,6 +67,19 @@ pub struct GameConfig {
     /// Overrides for batch size (default: 50 or CLI --batch-size).
     #[serde(default)]
     pub functions_per_file: Option<usize>,
+    /// `[overlays]` code-overlay window shared by the game's overlays.
+    #[serde(default)]
+    pub overlays: Option<OverlaysSection>,
+}
+
+/// `[overlays]` — the fixed load window code overlays share. The main
+/// recompile excludes it (its bytes are BSS in the main image); each overlay
+/// is recompiled as a bank of functions inside it (`recompile --bank`).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OverlaysSection {
+    /// `[start, end)` as two hex strings.
+    #[serde(default)]
+    pub window: Vec<String>,
 }
 
 /// `[game]` — manifest identity.
@@ -203,6 +216,27 @@ impl GameConfig {
         )
     }
 
+    /// `[overlays] window` as `(start, end)`, or None when absent.
+    pub fn overlay_window(&self) -> anyhow::Result<Option<(u32, u32)>> {
+        let Some(w) = self.overlays.as_ref().map(|o| &o.window) else {
+            return Ok(None);
+        };
+        if w.is_empty() {
+            return Ok(None);
+        }
+        let [a, b] = w.as_slice() else {
+            anyhow::bail!("[overlays] window must be [start, end], got {w:?}");
+        };
+        let start = parse_hex(a)
+            .ok_or_else(|| anyhow::anyhow!("[overlays] window start is not hex: {a:?}"))?;
+        let end = parse_hex(b)
+            .ok_or_else(|| anyhow::anyhow!("[overlays] window end is not hex: {b:?}"))?;
+        if start >= end {
+            anyhow::bail!("[overlays] window start 0x{start:08X} must be below end 0x{end:08X}");
+        }
+        Ok(Some((start, end)))
+    }
+
     /// `[recompile] force_entries_cross_mid`, parsed.
     pub fn force_entries_cross_mid(&self) -> anyhow::Result<Vec<u32>> {
         parse_hex_list(
@@ -269,6 +303,41 @@ pub fn load_config(path: Option<&std::path::Path>) -> anyhow::Result<GameConfig>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlay_window_parses_pair() {
+        let c: GameConfig = toml::from_str(
+            "[overlays]
+window = [\"0x08ABB180\", \"0x08BC6480\"]
+",
+        ).unwrap();
+        assert_eq!(c.overlay_window().unwrap(), Some((0x08ABB180, 0x08BC6480)));
+    }
+
+    #[test]
+    fn overlay_window_absent_is_none() {
+        let c: GameConfig = toml::from_str("[game]
+id = \"x\"
+").unwrap();
+        assert_eq!(c.overlay_window().unwrap(), None);
+    }
+
+    #[test]
+    fn overlay_window_rejects_bad_shapes() {
+        let one: GameConfig = toml::from_str("[overlays]
+window = [\"0x08ABB180\"]
+").unwrap();
+        assert!(one.overlay_window().is_err());
+        let reversed: GameConfig =
+            toml::from_str("[overlays]
+window = [\"0x2000\", \"0x1000\"]
+").unwrap();
+        assert!(reversed.overlay_window().is_err());
+        let junk: GameConfig = toml::from_str("[overlays]
+window = [\"zz\", \"0x1\"]
+").unwrap();
+        assert!(junk.overlay_window().is_err());
+    }
 
     #[test]
     fn empty_toml_parses_to_defaults() {

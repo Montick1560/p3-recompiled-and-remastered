@@ -1,4 +1,5 @@
 #include "recomp.h"
+#include "psp_overlay.h"
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_kernel.h"
 #include <atomic>
@@ -163,6 +164,28 @@ FuncPtr psp_on_lookup_miss(uint32_t vaddr) {
     // without any side effects.
     if (g_probe_lookup) {
         return nullptr;
+    }
+
+    // Code overlays (M2): an address inside an overlay window belongs to the
+    // bank of the overlay currently loaded there. This is the hot path for
+    // overlay code (every call inside an overlay lands here), so it runs
+    // before the miss bookkeeping below.
+    {
+        FuncPtr fn = nullptr;
+        switch (psp_overlay_resolve(psp_overlay_rdram(), vaddr, &fn)) {
+        case PspOverlayStatus::Found:
+            return fn;
+        case PspOverlayStatus::HashMismatch:
+            std::fprintf(stderr,
+                "[OVERLAY] FATAL: the overlay loaded at the window of 0x%08X does "
+                "not match the code it was recompiled from (did the game files "
+                "change?). Rebuild with: games/patapon3/scripts/p3.sh all\n",
+                vaddr);
+            std::fflush(stderr);
+            std::abort();
+        default:
+            break;  // not an overlay address / no bank: ordinary miss
+        }
     }
 
     // One-time check for STRICT mode environment variable

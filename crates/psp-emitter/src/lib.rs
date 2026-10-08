@@ -19,6 +19,7 @@ pub mod init_array;
 pub mod cmake;
 pub mod call_resolver;
 pub mod mid_entry;
+pub mod bank;
 pub mod batch;
 pub mod module_header;
 pub mod game_config_header;

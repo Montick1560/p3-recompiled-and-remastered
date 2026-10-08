@@ -1,6 +1,7 @@
 #include "recomp.h"
 #include "funcs.h"
 #include "psp_memory.h"
+#include "psp_overlay.h"
 #include "psp_scheduler.h"
 #include "psp_render_queue.h"
 #include "psp_event_loop.h"
@@ -110,6 +111,7 @@ int main(int argc, char* argv[]) {
     std::fprintf(stderr,
         "[RT] Memory initialized (%zu MB)\n",
         PSP_MEM_SIZE / (1024 * 1024));
+    psp_overlay_set_rdram(rdram);  // overlay-bank resolution on dispatch misses
 
     // 2b. Start TCP debug socket (loopback port 9999) for external memory
     //     reads/writes, info queries, button injection, and screenshots.

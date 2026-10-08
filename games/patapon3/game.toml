@@ -1,11 +1,16 @@
 # games/patapon3/game.toml — Patapon 3 (UCES-01421 base, "DxD Edition v1.1.4" mod).
 # Start empty and add [recompile] entries only after a concrete failure.
-# Overlays (USRDIR/overlay/OL_*.bin, "MWo3", load at 0x08ABB180) are handled
-# in milestone M2.
+# Code overlays (USRDIR/overlay/OL_*.bin, "MWo3") load at the window below;
+# each is recompiled as a bank (recompile --bank, see games/patapon3/scripts/p3.sh).
 
 [game]
 id    = "patapon3"
 title = "Patapon 3 DxD (UCES-01421)"
+
+[overlays]
+# Shared code-overlay window: OL_Azito/OL_Mission/OL_Title all load at
+# 0x08ABB180; 0x08BC6480 is the end of the main PT_LOAD (largest overlay+bss).
+window = ["0x08ABB180", "0x08BC6480"]
 
 [boot]
 # Retail BOOT.BIN on this disc is zero-filled; the game boots from EBOOT.BIN.

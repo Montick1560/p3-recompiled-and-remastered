@@ -88,6 +88,9 @@ pub struct RecompileOptions {
     pub expect_functions: Option<usize>,
     /// If set, fail when the final mid-entry count differs (`--expect-mid-entries`).
     pub expect_mid_entries: Option<usize>,
+    /// `--bank <name>`: emit only the overlay window as a self-registering
+    /// bank (requires `[overlays] window` in the manifest).
+    pub bank: Option<String>,
 }
 
 /// Everything the per-function emit closure consumes, computed once from
@@ -246,7 +249,39 @@ pub fn run_recompile(
     output_dir: &Path,
     opts: &RecompileOptions,
 ) -> anyhow::Result<()> {
-    let prep = prepare_emission(analysis_path, opts.config_path.as_deref())?;
+    let mut prep = prepare_emission(analysis_path, opts.config_path.as_deref())?;
+
+    // Code overlays (M2): the main build drops the shared overlay window (its
+    // bytes are BSS zeros in the main image, decoded as thousands of junk
+    // "functions"); a bank build keeps only the window. The runtime resolves
+    // window addresses against the bank of the overlay loaded there.
+    let overlay_window = prep.config.overlay_window()?;
+    let bank = match (&opts.bank, overlay_window) {
+        (Some(name), Some((lo, hi))) => {
+            retain_by_window(&mut prep.analysis.functions, &mut prep.analysis.mid_entries, lo, hi, true);
+            let (id, text_size) = read_overlay_header(&prep.segment_bytes, lo)?;
+            let hash_len = 0x40 + text_size;
+            let bytes = read_image_range(&prep.segment_bytes, lo, hash_len)?;
+            tracing::info!(
+                "Bank {name}: overlay id {id}, {} functions in window, hash over 0x{hash_len:X} bytes",
+                prep.analysis.functions.len()
+            );
+            Some((name.clone(), lo, hi, id, hash_len, psp_emitter::bank::fnv1a64(&bytes)))
+        }
+        (Some(_), None) => anyhow::bail!(
+            "--bank needs an [overlays] window = [start, end] in the --config manifest"
+        ),
+        (None, Some((lo, hi))) => {
+            let before = prep.analysis.functions.len();
+            retain_by_window(&mut prep.analysis.functions, &mut prep.analysis.mid_entries, lo, hi, false);
+            tracing::info!(
+                "Excluded {} functions inside the overlay window 0x{lo:08X}..0x{hi:08X}",
+                before - prep.analysis.functions.len()
+            );
+            None
+        }
+        (None, None) => None,
+    };
     let effective_batch_size = prep.config.functions_per_file.unwrap_or(opts.batch_size);
 
     // Module facts (issue #47 Phase 2): resolve before anything is written —
@@ -343,10 +378,18 @@ pub fn run_recompile(
     let analysis_sha256 = fingerprint::sha256_file(analysis_path)
         .with_context(|| format!("hash {}", analysis_path.display()))?;
     let module_name = &prep.analysis.module_name;
-    write_output_files(
-        output_dir, &prep.analysis, &batch_output, &mid_entries_cpp, module_name,
-        &prep.unique_names, &analysis_sha256,
-    )?;
+    if let Some((name, lo, hi, id, hash_len, hash)) = &bank {
+        let info = psp_emitter::bank::BankInfo {
+            name, id: *id, window_lo: *lo, window_hi: *hi, hash_len: *hash_len, hash: *hash,
+        };
+        write_bank_output_files(output_dir, &prep.analysis, &batch_output, &mid_entries_cpp,
+                                &prep.unique_names, &info)?;
+    } else {
+        write_output_files(
+            output_dir, &prep.analysis, &batch_output, &mid_entries_cpp, module_name,
+            &prep.unique_names, &analysis_sha256,
+        )?;
+    }
 
     // Constructors are emitted as RECOMP_LOOKUP calls too (init_array.cpp) —
     // include them in the static dispatch-target audit.
@@ -1489,6 +1532,87 @@ fn make_progress_bar(len: u64) -> ProgressBar {
     pb
 }
 
+/// Keep only functions/mid-entries inside (`inside = true`) or outside the
+/// overlay window `[lo, hi)`.
+fn retain_by_window(
+    functions: &mut Vec<JsonFunction>,
+    mid_entries: &mut Vec<JsonMidEntry>,
+    lo: u32,
+    hi: u32,
+    inside: bool,
+) {
+    let in_window = |hex: &str| parse_hex_u32(hex).is_some_and(|a| a >= lo && a < hi);
+    functions.retain(|f| in_window(&f.address) == inside);
+    mid_entries.retain(|m| in_window(&m.addr) == inside);
+}
+
+/// Read `len` bytes of the loaded image at `addr` (must lie in one segment).
+fn read_image_range(segment_bytes: &[(u32, Vec<u8>)], addr: u32, len: u32) -> anyhow::Result<Vec<u8>> {
+    for (base, bytes) in segment_bytes {
+        let end = base.wrapping_add(bytes.len() as u32);
+        if addr >= *base && addr.wrapping_add(len) <= end {
+            let off = (addr - base) as usize;
+            return Ok(bytes[off..off + len as usize].to_vec());
+        }
+    }
+    anyhow::bail!("image range 0x{addr:08X}+0x{len:X} is not inside one loaded segment")
+}
+
+/// Parse the MWo3 overlay header at the window base: (id, text_size).
+fn read_overlay_header(segment_bytes: &[(u32, Vec<u8>)], lo: u32) -> anyhow::Result<(u32, u32)> {
+    let h = read_image_range(segment_bytes, lo, 0x10)?;
+    let word = |i: usize| u32::from_le_bytes([h[i], h[i + 1], h[i + 2], h[i + 3]]);
+    if &h[0..4] != b"MWo3" {
+        anyhow::bail!(
+            "no MWo3 overlay header at 0x{lo:08X}: analyze the combined ELF built by \
+             scripts/overlay_elf.py, not the plain EBOOT"
+        );
+    }
+    Ok((word(4), word(12)))
+}
+
+/// Write a bank's generated files: namespaced batches/funcs.h/mid-entries,
+/// the self-registering bank_dispatch.cpp, an OBJECT-library CMakeLists.txt
+/// and recomp.h. No dispatch.cpp/data sections/syscall table: those belong
+/// to the main build.
+fn write_bank_output_files(
+    output_dir: &Path,
+    analysis: &AnalysisJson,
+    batch_output: &psp_emitter::batch::BatchOutput,
+    mid_entries_cpp: &str,
+    unique_names: &HashMap<u32, String>,
+    info: &psp_emitter::bank::BankInfo,
+) -> anyhow::Result<()> {
+    use psp_emitter::bank::{emit_bank_cmake, emit_bank_dispatch, wrap_in_namespace};
+    remove_stale_batch_files(&output_dir.join("generated"))?;
+    for (filename, content) in &batch_output.cpp_files {
+        std::fs::write(output_dir.join(filename), wrap_in_namespace(content, info.name))?;
+    }
+    std::fs::write(output_dir.join("funcs.h"), wrap_in_namespace(&batch_output.funcs_h, info.name))?;
+    std::fs::write(output_dir.join("mid_entries.cpp"), wrap_in_namespace(mid_entries_cpp, info.name))?;
+
+    let mut entries: Vec<(u32, String)> = analysis
+        .functions
+        .iter()
+        .filter_map(|f| {
+            let addr = parse_hex_u32(&f.address)?;
+            let name = unique_names
+                .get(&addr)
+                .map(|n| psp_emitter::sanitize::sanitize_identifier(n))
+                .unwrap_or_else(|| psp_emitter::sanitize::sanitize_identifier(&f.name));
+            Some((addr, name))
+        })
+        .collect();
+    entries.extend(analysis.mid_entries.iter().filter_map(|m| {
+        let addr = parse_hex_u32(&m.addr)?;
+        Some((addr, format!("func_{addr:08X}_entry")))
+    }));
+    std::fs::write(output_dir.join("bank_dispatch.cpp"), emit_bank_dispatch(info, &entries))?;
+    std::fs::write(output_dir.join("CMakeLists.txt"), emit_bank_cmake(info.name))?;
+    std::fs::write(output_dir.join("include").join("recomp.h"), CppGenerator::emit_recomp_h())?;
+    Ok(())
+}
+
 /// Write all generated output files to disk.
 fn write_output_files(
     output_dir: &Path,
@@ -1570,6 +1694,42 @@ fn remove_stale_batch_files(gen_dir: &Path) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use psp_parser::analysis_json::{JsonModuleInfo, JsonSegment};
+
+    fn wfn(addr: u32) -> JsonFunction {
+        JsonFunction {
+            name: format!("FUN_{addr:08X}"),
+            address: format!("0x{addr:08X}"),
+            size: 4,
+            is_external: false,
+            is_thunk: false,
+            source: "ghidra".into(),
+        }
+    }
+
+    fn wmid(addr: u32, parent: u32) -> JsonMidEntry {
+        JsonMidEntry { addr: format!("0x{addr:08X}"), parent_addr: format!("0x{parent:08X}") }
+    }
+
+    #[test]
+    fn retain_by_window_splits_main_and_bank() {
+        let funcs = vec![wfn(0x08A00000), wfn(0x08ABB180), wfn(0x08BC6400), wfn(0x08BC6480)];
+        let mids = vec![wmid(0x08A00010, 0x08A00000), wmid(0x08ABB1A0, 0x08ABB180)];
+        let (lo, hi) = (0x08ABB180, 0x08BC6480);
+
+        let (mut f, mut m) = (funcs.clone(), mids.clone());
+        retain_by_window(&mut f, &mut m, lo, hi, false);
+        let kept: Vec<&str> = f.iter().map(|x| x.address.as_str()).collect();
+        assert_eq!(kept, ["0x08A00000", "0x08BC6480"]);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].addr, "0x08A00010");
+
+        let (mut f, mut m) = (funcs, mids);
+        retain_by_window(&mut f, &mut m, lo, hi, true);
+        let kept: Vec<&str> = f.iter().map(|x| x.address.as_str()).collect();
+        assert_eq!(kept, ["0x08ABB180", "0x08BC6400"]);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].addr, "0x08ABB1A0");
+    }
 
     fn analysis_with_module(module: Option<JsonModuleInfo>) -> AnalysisJson {
         AnalysisJson {
