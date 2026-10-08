@@ -172,7 +172,17 @@ FuncPtr psp_on_lookup_miss(uint32_t vaddr) {
     // before the miss bookkeeping below.
     {
         FuncPtr fn = nullptr;
-        switch (psp_overlay_resolve(psp_overlay_rdram(), vaddr, &fn)) {
+        const PspOverlayStatus st = psp_overlay_resolve(psp_overlay_rdram(), vaddr, &fn);
+        static const bool trace = [] {
+            const char* e = std::getenv("PSPRECOMP_OVERLAY_TRACE");
+            return e && e[0] == '1';
+        }();
+        static std::atomic<int> traced{0};
+        if (trace && st != PspOverlayStatus::NotInWindow && traced.fetch_add(1) < 64) {
+            std::fprintf(stderr, "[OVERLAY] resolve 0x%08X -> status %d (rdram=%p)\n",
+                         vaddr, static_cast<int>(st), static_cast<void*>(psp_overlay_rdram()));
+        }
+        switch (st) {
         case PspOverlayStatus::Found:
             return fn;
         case PspOverlayStatus::HashMismatch:
