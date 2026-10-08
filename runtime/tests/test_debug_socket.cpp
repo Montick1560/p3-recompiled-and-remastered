@@ -9,6 +9,8 @@
 
 #include "psp_debug_socket.h"
 
+#include <atomic>
+#include <thread>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -373,6 +375,32 @@ static void test_concurrent_clients(uint8_t* rdram) {
 // main
 // ===================================================================
 
+// Regression: stop() must return while a client is connected but idle
+// (blocked in recv). On Winsock, shutdown() does not wake a blocked recv();
+// the old stop() then hung forever in join() at runtime exit.
+static void test_stop_with_idle_client(uint8_t* rdram) {
+    psp_debug_socket_set_hooks(PspDebugHooks{});
+    psp_debug_socket_start(rdram, TEST_RDRAM_SIZE, TEST_PORT);
+    int c = connect_client();
+    ASSERT_TRUE(c >= 0, "idle client connects");
+    // Prove the handler is live (and parked in recv afterwards).
+    ASSERT_TRUE(send_str(c, "R 3000 1\n"), "client sends R");
+    ASSERT_STR_EQ(recv_line(c), "OK 1\n", "server answers before stop");
+    recv_exact(c, 1);
+
+    std::atomic<bool> stopped{false};
+    std::thread stopper([&] { psp_debug_socket_stop(); stopped = true; });
+    for (int i = 0; i < 50 && !stopped; i++) ::usleep(100000);  // up to 5 s
+    if (!stopped) {
+        std::printf("FAIL: psp_debug_socket_stop() hung with an idle client\n");
+        std::fflush(stdout);
+        std::_Exit(1);  // cannot join the hung stopper thread
+    }
+    stopper.join();
+    psp_sock_close(c);
+    tests_run++;
+}
+
 int main() {
     std::printf("Running debug socket v2 tests...\n\n");
 
@@ -384,6 +412,7 @@ int main() {
     test_screenshot_hooks(rdram.data());
     test_info_json(rdram.data());
     test_concurrent_clients(rdram.data());
+    test_stop_with_idle_client(rdram.data());
 
     std::printf("\n%d tests run, %d failures\n", tests_run, failures);
 

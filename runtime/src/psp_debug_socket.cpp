@@ -401,13 +401,15 @@ static void handle_client(int client_fd) {
             break;
         }
     }
+    // Close only if stop() has not already taken (and closed) this fd.
+    bool owned = false;
     {
         std::lock_guard<std::mutex> lock(g_clients_mutex);
         for (auto it = g_client_fds.begin(); it != g_client_fds.end(); ++it) {
-            if (*it == client_fd) { g_client_fds.erase(it); break; }
+            if (*it == client_fd) { g_client_fds.erase(it); owned = true; break; }
         }
     }
-    psp_sock_close(client_fd);
+    if (owned) psp_sock_close(client_fd);
 }
 
 /// Main loop for the background accept thread.
@@ -493,11 +495,20 @@ void psp_debug_socket_stop() {
         g_debug_thread.join();
     }
     // Unblock every client handler stuck in recv(), then join them.
+    // Winsock's shutdown() does not wake a blocked recv(); closing the
+    // socket does. Taking the fds out of the list hands ownership to us,
+    // so handle_client() will not close them a second time.
     {
         std::lock_guard<std::mutex> lock(g_clients_mutex);
         for (int fd : g_client_fds) {
             ::shutdown(fd, SHUT_RDWR);
+#ifdef _WIN32
+            psp_sock_close(fd);
+#endif
         }
+#ifdef _WIN32
+        g_client_fds.clear();
+#endif
     }
     for (auto& t : g_client_threads) {
         if (t.joinable()) t.join();
