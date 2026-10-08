@@ -222,7 +222,41 @@ void psp_kmem_reserve_remaining(uint32_t* start, uint32_t* end) {
 
 // ---- Registration ----
 
+// sceKernelMemcpy(dst, src, size) / sceKernelMemset(dst, c, size): both
+// return dst. Ranges outside guest RAM are clamped (PPSSPP-style tolerance).
+static bool guest_range(uint32_t addr, uint32_t size, uint32_t* off) {
+    if (addr < 0x00010000U) return false;
+    *off = addr & 0x07FFFFFFU;
+    return size <= 0x08000000U - *off;
+}
+
+static void hle_sceKernelMemcpy(uint8_t* rdram, recomp_context* ctx) {
+    uint32_t dst = static_cast<uint32_t>(ctx->r[4]);
+    uint32_t src = static_cast<uint32_t>(ctx->r[5]);
+    uint32_t size = static_cast<uint32_t>(ctx->r[6]);
+    uint32_t doff, soff;
+    if (size && guest_range(dst, size, &doff) && guest_range(src, size, &soff)) {
+        std::memmove(rdram + doff, rdram + soff, size);
+    }
+    ctx->r[2] = static_cast<int32_t>(dst);
+}
+
+static void hle_sceKernelMemset(uint8_t* rdram, recomp_context* ctx) {
+    uint32_t dst = static_cast<uint32_t>(ctx->r[4]);
+    int c = static_cast<int>(ctx->r[5] & 0xFF);
+    uint32_t size = static_cast<uint32_t>(ctx->r[6]);
+    uint32_t doff;
+    if (size && guest_range(dst, size, &doff)) {
+        std::memset(rdram + doff, c, size);
+    }
+    ctx->r[2] = static_cast<int32_t>(dst);
+}
+
 void psp_hle_register_kernel_memory() {
+    psp_hle_register("sceKernelMemcpy", hle_sceKernelMemcpy);
+    psp_hle_register("sceKernelMemset", hle_sceKernelMemset);
+    psp_hle_register("sceKernelSetCompiledSdkVersion603_605",
+                      hle_sceKernelSetCompiledSdkVersion);
     psp_hle_register("sceKernelAllocPartitionMemory",
                       hle_sceKernelAllocPartitionMemory);
     psp_hle_register("sceKernelFreePartitionMemory",
