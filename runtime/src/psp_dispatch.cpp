@@ -358,6 +358,20 @@ static void func_args_call(int slot, uint8_t* rdram, recomp_context* ctx) {
                      "[FUNC-ARGS] 0x%08X(a0=0x%08X a1=0x%08X a2=0x%08X a3=0x%08X) ra=0x%08X "
                      "-> v0=0x%08X\n",
                      g_func_args_addr[slot], a[0], a[1], a[2], a[3], ra, (uint32_t)ctx->r[2]);
+        // PSPRECOMP_FUNC_ARGS_DUMP=<bytes>: also hex-dump guest memory at v0
+        // (e.g. the block a lookup function returns, before it is reused).
+        static const uint32_t dump = [] {
+            const char* e = std::getenv("PSPRECOMP_FUNC_ARGS_DUMP");
+            return e ? static_cast<uint32_t>(std::strtoul(e, nullptr, 0)) & ~3u : 0u;
+        }();
+        const uint32_t v0 = (uint32_t)ctx->r[2];
+        for (uint32_t off = 0; dump && v0 && off < dump; off += 16) {
+            std::fprintf(stderr, "[FUNC-ARGS]   %08X:", v0 + off);
+            for (uint32_t k = off; k < off + 16 && k < dump; k += 4) {
+                std::fprintf(stderr, " %08X", psp_mem_read<uint32_t>(rdram, v0 + k));
+            }
+            std::fprintf(stderr, "\n");
+        }
     }
 }
 
