@@ -34,6 +34,7 @@ struct PspDebugThreadInfo {
     char status[16];       ///< "DORMANT"/"READY"/"RUNNING"/"WAIT"/"DEAD"/"WAIT_SLEEP"
     char wait_reason[24];  ///< e.g. "sema:259", "sleep", "" when not waiting
     uint32_t last_func = 0;  ///< last guest function entry this thread ran
+    uint32_t regs[32] = {};  ///< GPRs from the thread's recomp_context (racy snapshot)
 };
 
 /// Dependency seams for the I and S commands. All members are optional:

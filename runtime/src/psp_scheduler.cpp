@@ -576,6 +576,9 @@ int psp_scheduler_snapshot(PspDebugThreadInfo* out, int max) {
                      sizeof(info.wait_reason) - 1);
         info.wait_reason[sizeof(info.wait_reason) - 1] = '\0';
         info.last_func = t.last_func.load(std::memory_order_relaxed);
+        for (int r = 0; r < 32; r++) {
+            info.regs[r] = static_cast<uint32_t>(t.ctx.r[r]);
+        }
     }
     return n;
 }

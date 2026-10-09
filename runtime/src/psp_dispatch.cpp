@@ -363,6 +363,12 @@ static void func_args_call(int slot, uint8_t* rdram, recomp_context* ctx) {
     const uint32_t a[4] = {(uint32_t)ctx->r[4], (uint32_t)ctx->r[5],
                            (uint32_t)ctx->r[6], (uint32_t)ctx->r[7]};
     const uint32_t ra = (uint32_t)ctx->r[31];
+    if (log) {
+        // Entry line too: a call that never returns (a hang) still shows up.
+        std::fprintf(stderr,
+                     "[FUNC-ARGS-IN] 0x%08X(a0=0x%08X a1=0x%08X a2=0x%08X a3=0x%08X) ra=0x%08X\n",
+                     g_func_args_addr[slot], a[0], a[1], a[2], a[3], ra);
+    }
     g_func_args_orig[slot](rdram, ctx);
     if (log) {
         std::fprintf(stderr,
@@ -405,6 +411,12 @@ void psp_func_args_install() {
         uint32_t addr = static_cast<uint32_t>(std::strtoul(env, &end, 16));
         if (end == env) break;
         FuncPtr orig = RECOMP_LOOKUP(addr);
+        // Overlay-window code is not resolvable at boot (nothing loaded): the
+        // lookup yields the miss stub, and wrapping it would shadow the bank.
+        if (orig == noop_stub) {
+            std::fprintf(stderr, "[FUNC-ARGS] 0x%08X not resolvable at boot (overlay?), skipped\n", addr);
+            orig = nullptr;
+        }
         if (orig) {
             g_func_args_addr[n] = addr;
             g_func_args_orig[n] = orig;
