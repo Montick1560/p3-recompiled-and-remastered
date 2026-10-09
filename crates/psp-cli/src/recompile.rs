@@ -1511,7 +1511,18 @@ fn get_func_bytes<'a>(
         let end = seg_vaddr.checked_add(bytes.len() as u32)?;
         if func_vaddr >= *seg_vaddr && func_vaddr + func_size <= end {
             let off = (func_vaddr - seg_vaddr) as usize;
-            Some(&bytes[off..off + func_size as usize])
+            let mut len = func_size as usize;
+            // A body that ends on a branch/jump still owns its delay slot:
+            // hardware runs it, so decode it too (else the pair is emitted
+            // without it -- FUN_08819C08 lost `lw v1` at 0x0881AB48).
+            if len >= 4 && off + len + 4 <= bytes.len() {
+                let w = u32::from_le_bytes(bytes[off + len - 4..off + len].try_into().ok()?);
+                let at = func_vaddr + func_size - 4;
+                if psp_decoder::decode_word(w, at).is_ok_and(|op| psp_decoder::is_branch_or_jump(&op)) {
+                    len += 4;
+                }
+            }
+            Some(&bytes[off..off + len])
         } else {
             None
         }
@@ -2027,6 +2038,23 @@ fn remove_stale_batch_files(gen_dir: &Path) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use psp_parser::analysis_json::{JsonModuleInfo, JsonSegment};
+
+    #[test]
+    fn func_bytes_include_a_trailing_delay_slot() {
+        // nop; j 0x0881A0B8; lw v1,0x274(sp) -- a body sized 8 bytes ends on
+        // the jump, but hardware always runs its delay slot (Patapon 3's
+        // FUN_08819C08 lost `lw v1` at 0x0881AB48 this way).
+        let words: [u32; 3] = [0x0000_0000, 0x0A20_682E, 0x8FA3_0274];
+        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let segs = vec![(0x0881_AB40u32, bytes)];
+        assert_eq!(get_func_bytes(&segs, 0x0881_AB40, 8).map(|b| b.len()), Some(12));
+        // Not ending on a branch: the size is the size.
+        assert_eq!(get_func_bytes(&segs, 0x0881_AB40, 4).map(|b| b.len()), Some(4));
+        assert_eq!(get_func_bytes(&segs, 0x0881_AB44, 4).map(|b| b.len()), Some(8));
+        // Branch ends the segment: nothing to add, keep the declared size.
+        let short = vec![(0x0881_AB40u32, segs[0].1[..8].to_vec())];
+        assert_eq!(get_func_bytes(&short, 0x0881_AB40, 8).map(|b| b.len()), Some(8));
+    }
 
     fn wfn(addr: u32) -> JsonFunction {
         JsonFunction {
