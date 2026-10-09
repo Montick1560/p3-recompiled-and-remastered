@@ -410,6 +410,25 @@ checked with adversarial sub-agent verification before they are banked.
 - [PPSSPP](https://github.com/hrydgard/ppsspp) — PSP emulator, used as a behavioral oracle
   (observable behavior only)
 
+## Credits
+
+This port stands on the work of the PSP and Patapon communities:
+
+- [wizardengineer/psprecomp](https://github.com/wizardengineer/psprecomp): the PSP static
+  recompiler this repository is forked from.
+- [kotcrab/ghidra-allegrex](https://github.com/kotcrab/ghidra-allegrex): Allegrex (PSP CPU)
+  support for Ghidra, used by the analysis step.
+- [PPSSPP](https://github.com/hrydgard/ppsspp) (Henrik Rydgard and the PPSSPP team): the
+  reference for every HLE module, the GE semantics, and the vendored ATRAC3/ATRAC3plus decoder.
+- [efonte/patapon-re](https://github.com/efonte/patapon-re): Patapon 3 reverse-engineering and
+  the symbol file our analysis is checked against.
+- owodzeg: LibBND2, PacViewer, LBRTPlayer and libP3Hash (Patapon archive, script and hash
+  formats).
+- [wolftender/yaponmdl](https://github.com/wolftender/yaponmdl): Patapon model format research.
+- WondaOxigen: GXXTool3 (Patapon texture formats).
+- Nemoumbra: PataponAllocators and PacEngine (the game's memory allocators and script engine).
+- Madwig: author of the Patapon 3 "Depths of Infinity" (DxD) edition this port targets.
+
 ## License
 
 GPL-2.0-or-later. See [LICENSE](LICENSE).
