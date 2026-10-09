@@ -561,6 +561,7 @@ void psp_hle_register_all_modules() {
     psp_hle_register_display();
     psp_hle_register_ge();
     psp_hle_register_power();
+    psp_hle_register_misc();
     psp_hle_register_ctrl();
     psp_hle_register_utility();
 

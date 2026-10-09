@@ -154,6 +154,7 @@ set(RUNTIME_SOURCES
     src/hle/psp_hle_intr.cpp
     src/hle/psp_hle_ge.cpp
     src/hle/psp_hle_power.cpp
+    src/hle/psp_hle_misc.cpp
     src/hle/psp_hle_ctrl.cpp
     src/hle/psp_hle_utility.cpp
     src/hle/psp_hle_sas.cpp
@@ -662,6 +663,26 @@ target_compile_options(test_hle_psmf PRIVATE
 )
 
 add_test(NAME hle_psmf_tests COMMAND test_hle_psmf)
+
+add_executable(test_hle_misc
+    tests/test_hle_misc.cpp
+    src/hle/psp_hle_misc.cpp
+    src/hle/psp_hle_power.cpp
+)
+
+target_include_directories(test_hle_misc PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${PSPRECOMP_OUTPUT_DIR}/include
+)
+
+target_compile_options(test_hle_misc PRIVATE
+    -O2
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+
+add_test(NAME hle_misc COMMAND test_hle_misc)
 
 # MPEG-PS demuxer unit test (pure: byte queue, H.264 AU splitter, PES/pack
 # parsing, ATRAC3plus frames; the real-data case streams the user's
