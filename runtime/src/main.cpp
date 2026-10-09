@@ -158,6 +158,7 @@ int main(int argc, char* argv[]) {
         hooks.recent_funcs       = psp_dispatch_get_recent_funcs;
         hooks.thread_list        = psp_scheduler_snapshot;
         hooks.capture_screenshot = ge_draw_capture_screenshot;
+        hooks.draw_log           = ge_draw_request_log;
         psp_debug_socket_set_hooks(hooks);
     }
 

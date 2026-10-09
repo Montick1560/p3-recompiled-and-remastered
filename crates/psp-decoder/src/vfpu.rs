@@ -581,9 +581,12 @@ pub(crate) fn decode_vfpu5(
 ///
 /// `ins` is the table group `(word>>23)&7` (1=>tfm2, 2=>tfm3, 3=>tfm4) and
 /// `n` is the operand vector size from the size bits. PPSSPP `Dis_Vtfm`
-/// chooses the homogeneous form (`vhtfm`N) when `n == ins` and the plain
-/// form (`vtfm`N) when `n == ins+1`; any other relationship is invalid.
-/// The emitted size is always `n` (the printed `vtfm`N / `vhtfm`N digit).
+/// chooses the homogeneous form when `n == ins` and the plain form
+/// (`vtfm`N) when `n == ins+1`; any other relationship is invalid.
+/// The emitted size is the MATRIX size `ins+1` (the printed `vtfm`N /
+/// `vhtfm`N digit): for the plain form that equals `n`; the homogeneous
+/// form is an `(n+1)`x`(n+1)` matrix times `(v, 1)` with `n+1` results
+/// (PPSSPP `Int_Vtfm`), so `vhtfm4.t` carries `n = 3`.
 ///
 /// Args:
 ///   word: The full 32-bit instruction word (for the unknown fallback).
@@ -594,7 +597,7 @@ pub(crate) fn decode_vfpu5(
 ///   t: Decoded VT register field.
 ///
 /// Returns:
-///   `VfpuTfm` / `VfpuHtfm` with `size = n`, or `VfpuUnknown` for a bad
+///   `VfpuTfm` / `VfpuHtfm` with `size = ins + 1`, or `VfpuUnknown` for a bad
 ///   size relationship.
 fn decode_tfm(
     word: u32,
@@ -610,7 +613,7 @@ fn decode_tfm(
             vd: d,
             vs: s,
             vt: t,
-            size: n as u8,
+            size: (ins + 1) as u8,
         })
     } else if n == ins + 1 {
         Ok(MipsOp::VfpuTfm {
@@ -1217,16 +1220,31 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_vfpu6_vhtfm3_size_split() {
-        // 0xF180AC01 @ 0x08857B8C (sub=3, n=3, n==ins -> vhtfm3). A
+    fn test_decode_vfpu6_vhtfm4_size_split() {
+        // 0xF180AC01 @ 0x08857B8C (sub=3, n=3, n==ins -> homogeneous). A
         // GENUINE homogeneous transform: the size-split keeps it vhtfm
-        // while its sibling 0xF18BA483 (n=4) becomes vtfm4. This is the
-        // real builder word that fired the live "vhtfm3" emit.
+        // while its sibling 0xF18BA483 (n=4) becomes vtfm4. PPSSPP
+        // `Dis_Vtfm` names it by the MATRIX size (ins+1): vhtfm4.t, i.e.
+        // a 4x4 matrix times (x, y, z, 1) with 4 results (`Int_Vtfm`).
         match decode_vfpu6(0xF180AC01, 0x08857B8C).unwrap() {
             MipsOp::VfpuHtfm { vd, vs, vt, size } => {
-                assert_eq!((vd, vs, vt, size), (0x01, 0x2C, 0x00, 3));
+                assert_eq!((vd, vs, vt, size), (0x01, 0x2C, 0x00, 4));
             }
-            other => panic!("expected vhtfm3, got {other:?}"),
+            other => panic!("expected vhtfm4, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_decode_vfpu6_vhtfm4_lookat_translation() {
+        // 0xF184AC05 @ 0x088364F8: the look-at builder's translation
+        // `vhtfm4.t C110, M300, C100` (-eye through the 4x4 view matrix).
+        // Decoded as a 3x3 vhtfm3 it returned eye.w (1.0) as the view's z
+        // translation, pushing every title-screen layer behind the camera.
+        match decode_vfpu6(0xF184AC05, 0x088364F8).unwrap() {
+            MipsOp::VfpuHtfm { vd, vs, vt, size } => {
+                assert_eq!((vd, vs, vt, size), (0x05, 0x2C, 0x04, 4));
+            }
+            other => panic!("expected vhtfm4, got {other:?}"),
         }
     }
 

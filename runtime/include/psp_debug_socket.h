@@ -54,6 +54,8 @@ struct PspDebugHooks {
     /// Blocking screenshot request (render thread services it).
     /// Returns true once the file is written, false on timeout/failure.
     bool (*capture_screenshot)(const char* path, int timeout_ms) = nullptr;
+    /// D command: log the draw state of the next N display lists.
+    void (*draw_log)(int lists) = nullptr;
 };
 
 /// Install the providers used by the I and S commands.

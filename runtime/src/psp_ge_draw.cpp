@@ -497,10 +497,57 @@ void ge_draw_begin_list() {
     g_frame_counter++;
 }
 
+// Debug socket `D <lists>`: remaining display lists to log ([DL] lines).
+static std::atomic<int> g_drawlog_lists{0};
+
+void ge_draw_request_log(int lists) {
+    g_drawlog_lists.store(lists, std::memory_order_relaxed);
+}
+
 void ge_draw_end_list() {
     // Mark the front buffer dirty so the liveness net can publish content
     // even for a title that draws but never calls sceDisplaySetFrameBuf.
     ge_draw_mark_dirty();
+    if (g_drawlog_lists.load(std::memory_order_relaxed) > 0) {
+        std::fprintf(stderr, "[DL] ---- list end (fb=0x%06X)\n",
+                     ge_get_state().framebuf_ptr);
+        g_drawlog_lists.fetch_sub(1, std::memory_order_relaxed);
+    }
+}
+
+static void drawlog_prim(const GeState& s, int prim_type, int count) {
+    std::fprintf(stderr,
+        "[DL] prim=%d n=%d vt=0x%06X va=0x%08X fb=0x%06X clr=%d thr=%d "
+        "tex=%d ta=0x%08X tf=%u tsz=0x%04X bw=%u clut=0x%08X cf=0x%06X "
+        "tfn=0x%X blend=%d bm=0x%03X fa=0x%06X fb2=0x%06X at=%d atv=0x%06X "
+        "zt=%d zf=%u zw=%d st=%d lit=%d mat=0x%06X/%02X amb=0x%06X sc=0x%06X/0x%06X\n",
+        prim_type, count, s.vertex_type, s.vertex_addr, s.framebuf_ptr,
+        s.clear_mode ? 1 : 0, ge_vtype_through(s.vertex_type) ? 1 : 0,
+        s.texture_enable ? 1 : 0, s.tex_addr[0], s.tex_format, s.tex_size[0],
+        s.tex_bufw[0], s.clut_addr, s.clut_format, s.tex_func_raw,
+        s.alpha_blend_enable ? 1 : 0, s.blend_mode, s.blend_fix_a,
+        s.blend_fix_b, s.alpha_test_enable ? 1 : 0, s.alpha_test,
+        s.depth_test_enable ? 1 : 0, s.depth_func,
+        s.depth_write_disable ? 0 : 1, s.stencil_test_enable ? 1 : 0,
+        s.lighting_enable ? 1 : 0, s.material_ambient, s.material_alpha,
+        s.ambient_color, s.scissor1, s.scissor2);
+    if (!ge_vtype_through(s.vertex_type)) {
+        const float* w = s.world_matrix;
+        const float* v = s.view_matrix;
+        const float* p = s.proj_matrix;
+        std::fprintf(stderr,
+            "[DL]   world=[%g %g %g|%g %g %g|%g %g %g|%g %g %g] "
+            "view=[%g %g %g|%g %g %g|%g %g %g|%g %g %g] "
+            "proj=[%g %g %g %g|%g %g %g %g|%g %g %g %g|%g %g %g %g] "
+            "vp=0x%06X,0x%06X,0x%06X/0x%06X,0x%06X,0x%06X z=%u..%u\n",
+            w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], w[9], w[10], w[11],
+            v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11],
+            p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10],
+            p[11], p[12], p[13], p[14], p[15],
+            s.viewport_x_scale, s.viewport_y_scale, s.viewport_z_scale,
+            s.viewport_x_center, s.viewport_y_center, s.viewport_z_center,
+            s.min_z, s.max_z);
+    }
 }
 
 void ge_draw_prim(
@@ -576,6 +623,8 @@ void ge_draw_prim(
     prim_call_count++;
 
     const GeState& state = ge_get_state();
+    const bool drawlog = g_drawlog_lists.load(std::memory_order_relaxed) > 0;
+    if (drawlog) drawlog_prim(state, prim_type, count);
 
     // Scissor (GE_CMD_SCISSOR1/2: inclusive x1,y1 / x2,y2, 10 bits each,
     // top-left origin) applies to every draw, clears included. The FBO uses
@@ -804,6 +853,16 @@ void ge_draw_prim(
         }
     }
 
+    if (drawlog) {
+        for (size_t i = 0; i < packed.size() && i < 2; i++) {
+            const PackedVertex& pv = packed[i];
+            std::fprintf(stderr,
+                "[DL]   v%zu/%zu pos=%.3f,%.3f,%.3f,%.3f uv=%.3f,%.3f rgba=%u,%u,%u,%u\n",
+                i, packed.size(), pv.pos[0], pv.pos[1], pv.pos[2], pv.pos[3],
+                pv.uv[0], pv.uv[1], pv.color[0], pv.color[1], pv.color[2],
+                pv.color[3]);
+        }
+    }
     if (packed.empty()) return;
 
     // Upload to VBO

@@ -201,6 +201,7 @@ silently dropped. Full protocol details in the issue #35 section below.
 | `W <hexaddr> <hexbytes>` | Write bytes into rdram (masked; whole range must be in bounds) | `OK 0` |
 | `B <hexmask> <decms>` | Inject button mask for duration (UP=10, CROSS=4000, START=8; clamped 60 s) | `OK 0` |
 | `S <path>` | Screenshot: render thread writes 480x272 TGA to `<path>` | `OK 0` (≤10 s) or `ERR timeout` |
+| `D <lists>` | Draw log: every PRIM of the next `<lists>` display lists prints a `[DL]` line to the log (full draw state, world/view/proj matrices, first two packed vertices) | `OK 0` |
 
 ```bash
 printf 'B 10 250\n'   | nc 127.0.0.1 9999   # UP
@@ -295,6 +296,7 @@ what was added, how to use it, how it was verified, and any new failure modes di
 | `W` | `<hexaddr> <hexbytes>` (even-length hex, no spaces) | `OK 0` | `bad-addr`, `bad-bytes`, `out-of-range` (whole range must fit — no partial writes) |
 | `B` | `<hexmask> <decms>` (clamped 60 s) | `OK 0` | `bad-mask`, `bad-duration` |
 | `S` | `<path>` (rest of line, spaces allowed) | `OK 0` after the TGA is on disk | `bad-path`, `unsupported`, `timeout` (10 s; also covers pre-GL boot and a concurrent capture in flight) |
+| `D` | `<declists>` | `OK 0`; the next N display lists log one `[DL]` line per PRIM (state + matrices + 2 packed vertices) and a `[DL] ---- list end` marker | `unsupported` |
 | anything else | | | `unknown-command`, `empty`, `line-too-long` (>4095 chars; connection stays usable) |
 
 ### `I` JSON schema (one line, jq-able)

@@ -331,6 +331,11 @@ PspDebugReply psp_debug_handle_line(const char* line,
     if (line[0] == 'S' && line[1] == ' ') {
         return handle_screenshot(line + 2);
     }
+    if (line[0] == 'D' && line[1] == ' ') {
+        if (!g_hooks.draw_log) return make_err("unsupported");
+        g_hooks.draw_log(std::atoi(line + 2));
+        return make_ok_empty();
+    }
     return make_err("unknown-command");
 }
 

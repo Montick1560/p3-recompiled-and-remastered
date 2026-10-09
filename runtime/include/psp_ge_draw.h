@@ -82,6 +82,10 @@ void ge_draw_get_stats(
 /// the TGA file has been written. Never touches GL itself.
 bool ge_draw_capture_screenshot(const char* path, int timeout_ms);
 
+/// Debug socket `D <lists>`: log the full draw state of every PRIM in the
+/// next `lists` display lists ([DL] lines). Callable from any thread.
+void ge_draw_request_log(int lists);
+
 /// Render-thread side of ge_draw_capture_screenshot: if a capture request
 /// is pending, read the FBO and write the TGA. MUST be called from the
 /// main (GL) thread -- wired into psp_event_loop next to
