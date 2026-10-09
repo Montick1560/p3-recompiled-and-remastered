@@ -160,6 +160,7 @@ set(RUNTIME_SOURCES
     src/hle/psp_atrac_ctx.cpp
     src/hle/psp_hle_atrac.cpp
     src/hle/psp_savedata.cpp
+    src/hle/psp_media_engine.cpp
     src/psp_vfpu_core.cpp
     src/psp_vfpu_arith.cpp
     src/psp_vfpu_trig.cpp
@@ -221,6 +222,34 @@ target_include_directories(at3_standalone PUBLIC
 )
 # Third-party code: no warnings, always optimised (the decoder is hot).
 target_compile_options(at3_standalone PRIVATE -w $<IF:$<CONFIG:Debug>,-O1,-O2>)
+
+set(PSPRECOMP_FFMPEG_DIR "" CACHE PATH
+    "FFmpeg LGPL shared package root (include/, lib/*.dll.a, bin/*.dll). Empty disables video decode.")
+if(PSPRECOMP_FFMPEG_DIR)
+    add_library(psp_ffmpeg INTERFACE)
+    target_include_directories(psp_ffmpeg INTERFACE "${PSPRECOMP_FFMPEG_DIR}/include")
+    target_link_libraries(psp_ffmpeg INTERFACE
+        "${PSPRECOMP_FFMPEG_DIR}/lib/libavcodec.dll.a"
+        "${PSPRECOMP_FFMPEG_DIR}/lib/libavutil.dll.a"
+        "${PSPRECOMP_FFMPEG_DIR}/lib/libswscale.dll.a")
+    target_compile_definitions(psp_ffmpeg INTERFACE PSPRECOMP_HAVE_FFMPEG=1)
+    if(WIN32)
+        function(psp_ffmpeg_copy_dlls target)
+            file(GLOB _ff_dlls
+                "${PSPRECOMP_FFMPEG_DIR}/bin/avcodec-*.dll"
+                "${PSPRECOMP_FFMPEG_DIR}/bin/avutil-*.dll"
+                "${PSPRECOMP_FFMPEG_DIR}/bin/swscale-*.dll"
+                "${PSPRECOMP_FFMPEG_DIR}/bin/swresample-*.dll")
+            if(_ff_dlls)
+                add_custom_command(TARGET ${target} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_ff_dlls} "$<TARGET_FILE_DIR:${target}>")
+            endif()
+        endfunction()
+    endif()
+    message(STATUS "FFmpeg: ${PSPRECOMP_FFMPEG_DIR}")
+else()
+    message(STATUS "FFmpeg: disabled")
+endif()
 
 add_executable(psprecomp_runtime ${RUNTIME_SOURCES})
 
@@ -286,6 +315,12 @@ target_link_libraries(psprecomp_runtime PRIVATE
     pthread
     ${PSP_SOCKET_LIBS}
 )
+if(TARGET psp_ffmpeg)
+    target_link_libraries(psprecomp_runtime PRIVATE psp_ffmpeg)
+    if(WIN32)
+        psp_ffmpeg_copy_dlls(psprecomp_runtime)
+    endif()
+endif()
 
 # Suppress OpenGL deprecation warnings on macOS
 target_compile_definitions(psprecomp_runtime PRIVATE
@@ -576,6 +611,30 @@ target_compile_options(test_mpeg_demux PRIVATE
 )
 
 add_test(NAME mpeg_demux_tests COMMAND test_mpeg_demux)
+
+add_executable(test_media_engine
+    tests/test_media_engine.cpp
+    src/hle/psp_media_engine.cpp
+    src/hle/psp_mpeg_demux.cpp
+    src/hle/psp_psmf.cpp
+)
+target_include_directories(test_media_engine PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(test_media_engine PRIVATE at3_standalone)
+if(TARGET psp_ffmpeg)
+    target_link_libraries(test_media_engine PRIVATE psp_ffmpeg)
+    if(WIN32)
+        psp_ffmpeg_copy_dlls(test_media_engine)
+    endif()
+endif()
+target_compile_options(test_media_engine PRIVATE
+    -O2
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+add_test(NAME media_engine_tests COMMAND test_media_engine)
 
 # GE vertex transform unit test target (dothack-L6c fix). Links the real
 # psp_ge_vertex.cpp and calls ge_transform_vertices directly to verify
