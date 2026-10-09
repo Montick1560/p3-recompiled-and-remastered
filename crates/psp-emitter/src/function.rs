@@ -850,11 +850,19 @@ pub(crate) fn emit_branch_or_tail(
             gen.emit_branch(cond, &target_pc);
         }
     } else {
-        // Cross-function branch: conditional tail call via dispatch table
+        // Cross-function branch: conditional tail call via dispatch table.
+        // A taken branch-likely still runs its delay slot first (only the
+        // not-taken path annuls it); `ds_comment` carries that slot's C++.
         gen.note_static_lookup(target);
-        gen.emit_raw(&format!(
-            "if ({cond}) {{ RECOMP_LOOKUP(0x{target:08X}u)(rdram, ctx); return; }}"
-        ));
+        if likely {
+            gen.emit_raw(&format!(
+                "if ({cond}) {{ {ds_comment} RECOMP_LOOKUP(0x{target:08X}u)(rdram, ctx); return; }}"
+            ));
+        } else {
+            gen.emit_raw(&format!(
+                "if ({cond}) {{ RECOMP_LOOKUP(0x{target:08X}u)(rdram, ctx); return; }}"
+            ));
+        }
     }
 }
 
@@ -924,6 +932,16 @@ fn emit_op_with_ds(
         MipsOp::Bc1f { target, .. } => {
             let cc = gen.emit_fpu_cc_read();
             let cond = format!("{cc} == 0");
+            emit_branch_or_tail(gen, &cond, *target, true, ds_cpp, func_start, func_end);
+        }
+        MipsOp::VfpuBvf { cc, target, .. } => {
+            let cc_reg = crate::vfpu::VFPU_CTRL_CC;
+            let cond = format!("!(ctx->vfpu_ctrl[{cc_reg}] & (1 << {cc}))");
+            emit_branch_or_tail(gen, &cond, *target, true, ds_cpp, func_start, func_end);
+        }
+        MipsOp::VfpuBvt { cc, target, .. } => {
+            let cc_reg = crate::vfpu::VFPU_CTRL_CC;
+            let cond = format!("(ctx->vfpu_ctrl[{cc_reg}] & (1 << {cc}))");
             emit_branch_or_tail(gen, &cond, *target, true, ds_cpp, func_start, func_end);
         }
         _ => {
@@ -1947,6 +1965,45 @@ mod tests {
     fn emit_one(op: MipsOp) -> String {
         let mut gen = TestGenerator::new();
         emit_function(&make_func(vec![op]), &mut gen, &ImportMap::new());
+        gen.output.join("
+")
+    }
+
+    #[test]
+    fn cross_function_branch_likely_runs_its_delay_slot_when_taken() {
+        // beql a0, zero, <other function>; addiu a0, a0, 1 (delay slot):
+        // taken -> the slot runs, then control leaves (PPSSPP Interpreter.cpp
+        // DelayBranchTo); not taken -> the slot is annulled.
+        let out = emit_one_seq(vec![
+            MipsOp::Beq { rs: Reg::Gpr(4), rt: Reg::Zero, target: 0x08900000, likely: true },
+            MipsOp::DelaySlot {
+                instr: Box::new(MipsOp::Addiu { rt: Reg::Gpr(4), rs: Reg::Gpr(4), imm: 1 }),
+            },
+        ]);
+        let slot = out.find("ctx->r[4] = (int32_t)(ctx->r[4] + 1);").expect(&out);
+        let call = out.find("RECOMP_LOOKUP(0x08900000u)").expect(&out);
+        let cond = out.find("if (").expect(&out);
+        assert!(cond < slot && slot < call, "{out}");
+    }
+
+    #[test]
+    fn vfpu_branch_likely_runs_its_delay_slot_when_taken() {
+        // bvtl 0, L (in-function) with addiu a0,a0,1 in the slot: the slot
+        // must sit inside the taken path, like beql (PPSSPP Interpreter.cpp).
+        let out = emit_one_seq(vec![
+            MipsOp::VfpuBvt { cc: 0, target: 0x08804000, likely: true },
+            MipsOp::DelaySlot {
+                instr: Box::new(MipsOp::Addiu { rt: Reg::Gpr(4), rs: Reg::Gpr(4), imm: 1 }),
+            },
+        ]);
+        let slot = out.find("ctx->r[4] = (int32_t)(ctx->r[4] + 1);").expect(&out);
+        let jump = out.find("goto L_08804000;").expect(&out);
+        assert!(slot < jump, "{out}");
+    }
+
+    fn emit_one_seq(ops: Vec<MipsOp>) -> String {
+        let mut gen = TestGenerator::new();
+        emit_function(&make_func(ops), &mut gen, &ImportMap::new());
         gen.output.join("
 ")
     }
