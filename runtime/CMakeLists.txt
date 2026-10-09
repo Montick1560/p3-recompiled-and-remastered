@@ -162,6 +162,7 @@ set(RUNTIME_SOURCES
     src/hle/psp_psmf.cpp
     src/hle/psp_hle_psmf.cpp
     src/hle/psp_savedata.cpp
+    src/hle/psp_gamedata_install.cpp
     src/hle/psp_mpeg_demux.cpp
     src/hle/psp_hle_mpeg.cpp
     src/hle/psp_media_engine.cpp
@@ -576,6 +577,29 @@ target_compile_options(test_savedata PRIVATE
 
 add_test(NAME atrac_ctx_tests COMMAND test_atrac_ctx)
 add_test(NAME savedata_tests COMMAND test_savedata)
+
+# sceUtilityGamedataInstall back end unit test (pure: destination naming,
+# copy-progress state machine over a temp directory with fake INSDIR files,
+# PARAM.SFO contents, Memory Stick devctl descriptor) -- no SDL, no game files.
+add_executable(test_gamedata_install
+    tests/test_gamedata_install.cpp
+    src/hle/psp_gamedata_install.cpp
+    src/hle/psp_savedata.cpp  # Psf writer/parser for the SFO assertions
+)
+
+target_include_directories(test_gamedata_install PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/hle  # psp_gamedata_install.h
+)
+
+target_compile_options(test_gamedata_install PRIVATE
+    -O2
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+
+add_test(NAME gamedata_install_tests COMMAND test_gamedata_install)
 
 # PSMF header parser unit test (pure: parser + synthetic/malformed headers; the
 # real-data case reads the user's DATA_CMN.BND and is skipped when absent).

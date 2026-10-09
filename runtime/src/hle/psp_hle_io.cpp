@@ -1,9 +1,12 @@
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_io.h"
 #include "hle/psp_hle_kernel.h"
+#include "hle/psp_savedata.h"
+#include "psp_gamedata_install.h"
 #include "psp_memory.h"
 #include "psp_scheduler.h"
 #include "recomp.h"
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -100,6 +103,46 @@ std::string psp_path_to_host(const char* psp_path) {
     // umd0:/ -> same as disc0
     if (p.substr(0, 6) == "umd0:/") {
         return g_disc0_path + "/" + p.substr(6);
+    }
+
+    // ms0:/PSP/SAVEDATA/... -> savedata root (data-install destination,
+    // PPSSPP saveBasePath "ms0:/PSP/SAVEDATA/"). Case-insensitive
+    // device+prefix match so the game can read installed data back; every
+    // other ms0: path stays unmounted as before.
+    {
+        auto match_ci = [&p](const char* prefix) -> size_t {
+            size_t n = std::strlen(prefix);
+            if (p.size() < n) {
+                return 0;
+            }
+            for (size_t i = 0; i < n; i++) {
+                if (std::tolower(static_cast<unsigned char>(p[i])) !=
+                    prefix[i]) {
+                    return 0;
+                }
+            }
+            return n;
+        };
+        static const char* kDirPrefixes[] = {
+            "ms0:/psp/savedata/", "ms0:psp/savedata/",
+        };
+        for (const char* pre : kDirPrefixes) {
+            size_t n = match_ci(pre);
+            if (n > 0) {
+                return psp_savedata::default_root() + "/" + p.substr(n);
+            }
+        }
+        size_t m = match_ci("ms0:/psp/savedata");
+        if (m == 0) {
+            m = match_ci("ms0:psp/savedata");
+        }
+        if (m > 0 && (p.size() == m || p[m] == '/')) {
+            std::string rest = (p.size() > m + 1) ? p.substr(m + 1) : "";
+            if (rest.empty()) {
+                return psp_savedata::default_root();
+            }
+            return psp_savedata::default_root() + "/" + rest;
+        }
     }
 
     // ms0: / flash0: -> not mounted
@@ -1259,9 +1302,73 @@ static void hle_sceIoDevctl(
     uint32_t cmd = static_cast<uint32_t>(ctx->r[5]);
     uint32_t arg_ptr = static_cast<uint32_t>(ctx->r[6]);
     uint32_t arg_len = static_cast<uint32_t>(ctx->r[7]);
+    // 5th/6th args (outPtr/outLen) arrive in r8/r9, like the other 5+-arg
+    // HLE handlers (cf. sceKernelTryReceiveMsgPipe reading r4-r8).
+    uint32_t devctl_out_ptr = static_cast<uint32_t>(ctx->r[8]);
 
     const char* dev_name = reinterpret_cast<const char*>(
         rdram + (dev_ptr & PSP_ADDR_MASK));
+
+    // PPSSPP Core/HLE/ErrorCodes.h
+    static constexpr int32_t DEVCTL_BAD_PARAMS = (int32_t)0x80220081U;
+
+    auto guest_range = [](uint32_t addr, uint32_t len) -> bool {
+        if (addr == 0) {
+            return false;
+        }
+        uint64_t off = addr & PSP_ADDR_MASK;
+        return off + len <= PSP_MEM_SIZE;
+    };
+
+    bool is_ms = (std::strcmp(dev_name, "ms0:") == 0 ||
+                  std::strcmp(dev_name, "fatms0:") == 0);
+
+    // Get MS capacity (PPSSPP sceIo.cpp 0x02425818, identical ms0: and
+    // fatms0: branches): the DeviceSize pointer travels through argAddr,
+    // not outPtr. Reports the same virtual 4 GB card the savedata SIZES
+    // path uses, with the whole usable area free.
+    if (is_ms && cmd == 0x02425818) {
+        if (!guest_range(arg_ptr, 4) || arg_len < 4) {
+            ctx->r[2] = DEVCTL_BAD_PARAMS;
+            sched_yield_point();
+            return;
+        }
+        uint32_t ds_ptr = psp_mem_read<uint32_t>(rdram, arg_ptr);
+        psp_gamedata_install::DeviceSize ds =
+            psp_gamedata_install::ms_device_size();
+        if (guest_range(ds_ptr, 20)) {
+            psp_mem_write<uint32_t>(rdram, ds_ptr + 0, ds.max_clusters);
+            psp_mem_write<uint32_t>(rdram, ds_ptr + 4, ds.free_clusters);
+            psp_mem_write<uint32_t>(rdram, ds_ptr + 8, ds.max_sectors);
+            psp_mem_write<uint32_t>(rdram, ds_ptr + 12, ds.sector_size);
+            psp_mem_write<uint32_t>(rdram, ds_ptr + 16, ds.sector_count);
+        }
+        std::fprintf(stderr,
+            "[HLE] sceIoDevctl(%s, 0x02425818): 4GB card clusters=%u\n",
+            dev_name, ds.max_clusters);
+        ctx->r[2] = SCE_OK;
+        sched_yield_point();
+        return;
+    }
+
+    // FAT-enabled query (PPSSPP sceIo.cpp fatms0: 0x02425823): writes 1
+    // (card inserted, FAT assigned) to outPtr.
+    if (is_ms && cmd == 0x02425823) {
+        if (devctl_out_ptr == 0) {
+            ctx->r[2] = SCE_ERROR_ERRNO_EINVAL;
+            sched_yield_point();
+            return;
+        }
+        if (!guest_range(devctl_out_ptr, 4)) {
+            ctx->r[2] = SCE_KERNEL_ERROR_ILLEGAL_ADDR;
+            sched_yield_point();
+            return;
+        }
+        psp_mem_write<uint32_t>(rdram, devctl_out_ptr, 1);
+        ctx->r[2] = SCE_OK;
+        sched_yield_point();
+        return;
+    }
 
     // fatms0: MScmRegisterMSInsertEjectCallback (0x02415821)
     // PPSSPP sceIo.cpp:1894-1926 -- registers callback and fires

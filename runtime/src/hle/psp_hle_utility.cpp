@@ -16,6 +16,7 @@
 #include <chrono>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -1137,10 +1138,14 @@ static constexpr int32_t PSP_UTILITY_STATUS_SHUTDOWN = 4;
 
 // PPSSPP Core/HLE/ErrorCodes.h
 static constexpr uint32_t SCE_ERROR_UTILITY_INVALID_STATUS = 0x80110001U;
+static constexpr uint32_t SCE_ERROR_UTILITY_INVALID_ADDRESS = 0x80110002U;
+static constexpr uint32_t SCE_ERROR_UTILITY_INVALID_PARAM_SIZE = 0x80110004U;
 static constexpr uint32_t SCE_UTILITY_SAVEDATA_ERROR_DELETE_NO_DATA =
     0x80110347U;
 
 #include "hle/psp_savedata.h"
+#include "hle/psp_hle_io.h"
+#include "psp_gamedata_install.h"
 
 // pspUtilityDialogCommon.result offset within the param struct.
 static constexpr uint32_t UTILITY_COMMON_RESULT_OFFSET = 28;
@@ -1321,6 +1326,240 @@ static void hle_sceUtilityMsgDialogUpdate(
 ) {
     utility_dialog_update(g_msg_dialog, ctx);
     (void)rdram;
+}
+
+// ---- Gamedata install (sceUtilityGamedataInstall) ----
+// Same status machine as the savedata/msg dialogs above
+// (PPSSPP PSPDialog::GetStatus with UseAutoStatus:
+// INITIALIZE->RUNNING and SHUTDOWN->NONE advance automatically, the
+// RUNNING poll performs the work), except the work is chunked: each
+// Update copies the next slice of <disc0>/PSP_GAME/INSDIR/ into
+// <savedata root>/<gameName><dataName>/ (PPSSPP GetGameDataInstallFileName
+// destination naming) and GetStatus only leaves RUNNING once the copy —
+// including the PARAM.SFO write — is done. The chunk engine is the pure
+// psp_gamedata_install::Installer; this glue only snapshots the guest
+// param at Init and writes progress/result back.
+namespace gdi = psp_gamedata_install;
+
+struct GamedataDialogState {
+    UtilityDialogState base;  // status machine shared with the other dialogs
+    std::optional<gdi::Installer> installer;
+    bool done = false;    // copy finished (or mode rejected): may FINISH
+    bool failed = false;  // result already holds an error, keep it
+};
+
+static GamedataDialogState g_gamedata_dialog;
+
+// Guest-range check against the 128 MB rdram (address 0 is never valid,
+// like PPSSPP's PSPPointer::IsValid).
+static bool gamedata_range(uint32_t addr, uint32_t len) {
+    if (addr == 0) {
+        return false;
+    }
+    uint64_t off = addr & PSP_ADDR_MASK;
+    return off + len <= PSP_MEM_SIZE;
+}
+
+static uint32_t gamedata_rd32(uint8_t* rdram, uint32_t addr) {
+    return psp_mem_read<uint32_t>(rdram, addr);
+}
+
+static std::string gamedata_str(uint8_t* rdram, uint32_t addr, size_t cap) {
+    uint64_t off = addr & PSP_ADDR_MASK;
+    if (addr == 0 || off + cap > PSP_MEM_SIZE) {
+        return "";
+    }
+    const char* p = reinterpret_cast<const char*>(rdram + off);
+    return std::string(p, strnlen(p, cap));
+}
+
+static bool gamedata_name_ok(const std::string& s) {
+    if (s.empty() || s == "." || s == "..") {
+        return false;
+    }
+    return s.find_first_of("/\\:") == std::string::npos;
+}
+
+static void hle_sceUtilityGamedataInstallInitStart(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    GamedataDialogState& dlg = g_gamedata_dialog;
+    if (dlg.base.status != PSP_UTILITY_STATUS_NONE) {
+        ctx->r[2] = static_cast<int32_t>(SCE_ERROR_UTILITY_INVALID_STATUS);
+        return;
+    }
+    uint32_t p = static_cast<uint32_t>(ctx->r[4]);
+    // PPSSPP PSPDialog::CheckRequest: common range, then size, then all.
+    if (!gamedata_range(p, 48)) {
+        ctx->r[2] = static_cast<int32_t>(SCE_ERROR_UTILITY_INVALID_ADDRESS);
+        return;
+    }
+    uint32_t size = gamedata_rd32(rdram, p + gdi::off::kSize);
+    if (size != gdi::off::kSizeV1 && size != gdi::off::kSizeV2) {
+        ctx->r[2] = static_cast<int32_t>(
+            SCE_ERROR_UTILITY_INVALID_PARAM_SIZE);
+        return;
+    }
+    if (!gamedata_range(p, size)) {
+        ctx->r[2] = static_cast<int32_t>(SCE_ERROR_UTILITY_INVALID_ADDRESS);
+        return;
+    }
+
+    std::string game = gamedata_str(rdram, p + gdi::off::kGameName, 13);
+    std::string data = gamedata_str(rdram, p + gdi::off::kDataName, 20);
+    if (!gamedata_name_ok(game) || !gamedata_name_ok(data)) {
+        ctx->r[2] = static_cast<int32_t>(
+            SCE_ERROR_UTILITY_INVALID_PARAM_SIZE);
+        return;
+    }
+    gdi::SfoParams sfo;
+    sfo.title = gamedata_str(rdram, p + gdi::off::kSfoTitle, 128);
+    sfo.savedata_title =
+        gamedata_str(rdram, p + gdi::off::kSfoSavedataTitle, 128);
+    sfo.detail = gamedata_str(rdram, p + gdi::off::kSfoDetail, 1024);
+    uint64_t poff = (p + gdi::off::kSfoParentalLevel) & PSP_ADDR_MASK;
+    sfo.parental_level = static_cast<int32_t>(rdram[poff]);
+
+    std::string src = psp_path_to_host("disc0:/PSP_GAME/INSDIR");
+    std::string dst =
+        gdi::install_dir(psp_savedata::default_root(), game, data);
+    dlg.installer.emplace(src, dst, sfo);
+    if (!dlg.installer->ok()) {
+        // PPSSPP Init: "Game install with no files / data" -> -1, and the
+        // dialog never starts (status stays NONE).
+        dlg.installer.reset();
+        std::fprintf(stderr,
+            "[HLE] sceUtilityGamedataInstallInitStart: no files in %s\n",
+            src.c_str());
+        ctx->r[2] = -1;
+        return;
+    }
+    dlg.base.param_addr = p;
+    dlg.done = false;
+    dlg.failed = false;
+    dlg.base.status = PSP_UTILITY_STATUS_INITIALIZE;
+    std::fprintf(stderr,
+        "[HLE] sceUtilityGamedataInstallInitStart(game=%s data=%s "
+        "files=%d bytes=%llu)\n",
+        game.c_str(), data.c_str(), dlg.installer->file_count(),
+        static_cast<unsigned long long>(dlg.installer->total_bytes()));
+    ctx->r[2] = SCE_OK;
+}
+
+static void hle_sceUtilityGamedataInstallUpdate(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    GamedataDialogState& dlg = g_gamedata_dialog;
+    if (dlg.base.status != PSP_UTILITY_STATUS_RUNNING || !dlg.installer) {
+        ctx->r[2] = static_cast<int32_t>(SCE_ERROR_UTILITY_INVALID_STATUS);
+        return;
+    }
+    uint32_t p = dlg.base.param_addr;
+    // PPSSPP Update: mode >= 2 fails the install with INVALID_MODE.
+    int32_t mode = 0;
+    if (gamedata_range(p, gdi::off::kMode + 4)) {
+        mode = static_cast<int32_t>(
+            gamedata_rd32(rdram, p + gdi::off::kMode));
+    }
+    if (mode >= 2) {
+        if (gamedata_range(p, gdi::off::kResult + 4)) {
+            psp_mem_write<int32_t>(rdram, p + gdi::off::kResult,
+                static_cast<int32_t>(gdi::ERR_UTILITY_GAMEDATA_INVALID_MODE));
+        }
+        dlg.done = true;
+        dlg.failed = true;
+        std::fprintf(stderr,
+            "[HLE] sceUtilityGamedataInstallUpdate: invalid mode %d\n", mode);
+        ctx->r[2] = SCE_OK;
+        return;
+    }
+    dlg.installer->step();
+    if (gamedata_range(p, gdi::off::kProgress + 4)) {
+        psp_mem_write<int32_t>(rdram, p + gdi::off::kProgress,
+                               dlg.installer->progress());
+    }
+    if (dlg.installer->finished()) {
+        if (gamedata_range(p, gdi::off::kUnknownResult2 + 4)) {
+            psp_mem_write<uint32_t>(rdram, p + gdi::off::kUnknownResult1,
+                static_cast<uint32_t>(dlg.installer->files_done()));
+            psp_mem_write<uint32_t>(rdram, p + gdi::off::kUnknownResult2,
+                static_cast<uint32_t>(dlg.installer->files_done()));
+        }
+        dlg.done = true;
+        std::fprintf(stderr,
+            "[HLE] sceUtilityGamedataInstallUpdate: finished (%d files)\n",
+            dlg.installer->files_done());
+    }
+    ctx->r[2] = SCE_OK;
+}
+
+static void hle_sceUtilityGamedataInstallGetStatus(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    GamedataDialogState& dlg = g_gamedata_dialog;
+    int32_t ret = dlg.base.status;
+    switch (dlg.base.status) {
+        case PSP_UTILITY_STATUS_INITIALIZE:
+            dlg.base.status = PSP_UTILITY_STATUS_RUNNING;
+            break;
+        case PSP_UTILITY_STATUS_RUNNING:
+            // Unlike the savedata dialog (one poll = done), the copy spans
+            // many Updates: only leave RUNNING once the engine reports the
+            // install finished (or the mode was rejected).
+            if (dlg.done) {
+                if (!dlg.failed && dlg.installer &&
+                    dlg.installer->finished()) {
+                    uint32_t p = dlg.base.param_addr;
+                    if (gamedata_range(p, gdi::off::kResult + 4)) {
+                        psp_mem_write<int32_t>(
+                            rdram, p + gdi::off::kResult, 0);
+                    }
+                }
+                if (dlg.failed ||
+                    (dlg.installer && dlg.installer->finished())) {
+                    dlg.base.status = PSP_UTILITY_STATUS_FINISHED;
+                }
+            }
+            break;
+        case PSP_UTILITY_STATUS_SHUTDOWN:
+            dlg.base.status = PSP_UTILITY_STATUS_NONE;
+            dlg.base.param_addr = 0;
+            dlg.installer.reset();
+            dlg.done = false;
+            break;
+        default:
+            break;
+    }
+    ctx->r[2] = ret;
+}
+
+static void hle_sceUtilityGamedataInstallShutdownStart(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    utility_dialog_shutdown_start(g_gamedata_dialog.base, ctx);
+    (void)rdram;
+}
+
+static void hle_sceUtilityGamedataInstallAbort(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    // PPSSPP Abort: NONE/SHUTDOWN -> INVALID_STATUS, else result = 1 and
+    // the dialog shuts down (partial files stay on disk).
+    GamedataDialogState& dlg = g_gamedata_dialog;
+    if (dlg.base.status == PSP_UTILITY_STATUS_NONE ||
+        dlg.base.status == PSP_UTILITY_STATUS_SHUTDOWN) {
+        ctx->r[2] = static_cast<int32_t>(SCE_ERROR_UTILITY_INVALID_STATUS);
+        return;
+    }
+    uint32_t p = dlg.base.param_addr;
+    if (gamedata_range(p, gdi::off::kResult + 4)) {
+        psp_mem_write<int32_t>(rdram, p + gdi::off::kResult, 1);
+    }
+    dlg.installer.reset();
+    dlg.done = false;
+    dlg.failed = false;
+    dlg.base.status = PSP_UTILITY_STATUS_SHUTDOWN;
+    ctx->r[2] = SCE_OK;
 }
 
 static void hle_sceUtilityOskInitStart(
@@ -1695,6 +1934,16 @@ void psp_hle_register_utility() {
                       hle_sceUtilitySavedataShutdownStart);
     psp_hle_register("sceUtilitySavedataUpdate",
                       hle_sceUtilitySavedataUpdate);
+    psp_hle_register("sceUtilityGamedataInstallInitStart",
+                      hle_sceUtilityGamedataInstallInitStart);
+    psp_hle_register("sceUtilityGamedataInstallGetStatus",
+                      hle_sceUtilityGamedataInstallGetStatus);
+    psp_hle_register("sceUtilityGamedataInstallShutdownStart",
+                      hle_sceUtilityGamedataInstallShutdownStart);
+    psp_hle_register("sceUtilityGamedataInstallUpdate",
+                      hle_sceUtilityGamedataInstallUpdate);
+    psp_hle_register("sceUtilityGamedataInstallAbort",
+                      hle_sceUtilityGamedataInstallAbort);
     psp_hle_register("sceUtilityMsgDialogInitStart",
                       hle_sceUtilityMsgDialogInitStart);
     psp_hle_register("sceUtilityMsgDialogGetStatus",
