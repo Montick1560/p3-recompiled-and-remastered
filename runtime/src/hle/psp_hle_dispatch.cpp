@@ -4,6 +4,7 @@
 #include "recomp.h"
 
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -26,6 +27,11 @@ static std::unordered_map<std::string, HleEntry> g_hle_by_name;
 // Controlled by PSPRECOMP_HLE_TRACE=1 environment variable.
 // When enabled, every HLE call logs thread name and function name.
 bool g_hle_trace_enabled = false;
+static std::atomic<bool> g_hle_trace_live{true};
+
+void psp_hle_trace_set_live(bool on) {
+    g_hle_trace_live.store(on, std::memory_order_relaxed);
+}
 
 // Trace wrapper slot table: each slot stores the original function
 // pointer and name. Macro-generated wrapper functions index into
@@ -46,6 +52,10 @@ static int g_trace_slot_count = 0;
 static void hle_trace_call(int slot, uint8_t* rdram,
                            recomp_context* ctx) {
     const auto& s = g_trace_slots[slot];
+    if (!g_hle_trace_live.load(std::memory_order_relaxed)) {
+        s.original(rdram, ctx);
+        return;
+    }
     PspThread* t = psp_get_current_thread();
 
     // Try to read a0 as a string if it looks like a valid PSP pointer
@@ -423,7 +433,11 @@ void psp_hle_init() {
 
     // Check trace environment variable
     const char* trace_env = std::getenv("PSPRECOMP_HLE_TRACE");
-    g_hle_trace_enabled = (trace_env && trace_env[0] == '1');
+    g_hle_trace_enabled =
+        (trace_env && (trace_env[0] == '1' || trace_env[0] == '2'));
+    if (trace_env && trace_env[0] == '2') {
+        psp_hle_trace_set_live(false);  // armed; debug socket `T 1` starts it
+    }
 
     // 1. Call per-module registration functions
     psp_hle_register_all_modules();

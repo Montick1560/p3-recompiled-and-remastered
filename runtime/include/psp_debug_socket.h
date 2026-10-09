@@ -56,6 +56,8 @@ struct PspDebugHooks {
     bool (*capture_screenshot)(const char* path, int timeout_ms) = nullptr;
     /// D command: log the draw state of the next N display lists.
     void (*draw_log)(int lists) = nullptr;
+    /// T command: switch the HLE trace on/off (PSPRECOMP_HLE_TRACE=1|2).
+    void (*hle_trace)(bool on) = nullptr;
 };
 
 /// Install the providers used by the I and S commands.

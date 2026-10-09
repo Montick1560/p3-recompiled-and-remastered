@@ -96,6 +96,11 @@ uint32_t psp_get_boot_module_gp();
 /// Initialized during psp_hle_init().
 extern bool g_hle_trace_enabled;
 
+/// Live switch for the trace wrappers (debug socket `T 0|1`). With
+/// PSPRECOMP_HLE_TRACE=1 tracing starts on; with =2 the wrappers are
+/// installed but stay silent until switched on (trace one moment of a run).
+void psp_hle_trace_set_live(bool on);
+
 // ---- HLE Dispatch API ----
 
 /// Register an HLE function for a specific NID name.

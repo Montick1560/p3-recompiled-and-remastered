@@ -296,6 +296,7 @@ what was added, how to use it, how it was verified, and any new failure modes di
 | `W` | `<hexaddr> <hexbytes>` (even-length hex, no spaces) | `OK 0` | `bad-addr`, `bad-bytes`, `out-of-range` (whole range must fit — no partial writes) |
 | `B` | `<hexmask> <decms>` (clamped 60 s) | `OK 0` | `bad-mask`, `bad-duration` |
 | `S` | `<path>` (rest of line, spaces allowed) | `OK 0` after the TGA is on disk | `bad-path`, `unsupported`, `timeout` (10 s; also covers pre-GL boot and a concurrent capture in flight) |
+| `T` | `0` or `1` | `OK 0`; switches the HLE trace off/on. Needs `PSPRECOMP_HLE_TRACE=1` (starts on) or `=2` (armed, starts off) | `unsupported` |
 | `D` | `<declists>` | `OK 0`; the next N display lists log one `[DL]` line per PRIM (state + matrices + 2 packed vertices) and a `[DL] ---- list end` marker | `unsupported` |
 | anything else | | | `unknown-command`, `empty`, `line-too-long` (>4095 chars; connection stays usable) |
 

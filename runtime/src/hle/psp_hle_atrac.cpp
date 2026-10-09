@@ -3,6 +3,7 @@
 #include "psp_memory.h"
 #include "recomp.h"
 
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -241,6 +242,24 @@ void hle_sceAtracDecodeData(uint8_t* rdram, recomp_context* ctx) {
         put32(rdram, finishFlagAddr, (uint32_t)finish);
         // On error, no remaining frame value is written.
         if (r == 0) put32(rdram, remainAddr, (uint32_t)remains);
+    }
+    // First decodes + every 500th: samples written and output peak, to tell
+    // "nothing decoded" from "decoded silence" when music is missing.
+    static int decode_calls = 0;
+    if (++decode_calls <= 8 || decode_calls % 500 == 0) {
+        int peak = 0;
+        if (outAddr != 0 && numSamplesWritten > 0) {
+            for (int i = 0; i < numSamplesWritten * 2; i++) {
+                int v = (int16_t)(rdram[(outAddr + i * 2) & 0x07FFFFFFU] |
+                                  (rdram[(outAddr + i * 2 + 1) & 0x07FFFFFFU] << 8));
+                if (v < 0) v = -v;
+                if (v > peak) peak = v;
+            }
+        }
+        std::fprintf(stderr,
+            "[ATRAC] decode #%d id=%u ret=0x%08X samples=%d finish=%d remain=%d peak=%d\n",
+            decode_calls, (unsigned)arg(ctx, 0), (unsigned)r, numSamplesWritten,
+            finish, remains, peak);
     }
     ret(ctx, r);
 }

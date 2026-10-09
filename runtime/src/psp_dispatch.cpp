@@ -250,13 +250,39 @@ static int g_total_entries = 0;
 // diagnostics (games/<name>/hooks_dispatch.cpp) can report caller chains.
 thread_local uint32_t g_prev_func_addr = 0;
 
+// PSPRECOMP_FUNC_WATCH=<hex>[,<hex>...]: log every entry of the listed
+// guest functions with the caller (previous checkpoint), first 200 hits each.
+static constexpr int FUNC_WATCH_MAX = 16;
+static uint32_t g_func_watch[FUNC_WATCH_MAX];
+static std::atomic<int> g_func_watch_hits[FUNC_WATCH_MAX];
+static int g_func_watch_count = 0;
+
+static void func_watch_parse() {
+    const char* env = std::getenv("PSPRECOMP_FUNC_WATCH");
+    while (env && *env && g_func_watch_count < FUNC_WATCH_MAX) {
+        char* end = nullptr;
+        uint32_t a = static_cast<uint32_t>(std::strtoul(env, &end, 16));
+        if (end == env) break;
+        g_func_watch[g_func_watch_count++] = a;
+        env = (*end == ',') ? end + 1 : end;
+    }
+}
+
 void psp_trace_checkpoint(uint32_t addr) {
     if (!g_pc_trace_checked) {
         const char* env = std::getenv("PSPRECOMP_PC_TRACE");
         g_pc_trace = (env && env[0] == '1');
+        func_watch_parse();
         g_pc_trace_checked = true;
         if (g_pc_trace) {
             std::atexit(psp_dump_pc_trace);
+        }
+    }
+    for (int i = 0; i < g_func_watch_count; i++) {
+        if (g_func_watch[i] == addr &&
+            g_func_watch_hits[i].fetch_add(1, std::memory_order_relaxed) < 200) {
+            std::fprintf(stderr, "[FUNC-WATCH] 0x%08X from 0x%08X\n",
+                         addr, g_last_func_addr);
         }
     }
     g_prev_func_addr = g_last_func_addr;
