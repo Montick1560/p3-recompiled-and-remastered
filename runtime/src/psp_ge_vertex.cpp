@@ -43,85 +43,62 @@ static void vec3_by_matrix44(
 
 // ---- Vertex stride calculation ----
 
-int ge_vertex_stride(uint32_t vtype) {
-    int stride = 0;
-
-    // Texture coordinates
-    int tc = ge_vtype_tc(vtype);
-    switch (tc) {
-    case GE_VTYPE_TC_8BIT:  stride += 2; break;
-    case GE_VTYPE_TC_16BIT: stride += 4; break;
-    case GE_VTYPE_TC_FLOAT: stride += 8; break;
+// PSP vertex layout (PPSSPP VertexDecoder::SetVertexType): weights,
+// texcoord, color, normal, position, each aligned to its own element size;
+// the vertex size is rounded up to the largest alignment. Morph targets
+// repeat the whole vertex morphcount times.
+GeVertexLayout ge_vertex_layout(uint32_t vtype) {
+    GeVertexLayout L;
+    int size = 0;
+    int biggest = 1;
+    auto place = [&](int align, int bytes) {
+        size = (size + align - 1) & ~(align - 1);
+        const int off = size;
+        size += bytes;
+        if (align > biggest) biggest = align;
+        return off;
+    };
+    const int wt = ge_vtype_weight(vtype);
+    if (wt != 0) {
+        const int wcount = ((vtype >> GE_VTYPE_WEIGHTCOUNT_SHIFT)
+                            & GE_VTYPE_WEIGHTCOUNT_MASK) + 1;
+        const int wsize = wt == 1 ? 1 : (wt == 2 ? 2 : 4);
+        L.weights = place(wsize, wsize * wcount);
+    }
+    switch (ge_vtype_tc(vtype)) {
+    case GE_VTYPE_TC_8BIT:  L.tc = place(1, 2); break;
+    case GE_VTYPE_TC_16BIT: L.tc = place(2, 4); break;
+    case GE_VTYPE_TC_FLOAT: L.tc = place(4, 8); break;
     default: break;
     }
-
-    // Color
-    int col = ge_vtype_col(vtype);
-    switch (col) {
+    switch (ge_vtype_col(vtype)) {
     case GE_VTYPE_COL_565:
     case GE_VTYPE_COL_5551:
-    case GE_VTYPE_COL_4444:
-        stride += 2;
-        break;
-    case GE_VTYPE_COL_8888:
-        stride += 4;
-        break;
+    case GE_VTYPE_COL_4444: L.col = place(2, 2); break;
+    case GE_VTYPE_COL_8888: L.col = place(4, 4); break;
     default: break;
     }
-
-    // Normal
-    int nrm = ge_vtype_nrm(vtype);
-    switch (nrm) {
-    case GE_VTYPE_NRM_8BIT:  stride += 3; break;
-    case GE_VTYPE_NRM_16BIT:
-        stride = (stride + 1) & ~1;  // align to 2
-        stride += 6;
-        break;
-    case GE_VTYPE_NRM_FLOAT: stride += 12; break;
+    switch (ge_vtype_nrm(vtype)) {
+    case GE_VTYPE_NRM_8BIT:  L.nrm = place(1, 3); break;
+    case GE_VTYPE_NRM_16BIT: L.nrm = place(2, 6); break;
+    case GE_VTYPE_NRM_FLOAT: L.nrm = place(4, 12); break;
     default: break;
     }
-
-    // Position (always present)
-    int pos = ge_vtype_pos(vtype);
-    switch (pos) {
-    case GE_VTYPE_POS_8BIT:  stride += 3; break;
-    case GE_VTYPE_POS_16BIT:
-        stride = (stride + 1) & ~1;  // align to 2
-        stride += 6;
-        break;
-    case GE_VTYPE_POS_FLOAT:
-        stride = (stride + 3) & ~3;  // align to 4
-        stride += 12;
-        break;
+    switch (ge_vtype_pos(vtype)) {
+    case GE_VTYPE_POS_8BIT:  L.pos = place(1, 3); break;
+    case GE_VTYPE_POS_16BIT: L.pos = place(2, 6); break;
+    case GE_VTYPE_POS_FLOAT: L.pos = place(4, 12); break;
     default: break;
     }
+    size = (size + biggest - 1) & ~(biggest - 1);
+    L.one_vertex = size;
+    const int morphs = static_cast<int>((vtype >> 18) & 7u) + 1;
+    L.stride = size * morphs;
+    return L;
+}
 
-    // Weight (skip actual data for Phase 5 but account
-    // for stride if present)
-    int wt = ge_vtype_weight(vtype);
-    int wcount = ((vtype >> GE_VTYPE_WEIGHTCOUNT_SHIFT)
-                  & GE_VTYPE_WEIGHTCOUNT_MASK) + 1;
-    if (wt != 0) {
-        switch (wt) {
-        case 1: stride += wcount; break;       // u8
-        case 2: stride += wcount * 2; break;   // u16
-        case 3: stride += wcount * 4; break;   // float
-        default: break;
-        }
-    }
-
-    // Pad to alignment based on largest component type
-    if (pos == GE_VTYPE_POS_FLOAT
-        || nrm == GE_VTYPE_NRM_FLOAT
-        || tc == GE_VTYPE_TC_FLOAT) {
-        stride = (stride + 3) & ~3;
-    } else if (pos == GE_VTYPE_POS_16BIT
-               || nrm == GE_VTYPE_NRM_16BIT
-               || tc == GE_VTYPE_TC_16BIT) {
-        stride = (stride + 1) & ~1;
-    }
-
-    return stride;
+int ge_vertex_stride(uint32_t vtype) {
+    return ge_vertex_layout(vtype).stride;
 }
 
 // ---- Inline read helpers ----
@@ -177,7 +154,8 @@ void ge_decode_vertices(
     std::vector<DecodedVertex>& out
 ) {
     uint32_t vtype = state.vertex_type;
-    int stride = ge_vertex_stride(vtype);
+    const GeVertexLayout layout = ge_vertex_layout(vtype);
+    int stride = layout.stride;
 
     if (stride <= 0 || count <= 0) return;
 
@@ -230,6 +208,7 @@ void ge_decode_vertices(
         uint32_t offset = 0;
 
         // Texture coordinates
+        offset = static_cast<uint32_t>(layout.tc);
         if (tc_type == GE_VTYPE_TC_8BIT) {
             v.uv[0] = read_u8(rdram, base + offset) / 128.0f;
             v.uv[1] = read_u8(rdram, base + offset + 1)
@@ -251,6 +230,7 @@ void ge_decode_vertices(
         }
 
         // Color
+        offset = static_cast<uint32_t>(layout.col);
         if (col_type == GE_VTYPE_COL_565) {
             uint16_t val = read_u16(rdram, base + offset);
             v.color[0] = static_cast<uint8_t>(
@@ -289,14 +269,16 @@ void ge_decode_vertices(
             v.color[3] = read_u8(rdram, base + offset + 3);
             offset += 4;
         } else {
-            // Default: white
-            v.color[0] = 255;
-            v.color[1] = 255;
-            v.color[2] = 255;
-            v.color[3] = 255;
+            // No vertex color: the material ambient RGB + MATERIALALPHA
+            // (PPSSPP gstate.getMaterialAmbientRGBA()).
+            v.color[0] = static_cast<uint8_t>(state.material_ambient & 0xFF);
+            v.color[1] = static_cast<uint8_t>((state.material_ambient >> 8) & 0xFF);
+            v.color[2] = static_cast<uint8_t>((state.material_ambient >> 16) & 0xFF);
+            v.color[3] = static_cast<uint8_t>(state.material_alpha & 0xFF);
         }
 
         // Normal
+        offset = static_cast<uint32_t>(layout.nrm);
         if (nrm_type == GE_VTYPE_NRM_8BIT) {
             v.normal[0] = read_s8(rdram, base + offset)
                           / 127.0f;
@@ -329,6 +311,7 @@ void ge_decode_vertices(
         }
 
         // Position
+        offset = static_cast<uint32_t>(layout.pos);
         if (pos_type == GE_VTYPE_POS_8BIT) {
             v.pos[0] = static_cast<float>(
                 read_s8(rdram, base + offset));

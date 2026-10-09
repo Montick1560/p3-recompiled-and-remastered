@@ -714,6 +714,31 @@ void ge_draw_prim(
         rdram, state, prim_type, count, decoded);
     if (decoded.empty()) return;
 
+    // PSPRECOMP_VTX_WATCH=<hex vtype>: log the first draws of that vertex
+    // type (raw bytes of the first vertices + decoded positions).
+    {
+        static const char* vw = std::getenv("PSPRECOMP_VTX_WATCH");
+        static int vw_logs = 0;
+        if (vw && vw_logs < 12 &&
+            state.vertex_type == static_cast<uint32_t>(std::strtoul(vw, nullptr, 16))) {
+            vw_logs++;
+            const int stride = ge_vertex_stride(state.vertex_type);
+            const uint8_t* rv = rdram + (state.vertex_addr & 0x07FFFFFFu);
+            std::fprintf(stderr, "[VTX-WATCH] prim=%d count=%d stride=%d vaddr=0x%08X\n",
+                         prim_type, count, stride, state.vertex_addr);
+            for (int i = 0; i < count && i < 6; i++) {
+                std::fprintf(stderr, "[VTX-WATCH]   v%d raw:", i);
+                for (int b = 0; b < stride; b++) {
+                    std::fprintf(stderr, " %02X", rv[i * stride + b]);
+                }
+                std::fprintf(stderr, "  -> pos %.1f,%.1f,%.1f rgba %u,%u,%u,%u\n",
+                             decoded[i].pos[0], decoded[i].pos[1], decoded[i].pos[2],
+                             decoded[i].color[0], decoded[i].color[1], decoded[i].color[2],
+                             decoded[i].color[3]);
+            }
+        }
+    }
+
     // Transform
     ge_transform_vertices(decoded, state);
 

@@ -17,6 +17,18 @@ struct DecodedVertex {
     bool has_normal;
 };
 
+/// Byte offsets of each vertex component (-1 = absent) and the stride.
+struct GeVertexLayout {
+    int weights = -1;
+    int tc = -1;
+    int col = -1;
+    int nrm = -1;
+    int pos = -1;
+    int one_vertex = 0;  // size of one morph target
+    int stride = 0;      // one_vertex * morph count
+};
+GeVertexLayout ge_vertex_layout(uint32_t vtype);
+
 /// Compute the byte stride of one PSP vertex based on VTYPE bitfield.
 int ge_vertex_stride(uint32_t vtype);
 

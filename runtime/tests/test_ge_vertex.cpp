@@ -18,6 +18,9 @@
 #include "psp_ge.h"
 
 #include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <cstdio>
 #include <vector>
 
@@ -368,6 +371,72 @@ static void test_rect_expand_drops_nonpositive_w() {
     }
 }
 
+// Colorless vertices take the material ambient RGB + MATERIALALPHA
+// (PPSSPP gstate.getMaterialAmbientRGBA()), not opaque white: the Patapon 3
+// dialog boxes are filled with colorless quads tinted cream this way.
+static void test_colorless_vertex_uses_material_ambient() {
+    const size_t kRam = 0x08000000u;
+    uint8_t* ram = static_cast<uint8_t*>(std::calloc(kRam, 1));
+    const uint32_t vaddr = 0x08800000u;
+    const float pos[3] = {10.0f, 20.0f, 0.0f};
+    std::memcpy(ram + (vaddr & 0x07FFFFFFu), pos, sizeof(pos));
+    GeState s;
+    s.reset();
+    s.vertex_type = 0x00800180u;  // through, float position, no color/uv
+    s.vertex_addr = vaddr;
+    s.material_ambient = 0x00EBF5FFu;  // B=0xEB G=0xF5 R=0xFF
+    s.material_alpha = 0x80u;
+    std::vector<DecodedVertex> out;
+    ge_decode_vertices(ram, s, 0 /* points */, 1, out);
+    ASSERT_NEAR(out.size(), 1, "one vertex decoded");
+    if (!out.empty()) {
+        ASSERT_NEAR(out[0].color[0], 0xFF, "R from material ambient");
+        ASSERT_NEAR(out[0].color[1], 0xF5, "G from material ambient");
+        ASSERT_NEAR(out[0].color[2], 0xEB, "B from material ambient");
+        ASSERT_NEAR(out[0].color[3], 0x80, "A from MATERIALALPHA");
+    }
+    std::free(ram);
+}
+
+// Vertex layout (PPSSPP VertexDecoder::SetVertexType): components in the order
+// weights, texcoord, color, normal, position; each aligned to its own size;
+// the total rounded up to the largest alignment (color 8888 counts as 4).
+static void test_vertex_stride_alignment() {
+    ASSERT_NEAR(ge_vertex_stride(0x0080011Cu), 12, "col8888 + pos16 (Patapon 3 dialog box)");
+    ASSERT_NEAR(ge_vertex_stride(0x00000081u), 5, "tc8 + pos8");
+    ASSERT_NEAR(ge_vertex_stride(0x00000112u), 12, "tc16 + col565 + pos16");
+    ASSERT_NEAR(ge_vertex_stride(0x00004380u), 16, "2 u8 weights + pos float");
+    ASSERT_NEAR(ge_vertex_stride(0x0000009Cu), 8, "col8888 + pos8");
+    ASSERT_NEAR(ge_vertex_stride(0x000000A0u), 6, "nrm8 + pos8");
+    ASSERT_NEAR(ge_vertex_stride(0x0000019Fu), 24, "tcfloat + col8888 + posfloat");
+    ASSERT_NEAR(ge_vertex_stride(0x00000183u), 20, "tcfloat + posfloat");
+}
+
+// The decoder reads every vertex at the aligned stride: the second vertex of
+// a col8888 + pos16 strip starts 12 bytes in, not 10.
+static void test_decode_uses_aligned_stride() {
+    const size_t kRam = 0x08000000u;
+    uint8_t* ram = static_cast<uint8_t*>(std::calloc(kRam, 1));
+    const uint32_t vaddr = 0x08800000u;
+    const uint8_t verts[24] = {
+        0xFF, 0xED, 0xD2, 0xFF, 0x97, 0x00, 0x2E, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xFF, 0xED, 0xD2, 0xFF, 0x97, 0x00, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00};
+    std::memcpy(ram + (vaddr & 0x07FFFFFFu), verts, sizeof(verts));
+    GeState s;
+    s.reset();
+    s.vertex_type = 0x0080011Cu;
+    s.vertex_addr = vaddr;
+    std::vector<DecodedVertex> out;
+    ge_decode_vertices(ram, s, 4, 2, out);
+    ASSERT_NEAR(out.size(), 2, "two vertices");
+    if (out.size() == 2) {
+        ASSERT_NEAR(out[1].pos[0], 151.0f, "v1 x");
+        ASSERT_NEAR(out[1].pos[1], 40.0f, "v1 y");
+        ASSERT_NEAR(out[1].color[1], 0xED, "v1 green");
+    }
+    std::free(ram);
+}
+
 int main() {
     test_through_textured_normalizes();
     test_through_untextured_unchanged();
@@ -380,6 +449,9 @@ int main() {
     test_tiny_prim_no_overtrigger();
     test_rect_expand_divides_by_w();
     test_rect_expand_drops_nonpositive_w();
+    test_colorless_vertex_uses_material_ambient();
+    test_vertex_stride_alignment();
+    test_decode_uses_aligned_stride();
 
     if (failures == 0) {
         std::printf("test_ge_vertex: %d/%d PASS\n", tests_run, tests_run);

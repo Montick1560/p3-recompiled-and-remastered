@@ -1,4 +1,5 @@
 #include "psp_ge.h"
+#include "psp_ge_vertex.h"
 #include "psp_ge_constants.h"
 #include "psp_ge_draw.h"
 #include "recomp.h"
@@ -88,6 +89,9 @@ GeState& ge_get_state_mut() {
 
 void ge_init() {
     g_ge_state.reset();
+    // Until a list sets them, colorless vertices draw opaque white.
+    g_ge_state.material_ambient = 0x00FFFFFFu;
+    g_ge_state.material_alpha = 0xFFu;
 
     // Set reasonable defaults
     g_ge_state.framebuf_format = GE_FORMAT_8888;
@@ -433,6 +437,19 @@ GeListResult ge_process_display_list(
                     g_ge_state.vertex_addr);
             }
             ge_draw_prim(rdram, prim_type, count);
+            // The GE advances past the consumed data so consecutive PRIMs
+            // continue where the last one stopped (PPSSPP Execute_Prim):
+            // the index address for indexed draws, else the vertex address.
+            {
+                const uint32_t idx = (g_ge_state.vertex_type >> 11) & 3u;
+                if (idx != 0) {
+                    const uint32_t isize = idx == 1 ? 1u : (idx == 2 ? 2u : 4u);
+                    g_ge_state.index_addr += static_cast<uint32_t>(count) * isize;
+                } else {
+                    g_ge_state.vertex_addr += static_cast<uint32_t>(count) *
+                        static_cast<uint32_t>(ge_vertex_stride(g_ge_state.vertex_type));
+                }
+            }
             break;
         }
 
@@ -685,6 +702,9 @@ GeListResult ge_process_display_list(
         case GE_CMD_MATERIALAMBIENT:
             g_ge_state.material_ambient = data;
             break;
+        case GE_CMD_MATERIALALPHA:
+            g_ge_state.material_alpha = data & 0xFF;
+            break;
         case GE_CMD_MATERIALDIFFUSE:
             g_ge_state.material_diffuse = data;
             break;
@@ -745,7 +765,6 @@ GeListResult ge_process_display_list(
         case GE_CMD_BEZIER: case GE_CMD_SPLINE:
         case GE_CMD_BOUNDINGBOX:
         case GE_CMD_MATERIALSPECULAR:
-        case GE_CMD_MATERIALALPHA:
         case GE_CMD_MATERIALSPECULARCOEF:
         case GE_CMD_MATERIALUPDATE:
         case GE_CMD_REVERSENORMAL:

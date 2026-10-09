@@ -96,6 +96,7 @@ struct GeState {
     uint32_t ambient_alpha;   // GE_CMD_AMBIENTALPHA
     uint32_t material_emissive;
     uint32_t material_ambient;
+    uint32_t material_alpha;  // GE_CMD_MATERIALALPHA (alpha of colorless verts)
     uint32_t material_diffuse;
 
     // -- Fog --
