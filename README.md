@@ -365,8 +365,11 @@ checked with adversarial sub-agent verification before they are banked.
   (`games/patapon/runtime/hooks_ge.cpp` provides Patapon's ortho; generic builds pass world
   space through with a warning). This is adequate for the 2D title/menu screens but must be
   fixed before 3D gameplay: the mapping hardcodes Patapon's viewport and has no depth ordering.
-- **Audio is partial.** sceAudio output, SAS and ATRAC3plus are implemented (ported from
-  PPSSPP); ATRAC voices inside SAS, low-level ATRAC decode and movie audio are not.
+- **Audio is partial.** sceAudio output, SAS, ATRAC3plus and movie audio are implemented
+  (ported from PPSSPP); ATRAC voices inside SAS and low-level ATRAC decode are not.
+- **Movie video needs FFmpeg.** sceMpeg H.264 decoding uses FFmpeg (LGPL shared build) when
+  the runtime is configured with `-DPSPRECOMP_FFMPEG_DIR=<package root>`; the DLLs are copied
+  next to the executable. Without it movies run for their length with a blank picture.
 - **GE gaps.** SIGNAL relative/offset variants (0x13–0x18), lighting, texture matrix, bone/morph
   skinning, bezier surfaces, and block transfers (TRANSFERSTART) are unimplemented.
 - **Beyond the title screen is unexplored.** Title-screen interactivity (menu input advancing the

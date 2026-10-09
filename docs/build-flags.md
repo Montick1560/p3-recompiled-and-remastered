@@ -27,6 +27,7 @@ Consolidated `PSPRECOMP_*` flags discovered in-tree so contributors do not have 
 | `PSPRECOMP_END_PROBE` | `docs/ENV_FLAGS.md`, `games/patapon/runtime/hooks_memory.cpp` |
 | `PSPRECOMP_FE90_OBJ` | `docs/ENV_FLAGS.md`, `games/patapon/runtime/hooks_memory.cpp` |
 | `PSPRECOMP_FFC_ZERO` | `docs/ENV_FLAGS.md`, `games/patapon/runtime/hooks_main.cpp` |
+| `PSPRECOMP_FFMPEG_DIR` | `ARCHITECTURE.md`, `README.md`, `runtime/CMakeLists.txt` (CMake cache path: FFmpeg LGPL shared package root; enables sceMpeg H.264 decoding) |
 | `PSPRECOMP_FP_ERROR` | `docs/ENV_FLAGS.md`, `runtime/CMakeLists.txt` |
 | `PSPRECOMP_FP_OUTPUT` | `docs/ENV_FLAGS.md`, `runtime/CMakeLists.txt` |
 | `PSPRECOMP_FP_RESULT` | `docs/ENV_FLAGS.md`, `runtime/CMakeLists.txt` |
