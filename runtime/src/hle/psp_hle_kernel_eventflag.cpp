@@ -13,7 +13,17 @@
 
 
 extern thread_local uint32_t g_last_func_addr;
-static std::unordered_map<int, std::unique_ptr<PspEventFlag>> g_eventflags;
+// Event flags are created, waited on and deleted from different guest
+// threads: the map has its own lock, and every user holds a shared_ptr so a
+// delete cannot free an object a waiter is still blocked on.
+static std::mutex g_eventflags_mtx;
+static std::unordered_map<int, std::shared_ptr<PspEventFlag>> g_eventflags;
+
+static std::shared_ptr<PspEventFlag> find_eventflag(int uid) {
+    std::lock_guard<std::mutex> lk(g_eventflags_mtx);
+    auto it = g_eventflags.find(uid);
+    return it == g_eventflags.end() ? nullptr : it->second;
+}
 
 // ---- Helper: check pattern match ----
 static bool pattern_matches(
@@ -35,7 +45,7 @@ static void hle_sceKernelCreateEventFlag(
     int32_t attr = ctx->r[5];
     uint32_t init_pattern = static_cast<uint32_t>(ctx->r[6]);
 
-    auto ef = std::make_unique<PspEventFlag>();
+    auto ef = std::make_shared<PspEventFlag>();
     ef->uid = psp_next_uid();
     ef->attr = static_cast<uint32_t>(attr);
     ef->init_pattern = init_pattern;
@@ -84,7 +94,10 @@ static void hle_sceKernelCreateEventFlag(
     // exactly — the canonical SDK string that identifies the GE
     // finish-signal event flag. Other event flags (FileThread, callbacks,
     // etc.) do not gate GE subintr registration.
-    g_eventflags[uid] = std::move(ef);
+    {
+        std::lock_guard<std::mutex> lk(g_eventflags_mtx);
+        g_eventflags[uid] = std::move(ef);
+    }
 
     // Plan 03 anchored synthetic RegisterSubIntr/EnableSubIntr at this
     // SceGuSignal event-flag-creation site. Post-investigation (Phase 11.5
@@ -101,7 +114,25 @@ static void hle_sceKernelDeleteEventFlag(
     uint8_t* rdram, recomp_context* ctx
 ) {
     int uid = ctx->r[4];
-    g_eventflags.erase(uid);
+    std::shared_ptr<PspEventFlag> ef;
+    {
+        std::lock_guard<std::mutex> lk(g_eventflags_mtx);
+        auto it = g_eventflags.find(uid);
+        if (it != g_eventflags.end()) {
+            ef = it->second;
+            g_eventflags.erase(it);
+        }
+    }
+    if (!ef) {
+        ctx->r[2] = SCE_KERNEL_ERROR_EVF_NOT_FOUND;
+        return;
+    }
+    // PPSSPP: waiters resume with SCE_KERNEL_ERROR_WAIT_DELETE.
+    {
+        std::lock_guard<std::mutex> lk(ef->mtx);
+        ef->deleted = true;
+    }
+    ef->cv.notify_all();
     ctx->r[2] = SCE_OK;
     (void)rdram;
 }
@@ -112,8 +143,8 @@ static void hle_sceKernelSetEventFlag(
     int uid = ctx->r[4];
     uint32_t bits = static_cast<uint32_t>(ctx->r[5]);
 
-    auto it = g_eventflags.find(uid);
-    if (it == g_eventflags.end()) {
+    auto ef = find_eventflag(uid);
+    if (!ef) {
         std::fprintf(stderr,
             "[HLE] sceKernelSetEventFlag: unknown uid=%d bits=0x%08X\n",
             uid, bits);
@@ -122,7 +153,6 @@ static void hle_sceKernelSetEventFlag(
         return;
     }
 
-    auto& ef = it->second;
     std::unique_lock<std::mutex> lock(ef->mtx);
     ef->pattern |= bits;
     ef->cv.notify_all();
@@ -139,14 +169,13 @@ static void hle_sceKernelClearEventFlag(
     int uid = ctx->r[4];
     uint32_t bits = static_cast<uint32_t>(ctx->r[5]);
 
-    auto it = g_eventflags.find(uid);
-    if (it == g_eventflags.end()) {
+    auto ef = find_eventflag(uid);
+    if (!ef) {
         ctx->r[2] = SCE_KERNEL_ERROR_EVF_NOT_FOUND;
         (void)rdram;
         return;
     }
 
-    auto& ef = it->second;
     std::unique_lock<std::mutex> lock(ef->mtx);
     ef->pattern &= bits;  // AND: bits is the mask to keep
     ctx->r[2] = SCE_OK;
@@ -170,8 +199,8 @@ static void hle_sceKernelWaitEventFlag(
         return;
     }
 
-    auto it = g_eventflags.find(uid);
-    if (it == g_eventflags.end()) {
+    auto ef = find_eventflag(uid);
+    if (!ef) {
         std::fprintf(stderr,
             "[HLE] sceKernelWaitEventFlag: unknown uid=%d bits=0x%08X\n",
             uid, bits);
@@ -179,7 +208,6 @@ static void hle_sceKernelWaitEventFlag(
         return;
     }
 
-    auto& ef = it->second;
     static int wait_log_count = 0;
     if (wait_log_count < 20) {
         std::fprintf(stderr,
@@ -204,8 +232,13 @@ static void hle_sceKernelWaitEventFlag(
             psp_mem_read<uint32_t>(rdram, timeout_ptr));
     }
     bool matched = ef->cv.wait_for(lock, timeout, [&] {
-        return pattern_matches(ef->pattern, bits, wait_mode);
+        return ef->deleted || pattern_matches(ef->pattern, bits, wait_mode);
     });
+    if (ef->deleted) {
+        ef->num_wait_threads--;
+        ctx->r[2] = SCE_KERNEL_ERROR_WAIT_DELETE;
+        return;
+    }
     if (timeout_ptr != 0) {
         uint32_t remaining = 0;
         if (matched) {
@@ -262,13 +295,12 @@ static void hle_sceKernelPollEventFlag(
     uint32_t wait_mode = static_cast<uint32_t>(ctx->r[6]);
     uint32_t out_bits_ptr = static_cast<uint32_t>(ctx->r[7]);
 
-    auto it = g_eventflags.find(uid);
-    if (it == g_eventflags.end()) {
+    auto ef = find_eventflag(uid);
+    if (!ef) {
         ctx->r[2] = SCE_KERNEL_ERROR_EVF_NOT_FOUND;
         return;
     }
 
-    auto& ef = it->second;
     std::unique_lock<std::mutex> lock(ef->mtx);
 
     if (pattern_matches(ef->pattern, bits, wait_mode)) {
@@ -296,8 +328,8 @@ static void hle_sceKernelReferEventFlagStatus(
     int uid = ctx->r[4];
     uint32_t info_ptr = static_cast<uint32_t>(ctx->r[5]);
 
-    auto it = g_eventflags.find(uid);
-    if (it == g_eventflags.end()) {
+    auto ef = find_eventflag(uid);
+    if (!ef) {
         ctx->r[2] = SCE_KERNEL_ERROR_EVF_NOT_FOUND;
         return;
     }
@@ -306,7 +338,6 @@ static void hle_sceKernelReferEventFlagStatus(
         return;
     }
 
-    auto& ef = it->second;
     PspNativeEventFlagImage img{};
     img.size = sizeof(img);  // 52
     {
@@ -327,8 +358,8 @@ static void hle_sceKernelCancelEventFlag(
     int uid = ctx->r[4];
     uint32_t bits = static_cast<uint32_t>(ctx->r[5]);
 
-    auto it = g_eventflags.find(uid);
-    if (it == g_eventflags.end()) {
+    auto ef = find_eventflag(uid);
+    if (!ef) {
         ctx->r[2] = SCE_KERNEL_ERROR_EVF_NOT_FOUND;
         (void)rdram;
         return;
@@ -338,7 +369,6 @@ static void hle_sceKernelCancelEventFlag(
     // so they can re-check and return SCE_KERNEL_ERROR_WAIT_CANCELLED.
     // For simplicity we just set the bits and notify — waiting threads
     // will unblock and our WaitEventFlag will see the new pattern.
-    auto& ef = it->second;
     std::unique_lock<std::mutex> lock(ef->mtx);
     ef->pattern = bits;
     ef->cv.notify_all();

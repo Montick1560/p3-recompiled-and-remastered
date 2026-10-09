@@ -61,6 +61,7 @@ struct PspEventFlag {
     uint32_t init_pattern = 0;  // creation pattern (guest-visible via Refer)
     uint32_t pattern;           // current bit pattern
     int num_wait_threads = 0;   // live WaitEventFlag waiters; guarded by mtx
+    bool deleted = false;       // set by DeleteEventFlag; wakes waiters (mtx)
     std::mutex mtx;
     std::condition_variable cv;
 };
