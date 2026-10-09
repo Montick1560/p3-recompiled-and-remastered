@@ -93,6 +93,17 @@ static void noop_stub(uint8_t* rdram, recomp_context* ctx) {
             static_cast<uint32_t>(ctx->r[16]),
             static_cast<uint32_t>(ctx->r[17]),
             static_cast<uint32_t>(ctx->r[21]));
+        if (c == 1) {
+            // Which functions led here (oldest first; shared across threads).
+            uint32_t ring[64];
+            int n = psp_dispatch_get_recent_funcs(ring, 64);
+            std::fprintf(stderr, "[LOOKUP_MISS_RECENT] addr=0x%08X ra=0x%08X:", addr,
+                         static_cast<uint32_t>(ctx->r[31]));
+            for (int i = n > 32 ? n - 32 : 0; i < n; i++) {
+                std::fprintf(stderr, " %08X", ring[i]);
+            }
+            std::fprintf(stderr, "\n");
+        }
     }
 
     // Game-module miss handler (#47 P5 seam) — may log address-keyed
