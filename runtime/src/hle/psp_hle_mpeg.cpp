@@ -193,6 +193,7 @@ struct MpegCtx {
     bool videoEnd = false;
     bool audioEnded = false;  // input ended and the audio ES ran dry
     int starvedCalls = 0;  // decodes in a row with no AU and no new data
+    int zeroAsks = 0;      // RingbufferPut calls in a row asking for 0 packets
     int64_t videoPts = 0;  // relative to firstTimestamp, after the last picture
     int64_t audioPts = 0;  // relative, after the last audio frame
     int videoFrameCount = 0;
@@ -230,6 +231,7 @@ void reset_engine(MpegCtx* c, int ringPackets) {
     c->videoEnd = false;
     c->audioEnded = false;
     c->starvedCalls = 0;
+    c->zeroAsks = 0;
     c->videoPts = 0;
     c->audioPts = 0;
     c->videoFrameCount = 0;
@@ -310,6 +312,7 @@ void feed(MpegCtx* c, const uint8_t* data, size_t n) {
     }
     c->fedBytes += n;
     c->starvedCalls = 0;
+    c->zeroAsks = 0;
     if (c->streamSize > 0 && c->fedBytes >= c->streamSize) {
         c->inputEnded = true;
     }
@@ -728,22 +731,23 @@ void hle_sceMpegRingbufferPut(uint8_t* rdram, recomp_context* ctx) {
     numPackets = std::min(numPackets, available);
     numPackets = std::min(numPackets, r.packets - r.packetsAvail);
     if (numPackets <= 0) {
-        // A feeder that asks for 0 packets while the ring has room has no
-        // file data left (Patapon 3's movie reader passes min(free, bytes
-        // left) and the file ends short of the PSMF header's stream size),
-        // so the read callback never runs to report EOF. Treat it as the
-        // end of input so the demuxer releases its trailing AUs and the
-        // ring drains (the game ends a movie only once
-        // sceMpegRingbufferAvailableSize reports the whole ring free).
+        // A feeder that keeps asking for 0 packets while the ring has room has
+        // no file data left (Patapon 3's movie reader passes min(free, bytes
+        // left) and the file ends short of the PSMF header's stream size), so
+        // the read callback never runs to report EOF. A short run of 0-asks
+        // is only a reader waiting for its next async chunk (the opening
+        // movie), so the end needs ~2 s of them in a row. Then the demuxer
+        // releases its trailing AUs and the ring drains (the game ends a
+        // movie only once sceMpegRingbufferAvailableSize reports it all free).
         if (asked == 0 && r.packets - r.packetsAvail > 0) {
             std::lock_guard<std::mutex> lk(g_mtx);
             MpegCtx* c = get_ctx(rdram, r.mpeg);
-            if (c && c->fedBytes > 0 && !c->inputEnded) {
+            if (c && c->fedBytes > 0 && !c->inputEnded && ++c->zeroAsks >= 60) {
                 c->inputEnded = true;
                 std::fprintf(stderr,
-                             "[HLE] sceMpegRingbufferPut: feeder asked 0 packets after %zu bytes "
-                             "-> end of input\n",
-                             (size_t)c->fedBytes);
+                             "[HLE] sceMpegRingbufferPut: feeder asked 0 packets %d times after "
+                             "%zu bytes -> end of input\n",
+                             c->zeroAsks, (size_t)c->fedBytes);
             }
         }
         ret(ctx, 0);
