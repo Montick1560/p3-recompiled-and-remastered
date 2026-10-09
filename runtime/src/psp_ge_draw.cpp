@@ -1,4 +1,5 @@
 #include "psp_ge_draw.h"
+#include "psp_ge_blend.h"
 #include "psp_ge_mask.h"
 #include "psp_ge.h"
 #include "psp_ge_constants.h"
@@ -162,69 +163,6 @@ static bool capture_fbo_to_tga(const char* path) {
 }
 
 // ---- GL state mapping ----
-
-static GLenum map_blend_factor_src(int factor) {
-    switch (factor) {
-    case GE_SRCBLEND_DSTCOLOR:       return GL_DST_COLOR;
-    case GE_SRCBLEND_INVDSTCOLOR:
-        return GL_ONE_MINUS_DST_COLOR;
-    case GE_SRCBLEND_SRCALPHA:       return GL_SRC_ALPHA;
-    case GE_SRCBLEND_INVSRCALPHA:
-        return GL_ONE_MINUS_SRC_ALPHA;
-    case GE_SRCBLEND_DSTALPHA:       return GL_DST_ALPHA;
-    case GE_SRCBLEND_INVDSTALPHA:
-        return GL_ONE_MINUS_DST_ALPHA;
-    case GE_SRCBLEND_DOUBLESRCALPHA:
-        return GL_SRC_ALPHA;  // Approximate
-    case GE_SRCBLEND_DOUBLEINVSRCALPHA:
-        return GL_ONE_MINUS_SRC_ALPHA;
-    case GE_SRCBLEND_DOUBLEDSTALPHA:
-        return GL_DST_ALPHA;
-    case GE_SRCBLEND_DOUBLEINVDSTALPHA:
-        return GL_ONE_MINUS_DST_ALPHA;
-    case GE_SRCBLEND_FIXA:           return GL_CONSTANT_COLOR;
-    default:                         return GL_SRC_ALPHA;
-    }
-}
-
-static GLenum map_blend_factor_dst(int factor) {
-    switch (factor) {
-    case GE_DSTBLEND_SRCCOLOR:       return GL_SRC_COLOR;
-    case GE_DSTBLEND_INVSRCCOLOR:
-        return GL_ONE_MINUS_SRC_COLOR;
-    case GE_DSTBLEND_SRCALPHA:       return GL_SRC_ALPHA;
-    case GE_DSTBLEND_INVSRCALPHA:
-        return GL_ONE_MINUS_SRC_ALPHA;
-    case GE_DSTBLEND_DSTALPHA:       return GL_DST_ALPHA;
-    case GE_DSTBLEND_INVDSTALPHA:
-        return GL_ONE_MINUS_DST_ALPHA;
-    case GE_DSTBLEND_DOUBLESRCALPHA:
-        return GL_SRC_ALPHA;
-    case GE_DSTBLEND_DOUBLEINVSRCALPHA:
-        return GL_ONE_MINUS_SRC_ALPHA;
-    case GE_DSTBLEND_DOUBLEDSTALPHA:
-        return GL_DST_ALPHA;
-    case GE_DSTBLEND_DOUBLEINVDSTALPHA:
-        return GL_ONE_MINUS_DST_ALPHA;
-    case GE_DSTBLEND_FIXB:           return GL_CONSTANT_COLOR;
-    default:
-        return GL_ONE_MINUS_SRC_ALPHA;
-    }
-}
-
-static GLenum map_blend_equation(int op) {
-    switch (op) {
-    case GE_BLENDMODE_MUL_AND_ADD:              return GL_FUNC_ADD;
-    case GE_BLENDMODE_MUL_AND_SUBTRACT:
-        return GL_FUNC_SUBTRACT;
-    case GE_BLENDMODE_MUL_AND_SUBTRACT_REVERSE:
-        return GL_FUNC_REVERSE_SUBTRACT;
-    case GE_BLENDMODE_MIN:                      return GL_MIN;
-    case GE_BLENDMODE_MAX:                      return GL_MAX;
-    case GE_BLENDMODE_ABSDIFF:                  return GL_FUNC_ADD;
-    default:                                    return GL_FUNC_ADD;
-    }
-}
 
 // Map the PSP depth-compare to a GL depth func. When the active depth range
 // is reversed (glDepthRange near>far, issue #23 -- Patapon's ZSCALE<0), GL
@@ -923,27 +861,19 @@ void ge_draw_prim(
 
     // Set GL state: alpha blend
     if (state.alpha_blend_enable) {
+        GeBlendSetup b = ge_blend_setup(
+            state.blend_mode, state.blend_fix_a, state.blend_fix_b);
         glEnable(GL_BLEND);
-        int src_factor = state.blend_mode & 0xF;
-        int dst_factor = (state.blend_mode >> 4) & 0xF;
-        int blend_op   = (state.blend_mode >> 8) & 0x7;
-        glBlendFunc(
-            map_blend_factor_src(src_factor),
-            map_blend_factor_dst(dst_factor));
-        glBlendEquation(map_blend_equation(blend_op));
-
-        // Handle FIXA/FIXB blend constants
-        if (src_factor == GE_SRCBLEND_FIXA) {
-            float r = ((state.blend_fix_a) & 0xFF)
-                      / 255.0f;
-            float g = ((state.blend_fix_a >> 8) & 0xFF)
-                      / 255.0f;
-            float b = ((state.blend_fix_a >> 16) & 0xFF)
-                      / 255.0f;
-            glBlendColor(r, g, b, 1.0f);
+        glBlendFunc(b.src, b.dst);
+        glBlendEquation(b.equation);
+        if (b.set_constant) {
+            glBlendColor(b.constant[0], b.constant[1], b.constant[2], 1.0f);
         }
+        ge_shader_set_blend(b.src1_rgb, b.src1_a, b.fix_a);
     } else {
         glDisable(GL_BLEND);
+        const float zero[3] = {0.0f, 0.0f, 0.0f};
+        ge_shader_set_blend(0, 0, zero);
     }
 
     // Depth test

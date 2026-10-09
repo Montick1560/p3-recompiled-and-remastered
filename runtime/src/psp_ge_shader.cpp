@@ -43,8 +43,12 @@ uniform vec3 u_tex_env;
 uniform bool u_alpha_test_enable;
 uniform float u_alpha_test_ref;
 uniform int u_alpha_test_func;
+uniform int u_src1_rgb;
+uniform int u_src1_a;
+uniform vec3 u_fix_a;
 
-out vec4 frag_color;
+layout(location = 0, index = 0) out vec4 frag_color;
+layout(location = 0, index = 1) out vec4 frag_color1;
 
 void main() {
     vec4 color = v_color;
@@ -106,6 +110,21 @@ void main() {
     }
 
     frag_color = color;
+
+    float src_a = color.a;
+    vec3 src1_rgb = u_fix_a;
+    if (u_src1_rgb == 1) {
+        src1_rgb = vec3(clamp(2.0 * src_a, 0.0, 1.0));
+    } else if (u_src1_rgb == 2) {
+        src1_rgb = vec3(clamp(2.0 * (1.0 - src_a), 0.0, 1.0));
+    }
+    float src1_a = 1.0;
+    if (u_src1_a == 1) {
+        src1_a = clamp(2.0 * src_a, 0.0, 1.0);
+    } else if (u_src1_a == 2) {
+        src1_a = clamp(2.0 * (1.0 - src_a), 0.0, 1.0);
+    }
+    frag_color1 = vec4(src1_rgb, src1_a);
 }
 )GLSL";
 
@@ -197,6 +216,12 @@ void ge_shader_init() {
         g_uniforms.u_alpha_test_func =
             glGetUniformLocation(
                 g_program, "u_alpha_test_func");
+        g_uniforms.u_src1_rgb =
+            glGetUniformLocation(g_program, "u_src1_rgb");
+        g_uniforms.u_src1_a =
+            glGetUniformLocation(g_program, "u_src1_a");
+        g_uniforms.u_fix_a =
+            glGetUniformLocation(g_program, "u_fix_a");
 
         std::fprintf(stderr,
             "[SHADER] Uber-shader compiled and linked "
@@ -242,6 +267,13 @@ void ge_shader_set_uniforms(const GeState& state) {
         glUniform1f(g_uniforms.u_alpha_test_ref, ref);
         glUniform1i(g_uniforms.u_alpha_test_func, func);
     }
+}
+
+void ge_shader_set_blend(int src1_rgb, int src1_a, const float fix_a[3]) {
+    if (!g_program) return;
+    glUniform1i(g_uniforms.u_src1_rgb, src1_rgb);
+    glUniform1i(g_uniforms.u_src1_a, src1_a);
+    glUniform3f(g_uniforms.u_fix_a, fix_a[0], fix_a[1], fix_a[2]);
 }
 
 GLuint ge_shader_get_program() {

@@ -17,6 +17,7 @@
 #include "psp_ge_vertex.h"
 #include "psp_ge.h"
 #include "psp_ge_mask.h"
+#include "psp_ge_blend.h"
 
 #include <cmath>
 #include <cstdint>
@@ -485,8 +486,53 @@ static void test_color_write_mask() {
     tests_run++; if (w[0] || !w[1]) { failures++; std::fprintf(stderr, "FAIL: partial mask heuristic" "\n"); }
 }
 
+static void test_blend_setup() {
+    GeBlendSetup b = ge_blend_setup(0x0032u, 0, 0);
+    tests_run++; if (b.src != GL_SRC_ALPHA) { failures++; std::fprintf(stderr, "FAIL: 0x0032 src\n"); }
+    tests_run++; if (b.dst != GL_ONE_MINUS_SRC_ALPHA) { failures++; std::fprintf(stderr, "FAIL: 0x0032 dst\n"); }
+    tests_run++; if (b.equation != GL_FUNC_ADD) { failures++; std::fprintf(stderr, "FAIL: 0x0032 equation\n"); }
+    tests_run++; if (b.set_constant) { failures++; std::fprintf(stderr, "FAIL: 0x0032 set_constant\n"); }
+
+    b = ge_blend_setup(0x00A2u, 0, 0xFFFFFFu);
+    tests_run++; if (b.dst != GL_ONE) { failures++; std::fprintf(stderr, "FAIL: FIXB white dst\n"); }
+    tests_run++; if (b.set_constant) { failures++; std::fprintf(stderr, "FAIL: FIXB white set_constant\n"); }
+
+    b = ge_blend_setup(0x00A2u, 0, 0x804020u);
+    tests_run++; if (b.dst != GL_CONSTANT_COLOR) { failures++; std::fprintf(stderr, "FAIL: FIXB const dst\n"); }
+    tests_run++; if (!b.set_constant) { failures++; std::fprintf(stderr, "FAIL: FIXB const set_constant\n"); }
+    tests_run++; if (!(std::fabs(b.constant[0] - (0x20 / 255.0f)) < 1e-6f)) { failures++; std::fprintf(stderr, "FAIL: FIXB const R\n"); }
+    tests_run++; if (!(std::fabs(b.constant[1] - (0x40 / 255.0f)) < 1e-6f)) { failures++; std::fprintf(stderr, "FAIL: FIXB const G\n"); }
+    tests_run++; if (!(std::fabs(b.constant[2] - (0x80 / 255.0f)) < 1e-6f)) { failures++; std::fprintf(stderr, "FAIL: FIXB const B\n"); }
+
+    b = ge_blend_setup(0x000Au, 0x102030u, 0);
+    tests_run++; if (b.src != GL_SRC1_COLOR) { failures++; std::fprintf(stderr, "FAIL: FIXA src\n"); }
+    tests_run++; if (b.src1_rgb != 0) { failures++; std::fprintf(stderr, "FAIL: FIXA src1_rgb\n"); }
+    tests_run++; if (!(std::fabs(b.fix_a[0] - (0x30 / 255.0f)) < 1e-6f)) { failures++; std::fprintf(stderr, "FAIL: FIXA R\n"); }
+    tests_run++; if (!(std::fabs(b.fix_a[1] - (0x20 / 255.0f)) < 1e-6f)) { failures++; std::fprintf(stderr, "FAIL: FIXA G\n"); }
+    tests_run++; if (!(std::fabs(b.fix_a[2] - (0x10 / 255.0f)) < 1e-6f)) { failures++; std::fprintf(stderr, "FAIL: FIXA B\n"); }
+
+    b = ge_blend_setup(0x000Au, 0x000000u, 0);
+    tests_run++; if (b.src != GL_ZERO) { failures++; std::fprintf(stderr, "FAIL: FIXA zero src\n"); }
+    b = ge_blend_setup(0x000Fu, 0xFFFFFFu, 0);
+    tests_run++; if (b.src != GL_ONE) { failures++; std::fprintf(stderr, "FAIL: s=15 FIXA white src\n"); }
+
+    b = ge_blend_setup(0x0076u, 0, 0);
+    tests_run++; if (b.src != GL_SRC1_COLOR) { failures++; std::fprintf(stderr, "FAIL: double src factor\n"); }
+    tests_run++; if (b.src1_rgb != 1) { failures++; std::fprintf(stderr, "FAIL: double src1_rgb\n"); }
+    tests_run++; if (b.dst != GL_SRC1_ALPHA) { failures++; std::fprintf(stderr, "FAIL: double dst factor\n"); }
+    tests_run++; if (b.src1_a != 2) { failures++; std::fprintf(stderr, "FAIL: double src1_a\n"); }
+
+    b = ge_blend_setup(0x0232u, 0, 0);
+    tests_run++; if (b.equation != GL_FUNC_REVERSE_SUBTRACT) { failures++; std::fprintf(stderr, "FAIL: reverse subtract\n"); }
+    b = ge_blend_setup(0x0332u, 0, 0);
+    tests_run++; if (b.equation != GL_MIN) { failures++; std::fprintf(stderr, "FAIL: min equation\n"); }
+    b = ge_blend_setup(0x0532u, 0, 0);
+    tests_run++; if (b.equation != GL_FUNC_ADD) { failures++; std::fprintf(stderr, "FAIL: absdiff equation\n"); }
+}
+
 int main() {
     test_color_write_mask();
+    test_blend_setup();
     test_range_culling();
     test_through_textured_normalizes();
     test_through_untextured_unchanged();

@@ -13,6 +13,9 @@ struct ShaderUniforms {
     GLint u_alpha_test_enable;
     GLint u_alpha_test_ref;
     GLint u_alpha_test_func;
+    GLint u_src1_rgb;
+    GLint u_src1_a;
+    GLint u_fix_a;
 };
 
 /// Compile and link the uber-shader pair. Call after GL init.
@@ -26,6 +29,8 @@ void ge_shader_use();
 
 /// Update all uniforms from current GE state.
 void ge_shader_set_uniforms(const GeState& state);
+
+void ge_shader_set_blend(int src1_rgb, int src1_a, const float fix_a[3]);
 
 /// Get the shader program ID (for external uniform queries).
 GLuint ge_shader_get_program();
