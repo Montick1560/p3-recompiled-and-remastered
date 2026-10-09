@@ -176,6 +176,16 @@ pub(crate) fn prepare_emission_with(
     );
     tracing::info!("Total functions after enhancement: {}", analysis.functions.len());
 
+    if std::env::var("PSPRECOMP_NO_DATA_PTR_SCAN").as_deref() != Ok("1") {
+        let intervals = sorted_function_intervals(&analysis);
+        let ptrs = crate::hle_entry_scanner::scan_data_code_pointers(&segment_bytes, &intervals);
+        let n = ptrs.len();
+        for a in ptrs {
+            force_mid_entries.push((a, a));
+        }
+        tracing::info!("Data code-pointer scan: {} mid-entries", n);
+    }
+
     // Force-inject mid-entries that Ghidra missed but are confirmed call targets
     // observed as repeated LOOKUP_MISS in the runtime. Mirrors force_entries but
     // for mid-function entry points inside an existing parent function.

@@ -948,6 +948,50 @@ fn chrono_date_string() -> String {
     "2026-02-20".to_string()
 }
 
+/// Code addresses stored as data words that land INSIDE a known function (not at its start) right
+/// after an unconditional control transfer + delay slot, i.e. not reachable by fall-through: a
+/// separate function Ghidra merged into its predecessor, reached only through a vtable or
+/// function-pointer table. Returned sorted and deduplicated, for mid-entry injection.
+pub fn scan_data_code_pointers(
+    segment_bytes: &[(u32, Vec<u8>)],
+    function_intervals: &[(u32, u32)], // sorted (start, end_exclusive)
+) -> Vec<u32> {
+    let mut found = Vec::new();
+    for (_base, bytes) in segment_bytes {
+        let n = bytes.len() / 4;
+        for i in 0..n {
+            let off = i * 4;
+            let v = u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap());
+            if v % 4 != 0 {
+                continue;
+            }
+            let idx = function_intervals.partition_point(|&(s, _)| s <= v);
+            let inside = if idx > 0 {
+                let (s, e) = function_intervals[idx - 1];
+                v > s && v < e
+            } else {
+                false
+            };
+            if !inside {
+                continue;
+            }
+            let Some(pred) = read_word_at(v.wrapping_sub(8), segment_bytes) else {
+                continue;
+            };
+            if !is_unconditional_transfer(pred) {
+                continue;
+            }
+            if read_word_at(v, segment_bytes).is_none() {
+                continue;
+            }
+            found.push(v);
+        }
+    }
+    found.sort_unstable();
+    found.dedup();
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1289,5 +1333,30 @@ mod tests {
         assert_eq!(corrections.len(), 1);
         assert_eq!(corrections[0].old_size, 204412);
         assert_eq!(corrections[0].new_size, 8);
+    }
+
+    #[test]
+    fn test_scan_data_code_pointers() {
+        let code = [
+            0x27BDFFF0,
+            0x00000000,
+            0x03E00008,
+            0x00000000,
+            0xA0800588,
+            0x03E00008,
+            0x00000000,
+            0x00000000,
+        ];
+        let intervals = [(0x1000, 0x1020)];
+        let mut segs = seg(0x1000, &code);
+        segs.extend(seg(
+            0x2000,
+            &[0x00001010, 0x00001004, 0x00001000, 0x00001018, 0x00003000, 0x00001011],
+        ));
+        assert_eq!(scan_data_code_pointers(&segs, &intervals), vec![0x1010]);
+
+        let mut segs = seg(0x1000, &code);
+        segs.extend(seg(0x2000, &[0x00001010, 0x00001010]));
+        assert_eq!(scan_data_code_pointers(&segs, &intervals), vec![0x1010]);
     }
 }
