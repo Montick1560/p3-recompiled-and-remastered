@@ -1228,18 +1228,19 @@ fn emit_op(
             let rs_s = gen.emit_gpr_read(*rs);
             let rt_s = gen.emit_gpr_read(*rt);
             gen.emit_raw(&format!(
-                "if ((uint32_t)({rt_s}) != 0) {{ \
-                 ctx->lo = (int32_t)({rs_s}) / (int32_t)({rt_s}); \
-                 ctx->hi = (int32_t)({rs_s}) % (int32_t)({rt_s}); }}"
+                "{{ int32_t _a = (int32_t)({rs_s}); int32_t _b = (int32_t)({rt_s}); \
+                 if ((uint32_t)_a == 0x80000000u && _b == -1) {{ ctx->lo = 0x80000000u; ctx->hi = 0; }} \
+                 else if (_b != 0) {{ ctx->lo = (uint32_t)(_a / _b); ctx->hi = (uint32_t)(_a % _b); }} \
+                 else {{ ctx->lo = (uint32_t)(_a < 0 ? 1 : -1); ctx->hi = (uint32_t)_a; }} }}"
             ));
         }
         MipsOp::Divu { rs, rt } => {
             let rs_s = gen.emit_gpr_read(*rs);
             let rt_s = gen.emit_gpr_read(*rt);
             gen.emit_raw(&format!(
-                "if ((uint32_t)({rt_s}) != 0) {{ \
-                 ctx->lo = (uint32_t)({rs_s}) / (uint32_t)({rt_s}); \
-                 ctx->hi = (uint32_t)({rs_s}) % (uint32_t)({rt_s}); }}"
+                "{{ uint32_t _a = (uint32_t)({rs_s}); uint32_t _b = (uint32_t)({rt_s}); \
+                 if (_b != 0) {{ ctx->lo = _a / _b; ctx->hi = _a % _b; }} \
+                 else {{ ctx->lo = _a <= 0xFFFFu ? 0xFFFFu : 0xFFFFFFFFu; ctx->hi = _a; }} }}"
             ));
         }
 
@@ -1747,11 +1748,15 @@ fn emit_op(
             gen.emit_fpr_write(*fd, &format!("(float)(int32_t)ctx->fi[{fs_n}]"));
         }
         MipsOp::CvtWS { fd, fs } => {
-            // Convert float to int. TODO(M1/M3): the PSP honours the FCR31
-            // rounding mode (default: nearest); this truncates (spec §5).
             let fd_n = fd.0;
             let fs_s = gen.emit_fpr_read(*fs);
-            gen.emit_raw(&format!("ctx->fi[{fd_n}] = psp_f2i({fs_s});"));
+            gen.emit_raw(&format!(
+                "switch (ctx->fcr31 & 3) {{ \
+                 case 0: ctx->fi[{fd_n}] = psp_f2i(rintf({fs_s})); break; \
+                 case 1: ctx->fi[{fd_n}] = psp_f2i(truncf({fs_s})); break; \
+                 case 2: ctx->fi[{fd_n}] = psp_f2i(ceilf({fs_s})); break; \
+                 case 3: ctx->fi[{fd_n}] = psp_f2i(floorf({fs_s})); break; }}"
+            ));
         }
         MipsOp::TruncWS { fd, fs } => {
             // Truncate float to int (always toward zero), PSP saturation
@@ -1774,24 +1779,19 @@ fn emit_op(
         MipsOp::CCond { cond, fs, ft } => {
             let fs_s = gen.emit_fpr_read(*fs);
             let ft_s = gen.emit_fpr_read(*ft);
-            // FPU compare conditions (lower 4 bits of cond encode condition)
+            let nan = format!("std::isnan({fs_s}) || std::isnan({ft_s})");
             let cond_expr = match cond & 0xF {
-                0 => format!("false"),                       // f (false)
-                1 => format!("false"),                       // un (unordered — simplified)
-                2 => format!("{fs_s} == {ft_s}"),            // eq
-                3 => format!("!({fs_s} == {ft_s})"),         // ueq (simplified)
-                4 => format!("{fs_s} < {ft_s}"),             // olt
-                5 => format!("!({fs_s} >= {ft_s})"),         // ult (simplified)
-                6 => format!("{fs_s} <= {ft_s}"),            // ole
-                7 => format!("!({fs_s} > {ft_s})"),          // ule (simplified)
-                8 => format!("false"),                       // sf (false)
-                9 => format!("false"),                       // ngle (simplified)
-                10 => format!("{fs_s} == {ft_s}"),           // seq
-                11 => format!("{fs_s} == {ft_s}"),           // ngl (simplified)
-                12 => format!("{fs_s} < {ft_s}"),            // lt
-                13 => format!("{fs_s} < {ft_s}"),            // nge (simplified)
-                14 => format!("{fs_s} <= {ft_s}"),           // le
-                _ => format!("{fs_s} <= {ft_s}"),            // ngt (simplified)
+                0 | 8 => "false".to_string(),
+                1 | 9 => nan,
+                2 | 10 => format!(
+                    "!std::isnan({fs_s}) && !std::isnan({ft_s}) && ({fs_s} == {ft_s})"
+                ),
+                3 | 11 => format!("({fs_s} == {ft_s}) || {nan}"),
+                4 | 12 => format!("{fs_s} < {ft_s}"),
+                5 | 13 => format!("({fs_s} < {ft_s}) || {nan}"),
+                6 | 14 => format!("{fs_s} <= {ft_s}"),
+                7 | 15 => format!("({fs_s} <= {ft_s}) || {nan}"),
+                _ => unreachable!(),
             };
             gen.emit_fpu_cc_write(&cond_expr);
         }
@@ -2145,6 +2145,122 @@ mod tests {
             let out = emit_one(op.clone());
             assert!(out.contains(want), "{op:?}: want {want}, got {out}");
             assert!(!out.contains("(int32_t)"), "{op:?}: bare cast left: {out}");
+        }
+    }
+
+    #[test]
+    fn div_corner_cases_match_ppsspp() {
+        let out = emit_one(MipsOp::Div {
+            rs: Reg::Gpr(4),
+            rt: Reg::Gpr(5),
+        });
+        assert!(
+            out.contains("< 0 ? 1 : -1"),
+            "div rt==0 must select LO 1 or -1, got {out}"
+        );
+        assert!(
+            out.contains("ctx->hi = (uint32_t)_a") || out.contains("ctx->hi = (uint32_t)(ctx->r[4])"),
+            "div rt==0 must set HI = rs, got {out}"
+        );
+        let ov = out.find("0x80000000").expect(&out);
+        let arm_end = out[ov..].find("else").expect(&out);
+        let arm = &out[ov..ov + arm_end];
+        assert!(!arm.contains('/'), "INT_MIN/-1 arm must not divide: {arm}");
+        assert!(!arm.contains('%'), "INT_MIN/-1 arm must not modulo: {arm}");
+    }
+
+    #[test]
+    fn divu_zero_divisor_matches_ppsspp() {
+        let out = emit_one(MipsOp::Divu {
+            rs: Reg::Gpr(4),
+            rt: Reg::Gpr(5),
+        });
+        assert!(
+            out.contains("0xFFFF") && out.contains("0xFFFFFFFF"),
+            "divu rt==0 must select 0xFFFF or 0xFFFFFFFF, got {out}"
+        );
+        assert!(
+            out.contains("<= 0xFFFF") || out.contains("<= 0xFFFFu"),
+            "divu rt==0 must test rs <= 0xFFFF, got {out}"
+        );
+    }
+
+    #[test]
+    fn cvt_w_s_honours_fcr31_rounding() {
+        let out = emit_one(MipsOp::CvtWS {
+            fd: FpReg(1),
+            fs: FpReg(0),
+        });
+        assert!(out.contains("fcr31"), "{out}");
+        assert!(out.contains("& 3"), "{out}");
+        for f in ["rintf", "truncf", "ceilf", "floorf"] {
+            assert!(out.contains(f), "cvt.w.s missing {f}: {out}");
+        }
+        assert!(out.contains("psp_f2i("), "{out}");
+    }
+
+    fn ccond_pred(cond: u8) -> String {
+        let out = emit_one(MipsOp::CCond {
+            cond,
+            fs: FpReg(1),
+            ft: FpReg(2),
+        });
+        let line = out
+            .lines()
+            .find(|l| l.contains("fpu_cc"))
+            .unwrap_or_else(|| panic!("{out}"));
+        let rest = line.split("fpu_cc").nth(1).unwrap();
+        rest.trim_start_matches(|c: char| c == '=' || c.is_whitespace())
+            .trim()
+            .trim_end_matches(';')
+            .trim()
+            .to_string()
+    }
+
+    #[test]
+    fn ccond_predicates_match_ppsspp() {
+        for cond in 0u8..16 {
+            let pred = ccond_pred(cond);
+            let nan = pred.contains("isnan");
+            let both = pred.contains("ctx->f[1]") && pred.contains("ctx->f[2]");
+            match cond {
+                0 | 8 => {
+                    assert!(pred.contains("false"), "cond {cond}: {pred}");
+                    assert!(!nan, "cond {cond} is always false: {pred}");
+                }
+                1 | 9 => {
+                    assert!(nan && both, "cond {cond} is unordered: {pred}");
+                    assert!(!pred.contains("==") && !pred.contains('<'), "cond {cond}: {pred}");
+                }
+                2 | 10 => {
+                    assert!(pred.contains("=="), "cond {cond}: {pred}");
+                    assert!(
+                        !nan || pred.contains("!std::isnan") || pred.contains("!isnan"),
+                        "cond {cond} must be ordered eq: {pred}"
+                    );
+                }
+                3 | 11 => {
+                    assert!(pred.contains("==") && nan && both, "cond {cond}: {pred}");
+                    assert!(!pred.starts_with('!'), "ueq/ngl must not be inverted: {pred}");
+                }
+                4 | 12 => {
+                    assert!(pred.contains('<') && !pred.contains("<="), "cond {cond}: {pred}");
+                    assert!(!nan, "cond {cond} is ordered lt: {pred}");
+                }
+                5 | 13 => {
+                    assert!(pred.contains('<') && nan && both, "cond {cond}: {pred}");
+                    assert!(!pred.starts_with('!'), "cond {cond}: {pred}");
+                }
+                6 | 14 => {
+                    assert!(pred.contains("<="), "cond {cond}: {pred}");
+                    assert!(!nan, "cond {cond} is ordered le: {pred}");
+                }
+                7 | 15 => {
+                    assert!(pred.contains("<=") && nan && both, "cond {cond}: {pred}");
+                    assert!(!pred.starts_with('!'), "cond {cond}: {pred}");
+                }
+                _ => unreachable!(),
+            }
         }
     }
 
