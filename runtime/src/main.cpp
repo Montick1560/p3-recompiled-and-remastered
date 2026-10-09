@@ -48,6 +48,35 @@
 #include <cstdio>
 #include <cstring>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+extern thread_local uint32_t g_last_func_addr;
+
+#ifdef _WIN32
+// Last-chance crash report: one grep-stable line with the exception, its
+// address as an offset into the executable (symbolize with
+// `llvm-addr2line -f -e psprecomp_runtime.exe 0x140000000+offset` or nm),
+// and the last guest function this thread dispatched.
+static LONG WINAPI psp_crash_filter(EXCEPTION_POINTERS* ep) {
+    const EXCEPTION_RECORD* er = ep->ExceptionRecord;
+    const uintptr_t addr = reinterpret_cast<uintptr_t>(er->ExceptionAddress);
+    const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
+    std::fprintf(stderr,
+                 "[CRASH] exception 0x%08lX at %p (exe+0x%llx) access=%llu addr=0x%llx "
+                 "last_guest_func=0x%08X os_thread=%lu\n",
+                 static_cast<unsigned long>(er->ExceptionCode), er->ExceptionAddress,
+                 static_cast<unsigned long long>(addr - base),
+                 er->NumberParameters > 0
+                     ? static_cast<unsigned long long>(er->ExceptionInformation[0]) : 0ull,
+                 er->NumberParameters > 1
+                     ? static_cast<unsigned long long>(er->ExceptionInformation[1]) : 0ull,
+                 g_last_func_addr, GetCurrentThreadId());
+    std::fflush(stderr);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
 
 // From emitter output (dispatch.cpp, data_sections.cpp)
 extern void psp_init_dispatch_table();
@@ -70,6 +99,9 @@ extern RECOMP_FUNC void entry(uint8_t* rdram, recomp_context* ctx);
 int main(int argc, char* argv[]) {
     (void)argc;
     (void)argv;
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(psp_crash_filter);
+#endif
 
     // 0. Identify the output/ this binary was built against (issue #36).
     //    One grep-stable line; the configure-time fingerprint check is the

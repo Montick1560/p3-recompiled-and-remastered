@@ -139,6 +139,17 @@ Read by the runtime binary at start-up or during execution.
   audio device.
 - **Set it when:** verifying audio output without listening to it.
 
+### `PSPRECOMP_TEX_WATCH`
+- **Read in:** `runtime/src/psp_ge_texture.cpp`, `runtime/src/psp_ge_draw.cpp`
+- **Type:** env (hex guest address).
+- **Default:** unset.
+- **Effect:** For draws that bind a texture at this address, logs `[TEX-WATCH]`
+  lines (one per 60 binds): texture size/format, TEXFUNC (raw), blend and
+  alpha-test state, vertex type, the first vertex (position, UV, color) and
+  its raw bytes.
+- **Set it when:** a texture (e.g. a movie frame from `sceMpegAvcCsc`) is
+  written but never appears on screen.
+
 ### `PSPRECOMP_SAVEDATA`
 - **Read in:** `runtime/src/hle/psp_savedata.cpp` (`default_root()`; used by the
   `sceUtilitySavedata*` handlers in `runtime/src/hle/psp_hle_utility.cpp`)
