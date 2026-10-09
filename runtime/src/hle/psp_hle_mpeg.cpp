@@ -191,6 +191,7 @@ struct MpegCtx {
     uint64_t fedBytes = 0;
     bool inputEnded = false;
     bool videoEnd = false;
+    int starvedCalls = 0;  // decodes in a row with no AU and no new data
     int64_t videoPts = 0;  // relative to firstTimestamp, after the last picture
     int64_t audioPts = 0;  // relative, after the last audio frame
     int videoFrameCount = 0;
@@ -226,6 +227,7 @@ void reset_engine(MpegCtx* c, int ringPackets) {
     c->fedBytes = 0;
     c->inputEnded = false;
     c->videoEnd = false;
+    c->starvedCalls = 0;
     c->videoPts = 0;
     c->audioPts = 0;
     c->videoFrameCount = 0;
@@ -301,6 +303,7 @@ void feed(MpegCtx* c, const uint8_t* data, size_t n) {
         std::fprintf(stderr, "[HLE] sceMpegRingbufferPut: demux full, %zu bytes dropped\n", n);
     }
     c->fedBytes += n;
+    c->starvedCalls = 0;
     if (c->streamSize > 0 && c->fedBytes >= c->streamSize) {
         c->inputEnded = true;
     }
@@ -322,6 +325,14 @@ bool step_video(MpegCtx* c) {
                 return true;
             }
             continue;  // decoder delay: feed the next AU
+        }
+        // No complete AU. If the game has stopped feeding (several decodes
+        // in a row without new packets after the stream started), the file
+        // is exhausted: flush the trailing AU and drain the decoder
+        // (PPSSPP ends the video when the demuxer runs dry).
+        if (!c->inputEnded && c->fedBytes > 0 && ++c->starvedCalls >= 8) {
+            c->inputEnded = true;
+            continue;
         }
         if (c->inputEnded) {
             if (PspVideoDecoder::available() && c->video.drain()) {
@@ -749,6 +760,12 @@ void hle_sceMpegRingbufferPut(uint8_t* rdram, recomp_context* ctx) {
             break;
         }
         if (added <= 0) {
+            // The reader ran dry after the stream started: the file is
+            // exhausted (it may end short of the PSMF header's stream
+            // size). A 0 before any data is just "not ready yet".
+            if (added == 0 && c->fedBytes > 0) {
+                c->inputEnded = true;
+            }
             if (added < 0 && total == 0) {
                 ret(ctx, added);
                 return;
