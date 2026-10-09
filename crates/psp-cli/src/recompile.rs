@@ -825,14 +825,25 @@ fn enhance_function_discovery(
     // caller. Iterated to a fixpoint because a rescued tail can itself
     // branch into a further gap; each round is re-sized + re-clamped so the
     // next round sees correct intervals.
+    // Fall-through ends of bodies cut at their placeholder size (long
+    // frameless constructors) are claimed the same way; each rescued piece is
+    // placeholder-sized too, so a long body needs one round per 256 bytes.
     let mut rescued_total = 0usize;
-    for _ in 0..4 {
-        let rescued = crate::hle_entry_scanner::rescue_gap_branch_targets(
+    for _ in 0..512 {
+        let mut rescued = crate::hle_entry_scanner::rescue_gap_branch_targets(
             &mut analysis.functions,
             segment_bytes,
             seg_start,
             seg_end,
         );
+        if std::env::var("PSPRECOMP_NO_FALLTHROUGH_RESCUE").as_deref() != Ok("1") {
+            rescued.extend(crate::hle_entry_scanner::rescue_fall_through_ends(
+                &mut analysis.functions,
+                segment_bytes,
+                seg_start,
+                seg_end,
+            ));
+        }
         if rescued.is_empty() {
             break;
         }

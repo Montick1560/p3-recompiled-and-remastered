@@ -643,6 +643,109 @@ pub fn rescue_gap_branch_targets(
     rescued
 }
 
+/// Claim as functions the end addresses of bodies that run off their end
+/// into unclaimed code (issue: truncated straight-line functions).
+///
+/// Heuristic functions start with the 256-byte placeholder and only framed
+/// ones are resized to their epilogue, so a long frameless body -- the C++
+/// global constructors of the code overlays are exactly that: hundreds of
+/// `lui`/`sw` pairs -- stays cut at +0x100. The emitter then dispatches the
+/// fall-through to `start + size`, which no function owns: a LOOKUP_MISS
+/// no-op that silently skips the rest of the constructor (Patapon 3's
+/// OL_Title left its globals uninitialised and drew a black scene).
+///
+/// Only heuristic functions still at the 256-byte placeholder are considered.
+/// Their end `E` is rescued when it lies in the segment, is not inside
+/// any function, holds a non-zero word (not alignment padding) and the body's
+/// last instruction pair is not an unconditional transfer. Iterated by the
+/// caller to a fixpoint: each rescued piece is itself placeholder-sized.
+pub fn rescue_fall_through_ends(
+    functions: &mut Vec<JsonFunction>,
+    segment_bytes: &[(u32, Vec<u8>)],
+    seg_start: u32,
+    seg_end: u32,
+) -> Vec<u32> {
+    const HEURISTIC_SOURCES: &[&str] = &["vtable_miss", "binary_scan"];
+    const PLACEHOLDER_SIZE: u64 = 256;
+    let mut intervals: Vec<(u32, u32)> = functions
+        .iter()
+        .filter_map(|f| {
+            let s = parse_hex_addr(&f.address)?;
+            Some((s, s.saturating_add(f.size as u32)))
+        })
+        .collect();
+    intervals.sort_unstable();
+    // Only bodies still at the heuristic placeholder size are truncation
+    // suspects; analyzer-sized functions end where the analyzer said.
+    let truncated: Vec<(u32, u32)> = functions
+        .iter()
+        .filter(|f| {
+            f.size == PLACEHOLDER_SIZE && HEURISTIC_SOURCES.contains(&f.source.as_str())
+        })
+        .filter_map(|f| {
+            let s = parse_hex_addr(&f.address)?;
+            Some((s, s.saturating_add(f.size as u32)))
+        })
+        .collect();
+    let mut rescued: Vec<u32> = Vec::new();
+    let mut seen: HashSet<u32> = HashSet::new();
+    for &(start, end) in &truncated {
+        if end <= start + 4
+            || end < seg_start
+            || end >= seg_end
+            || end % 4 != 0
+            || interval_claims(&intervals, end)
+        {
+            continue;
+        }
+        let Some(next) = read_word_at(end, segment_bytes) else { continue };
+        if next == 0 {
+            continue;
+        }
+        let Some(last_cf) = read_word_at(end - 8, segment_bytes) else { continue };
+        if is_unconditional_transfer(last_cf) {
+            continue;
+        }
+        // Data is not code: a placeholder that ran past its real body into
+        // strings or tables "falls through" nowhere, and a rescued piece with
+        // an undecodable word is emitted as an empty stub that silently
+        // swallows any real function later found inside it (Patapon 3's
+        // OL_Azito lost two functions to string tables this way). Both the
+        // body's last pair and the rescued piece up to the next function
+        // must decode.
+        let next_start = intervals
+            .iter()
+            .map(|&(s, _)| s)
+            .find(|&s| s > end)
+            .unwrap_or(seg_end)
+            .min(seg_end)
+            .min(end.saturating_add(PLACEHOLDER_SIZE as u32));
+        let decodes = |va: u32| {
+            read_word_at(va, segment_bytes)
+                .is_some_and(|w| psp_decoder::decode_word(w, va).is_ok())
+        };
+        if !(decodes(end - 8) && decodes(end - 4))
+            || !(end..next_start).step_by(4).all(decodes)
+        {
+            continue;
+        }
+        if seen.insert(end) {
+            rescued.push(end);
+        }
+    }
+    for &addr in &rescued {
+        functions.push(JsonFunction {
+            name: format!("FUN_{addr:08X}"),
+            address: format!("0x{addr:08X}"),
+            size: 256, // placeholder; resized + clamped by the caller
+            is_external: false,
+            is_thunk: false,
+            source: "binary_scan".to_string(),
+        });
+    }
+    rescued
+}
+
 /// Repair truncated heuristically-discovered functions by sizing them to their
 /// real epilogue.
 ///
@@ -1110,6 +1213,54 @@ mod tests {
         assert_eq!(funcs.len(), 3);
         assert_eq!(funcs[2].address, "0x08800028");
         assert_eq!(funcs[2].source, "binary_scan");
+    }
+
+    #[test]
+    fn test_rescue_fall_through_ends() {
+        fn jf(addr: u32, size: u64, source: &str) -> JsonFunction {
+            JsonFunction {
+                name: format!("FUN_{addr:08X}"),
+                address: format!("0x{addr:08X}"),
+                size,
+                is_external: false,
+                is_thunk: false,
+                source: source.into(),
+            }
+        }
+        const LUI: u32 = 0x3C034140; // lui v1,0x4140 (straight-line ctor code)
+        const JR_RA: u32 = 0x03E00008;
+        // Four 0x100-byte slots of straight-line code at 0x000/0x200/0x400/
+        // 0x600, each followed by an unclaimed 0x100 gap.
+        // A (binary_scan, placeholder 256): runs on into code at 0x100 -> rescued.
+        // B (binary_scan, 256) ends `jr ra; nop` -> not rescued.
+        // C (binary_scan, 256) runs on into nop padding at 0x500 -> not rescued.
+        // D (ghidra, 256): analyzer-sized -> trusted, not rescued.
+        // E (binary_scan, 256) at 0x800 runs on into data at 0x900 (a string
+        // after two decodable words): rescuing it would emit an empty stub
+        // that swallows any real function found inside -> not rescued.
+        // F (binary_scan, 256) at 0xA00 has data in its own last pair: the
+        // placeholder ran past the real body into data -> not rescued.
+        let mut words = vec![LUI; 0x300];
+        words[0x242] = 0x0000_0005; // undecodable data at 0x908
+        words[0x2BF] = 0x7878_672E; // ".gxx": undecodable, F's delay-slot word
+        words[0xBE] = JR_RA; // B's last pair: jr ra at 0x2F8, delay slot 0x2FC
+        words[0xBF] = NOP;
+        for w in &mut words[0x140..0x180] {
+            *w = NOP; // padding after C (0x500..0x600)
+        }
+        let s = seg(0x08800000, &words);
+        let mut funcs = vec![
+            jf(0x08800000, 0x100, "binary_scan"),
+            jf(0x08800200, 0x100, "binary_scan"),
+            jf(0x08800400, 0x100, "binary_scan"),
+            jf(0x08800600, 0x100, "ghidra"),
+            jf(0x08800800, 0x100, "binary_scan"),
+            jf(0x08800A00, 0x100, "binary_scan"),
+        ];
+        let rescued = rescue_fall_through_ends(&mut funcs, &s, 0x08800000, 0x08800C00);
+        assert_eq!(rescued, vec![0x08800100]);
+        assert_eq!(funcs.len(), 7);
+        assert_eq!(funcs[6].address, "0x08800100");
     }
 
     #[test]
