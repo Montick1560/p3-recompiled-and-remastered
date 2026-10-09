@@ -56,6 +56,12 @@ static void init_ctx(recomp_context& ctx) {
     ctx.vfpu_ctrl[VFPU_CTRL_DPREFIX] = 0x00u;
 }
 
+static uint32_t vfpu_bits(const recomp_context& ctx, int i) {
+    uint32_t u;
+    std::memcpy(&u, &ctx.vfpu[i], 4);
+    return u;
+}
+
 // Helpers available for future tests if needed:
 // set_vfpu_single(ctx, flat_idx, val) - write single float
 // single_idx(reg) - compute flat index from 7-bit encoding
@@ -783,12 +789,6 @@ static void test_vocp_quad() {
     ASSERT_EXACT(ctx.vfpu[35], 1.0f, "vocp 1-0");
 }
 
-static uint32_t vfpu_bits(const recomp_context& ctx, int i) {
-    uint32_t u;
-    std::memcpy(&u, &ctx.vfpu[i], 4);
-    return u;
-}
-
 static void test_vuc2i_replicates_and_halves() {
     std::printf("  test_vuc2i_replicates_and_halves...\n");
     recomp_context ctx;
@@ -800,6 +800,162 @@ static void test_vuc2i_replicates_and_halves() {
     ASSERT_INT_EQ(vfpu_bits(ctx, 33), 0x00000000u, "vuc2i byte 0x00");
     ASSERT_INT_EQ(vfpu_bits(ctx, 34), 0x7FFFFFFFu, "vuc2i byte 0xFF");
     ASSERT_INT_EQ(vfpu_bits(ctx, 35), 0x40404040u, "vuc2i byte 0x80");
+}
+
+// ===================================================================
+// lvl.q / lvr.q / svl.q / svr.q -- PPSSPP Int_SVQ (case 53 / 61)
+// ===================================================================
+static void set_vec4(recomp_context& ctx, int reg, float a, float b, float c, float d) {
+    float v[4] = {a, b, c, d};
+    for (int i = 0; i < 4; i++) {
+        ctx.vfpu[ (((reg >> 2) & 7) * 16) + (reg & 3) * 4 + i ] = v[i];
+    }
+}
+
+static void test_lvl_lvr_lane_order() {
+    std::printf("  test_lvl_lvr_lane_order...\n");
+    recomp_context ctx;
+    uint8_t* rdram = static_cast<uint8_t*>(std::calloc(1, 4096));
+    for (int i = 0; i < 8; i++) {
+        float f = static_cast<float>(i + 1);
+        std::memcpy(rdram + i * 4, &f, 4);
+    }
+    const uint32_t base = 0x08000000u;
+
+    // addr = base+8: lane = 2. lvl: d[3]=m[2], d[2]=m[1], d[1]=m[0].
+    init_ctx(ctx);
+    set_vec4(ctx, 0x0C, 10, 20, 30, 40);  // C300
+    ctx.r[8] = static_cast<int32_t>(base + 8);
+    vfpu_lvl_q(&ctx, rdram, 0x0C, 8, 0);
+    ASSERT_EXACT(ctx.vfpu[48 + 0], 10.0f, "lvl keeps d0");
+    ASSERT_EXACT(ctx.vfpu[48 + 1], 1.0f, "lvl d1 = m0");
+    ASSERT_EXACT(ctx.vfpu[48 + 2], 2.0f, "lvl d2 = m1");
+    ASSERT_EXACT(ctx.vfpu[48 + 3], 3.0f, "lvl d3 = m2");
+
+    // lvr at the same address: d[0]=m[2], d[1]=m[3]; d2,d3 kept.
+    init_ctx(ctx);
+    set_vec4(ctx, 0x0C, 10, 20, 30, 40);
+    ctx.r[8] = static_cast<int32_t>(base + 8);
+    vfpu_lvr_q(&ctx, rdram, 0x0C, 8, 0);
+    ASSERT_EXACT(ctx.vfpu[48 + 0], 3.0f, "lvr d0 = m2");
+    ASSERT_EXACT(ctx.vfpu[48 + 1], 4.0f, "lvr d1 = m3");
+    ASSERT_EXACT(ctx.vfpu[48 + 2], 30.0f, "lvr keeps d2");
+    ASSERT_EXACT(ctx.vfpu[48 + 3], 40.0f, "lvr keeps d3");
+
+    // Aligned address (lane 0): lvl sets only d[3]=m[0]; lvr sets all four.
+    init_ctx(ctx);
+    set_vec4(ctx, 0x0C, 10, 20, 30, 40);
+    ctx.r[8] = static_cast<int32_t>(base);
+    vfpu_lvl_q(&ctx, rdram, 0x0C, 8, 0);
+    ASSERT_EXACT(ctx.vfpu[48 + 0], 10.0f, "lvl aligned keeps d0");
+    ASSERT_EXACT(ctx.vfpu[48 + 2], 30.0f, "lvl aligned keeps d2");
+    ASSERT_EXACT(ctx.vfpu[48 + 3], 1.0f, "lvl aligned d3 = m0");
+    init_ctx(ctx);
+    set_vec4(ctx, 0x0C, 10, 20, 30, 40);
+    ctx.r[8] = static_cast<int32_t>(base);
+    vfpu_lvr_q(&ctx, rdram, 0x0C, 8, 0);
+    ASSERT_EXACT(ctx.vfpu[48 + 0], 1.0f, "lvr aligned d0");
+    ASSERT_EXACT(ctx.vfpu[48 + 3], 4.0f, "lvr aligned d3");
+    std::free(rdram);
+}
+
+static void test_svl_svr_lane_order() {
+    std::printf("  test_svl_svr_lane_order...\n");
+    recomp_context ctx;
+    uint8_t* rdram = static_cast<uint8_t*>(std::calloc(1, 4096));
+    const uint32_t base = 0x08000000u;
+    auto rd = [&](int i) { float f; std::memcpy(&f, rdram + i * 4, 4); return f; };
+
+    // svl at lane 2: mem[2]=d3, mem[1]=d2, mem[0]=d1.
+    init_ctx(ctx);
+    set_vec4(ctx, 0x0C, 1, 2, 3, 4);
+    ctx.r[8] = static_cast<int32_t>(base + 8);
+    vfpu_svl_q(&ctx, rdram, 0x0C, 8, 0);
+    ASSERT_EXACT(rd(2), 4.0f, "svl mem2 = d3");
+    ASSERT_EXACT(rd(1), 3.0f, "svl mem1 = d2");
+    ASSERT_EXACT(rd(0), 2.0f, "svl mem0 = d1");
+    ASSERT_EXACT(rd(3), 0.0f, "svl leaves mem3");
+
+    // svr at lane 2: mem[2]=d0, mem[3]=d1.
+    std::memset(rdram, 0, 64);
+    vfpu_svr_q(&ctx, rdram, 0x0C, 8, 0);
+    ASSERT_EXACT(rd(2), 1.0f, "svr mem2 = d0");
+    ASSERT_EXACT(rd(3), 2.0f, "svr mem3 = d1");
+    ASSERT_EXACT(rd(1), 0.0f, "svr leaves mem1");
+    std::free(rdram);
+}
+
+static void test_lvq_applies_dprefix_mask() {
+    std::printf("  test_lvq_applies_dprefix_mask...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    uint8_t* rdram = static_cast<uint8_t*>(std::calloc(1, 4096));
+    for (int i = 0; i < 4; i++) {
+        float f = static_cast<float>(i + 1);
+        std::memcpy(rdram + i * 4, &f, 4);
+    }
+    set_vec4(ctx, 0x0C, 9, 9, 9, 9);
+    ctx.vfpu_ctrl[VFPU_CTRL_DPREFIX] = 0x200;  // mask lane 1
+    ctx.r[8] = static_cast<int32_t>(0x08000000u);
+    vfpu_lv_q(&ctx, rdram, 0x0C, 8, 0);
+    ASSERT_EXACT(ctx.vfpu[48 + 0], 1.0f, "lv.q lane0 written");
+    ASSERT_EXACT(ctx.vfpu[48 + 1], 9.0f, "lv.q lane1 masked");
+    ASSERT_EXACT(ctx.vfpu[48 + 2], 3.0f, "lv.q lane2 written");
+    ASSERT_INT_EQ(ctx.vfpu_ctrl[VFPU_CTRL_DPREFIX], 0x200u, "lv.q keeps prefix");
+    std::free(rdram);
+}
+
+// ===================================================================
+// mtvc / mfv / vmfvc / vmtvc -- PPSSPP Int_Mftv, Int_Vmfvc, Int_Vmtvc
+// ===================================================================
+static void test_mtvc_masks_per_register() {
+    std::printf("  test_mtvc_masks_per_register...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    ctx.r[5] = static_cast<int32_t>(0xFFFFFFFFu);
+    vfpu_mtvc(&ctx, 5, VFPU_CTRL_CC);
+    ASSERT_INT_EQ(ctx.vfpu_ctrl[VFPU_CTRL_CC], 0x3Fu, "mtvc CC mask 0x3F");
+    vfpu_mtvc(&ctx, 5, VFPU_CTRL_DPREFIX);
+    ASSERT_INT_EQ(ctx.vfpu_ctrl[VFPU_CTRL_DPREFIX], 0xFFFu, "mtvc DPREFIX mask 0xFFF");
+    vfpu_mtvc(&ctx, 5, VFPU_CTRL_SPREFIX);
+    ASSERT_INT_EQ(ctx.vfpu_ctrl[VFPU_CTRL_SPREFIX], 0xFFFFFu, "mtvc SPREFIX mask 0xFFFFF");
+    vfpu_mtvc(&ctx, 5, VFPU_CTRL_INF4);
+    ASSERT_INT_EQ(ctx.vfpu_ctrl[VFPU_CTRL_INF4], 0xFFFFFFFFu, "mtvc INF4 full");
+    ctx.vfpu_ctrl[VFPU_CTRL_REV] = 0x1234u;
+    vfpu_mtvc(&ctx, 5, VFPU_CTRL_REV);
+    ASSERT_INT_EQ(ctx.vfpu_ctrl[VFPU_CTRL_REV], 0x1234u, "mtvc REV read-only");
+    ctx.r[5] = 0;
+    vfpu_mtvc(&ctx, 5, VFPU_CTRL_RCX0);
+    ASSERT_INT_EQ(ctx.vfpu_ctrl[VFPU_CTRL_RCX0], 0x3F800000u, "mtvc RCX set bits");
+}
+
+static void test_mfv_zero_register_is_interlock() {
+    std::printf("  test_mfv_zero_register_is_interlock...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    ctx.vfpu[0] = 1.0f;
+    ctx.r[0] = 0;
+    vfpu_mfv(&ctx, 0, 0x00);
+    ASSERT_INT_EQ(ctx.r[0], 0, "mfv to $zero leaves r0");
+    vfpu_mfv(&ctx, 4, 0x00);
+    ASSERT_INT_EQ(ctx.r[4], 0x3F800000, "mfv to $a0");
+}
+
+static void test_vmfvc_vmtvc() {
+    std::printf("  test_vmfvc_vmtvc...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    ctx.vfpu_ctrl[VFPU_CTRL_CC] = 0x15u;
+    vfpu_vmfvc(&ctx, 0x05, VFPU_CTRL_CC);  // S100? single reg 5 = mtx1 col1 row0
+    ASSERT_INT_EQ(vfpu_bits(ctx, 16 + 4), 0x15u, "vmfvc CC -> single reg");
+    vfpu_vmfvc(&ctx, 0x05, 20);  // out of range reads 0
+    ASSERT_INT_EQ(vfpu_bits(ctx, 16 + 4), 0u, "vmfvc out of range -> 0");
+    uint32_t v = 0xFFFFFFFFu;
+    std::memcpy(&ctx.vfpu[0], &v, 4);
+    vfpu_vmtvc(&ctx, 0x00, VFPU_CTRL_CC);
+    ASSERT_INT_EQ(ctx.vfpu_ctrl[VFPU_CTRL_CC], 0x3Fu, "vmtvc CC masked");
+    vfpu_vmtvc(&ctx, 0x00, VFPU_CTRL_REV);
+    ASSERT_INT_EQ(ctx.vfpu_ctrl[VFPU_CTRL_REV], 0u, "vmtvc REV read-only");
 }
 
 int main() {
@@ -825,6 +981,12 @@ int main() {
     test_vtfm_last_row_prefix();
     test_vocp_quad();
     test_vuc2i_replicates_and_halves();
+    test_lvl_lvr_lane_order();
+    test_svl_svr_lane_order();
+    test_lvq_applies_dprefix_mask();
+    test_mtvc_masks_per_register();
+    test_mfv_zero_register_is_interlock();
+    test_vmfvc_vmtvc();
 
     std::printf("\n%d tests run, %d failures\n",
                 tests_run, failures);
