@@ -121,6 +121,37 @@ Read by the runtime binary at start-up or during execution.
   continues with no game data.
 - **Set it when:** running against an extracted ISO that is not in `./disc0`.
 
+### `PSPRECOMP_NO_AUDIO`
+- **Read in:** `runtime/src/psp_audio_out.cpp`
+- **Type:** env (presence).
+- **Default:** unset (an SDL2 audio device is opened).
+- **Effect:** Skips opening the audio device. The `sceAudio*Blocking` calls
+  fall back to timing-only pacing (sleep one grain), so the game runs at the
+  same speed, silently.
+- **Set it when:** running headless or in automated test runs.
+
+### `PSPRECOMP_AUDIO_DUMP`
+- **Read in:** `runtime/src/psp_audio_out.cpp`
+- **Type:** env (path string).
+- **Default:** unset.
+- **Effect:** Also writes the mixed device output to a 44.1 kHz stereo s16
+  WAV file at the given path (header sizes patched at exit). Requires an
+  audio device.
+- **Set it when:** verifying audio output without listening to it.
+
+### `PSPRECOMP_SAVEDATA`
+- **Read in:** `runtime/src/hle/psp_savedata.cpp` (`default_root()`; used by the
+  `sceUtilitySavedata*` handlers in `runtime/src/hle/psp_hle_utility.cpp`)
+- **Type:** env (path string).
+- **Default:** `SAVEDATA` under the current working directory.
+- **Effect:** Host directory the savedata utility reads and writes. Each save
+  is a `<gameName><saveName>/` subdirectory holding the game's data file
+  (plaintext, not PSP-encrypted), a real `PARAM.SFO`, and `ICON0.PNG` /
+  `ICON1.PMF` / `PIC1.PNG` / `SND0.AT3` when the game supplies them. Created
+  on first save. An empty value is treated as unset.
+- **Set it when:** keeping saves outside the working directory, or giving a
+  test run its own throw-away save set.
+
 ### `PSPRECOMP_STRICT`
 - **Read in:** `runtime/src/psp_dispatch.cpp`, `runtime/src/main.cpp`,
   `runtime/src/hle/psp_hle_dispatch.cpp`

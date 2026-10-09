@@ -424,151 +424,6 @@ static void hle_sceAudioSetChannelDataLen(
     (void)rdram;
 }
 
-// ---- ATRAC3plus (audio codec stubs) ----
-
-static int g_atrac_next_id = 1;
-
-static void hle_sceAtracGetAtracID(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    ctx->r[2] = g_atrac_next_id++;
-    (void)rdram;
-}
-
-static void hle_sceAtracReleaseAtracID(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    ctx->r[2] = SCE_OK;
-    (void)rdram;
-}
-
-static void hle_sceAtracSetData(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    ctx->r[2] = SCE_OK;
-    (void)rdram;
-}
-
-static void hle_sceAtracReinit(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    ctx->r[2] = SCE_OK;
-    (void)rdram;
-}
-
-// ATRAC3 frames decode 1024 samples each.
-static constexpr int32_t ATRAC_SAMPLES_PER_FRAME = 1024;
-// Stereo s16 PCM for one frame: 1024 samples * 2 ch * 2 bytes.
-static constexpr uint32_t ATRAC_PCM_BYTES = 4096;
-// Grains of silence before we report the stream finished.
-static constexpr uint32_t ATRAC_FINISH_GRAINS = 512;
-
-/// Zero-fill one frame of PCM at the guest decode buffer (clamped
-/// to guest memory, mirroring sas_zero_output).
-static void atrac_zero_pcm(uint8_t* rdram, uint32_t out_addr) {
-    // NULL-page rejection, consistent with the recomp.h accessor guard.
-    if (out_addr < 0x00010000U) return;
-    uint32_t bytes = ATRAC_PCM_BYTES;
-    uint32_t off = out_addr & PSP_ADDR_MASK;
-    if (off + bytes > PSP_MEM_SIZE) {
-        bytes = static_cast<uint32_t>(PSP_MEM_SIZE) - off;
-    }
-    std::memset(rdram + off, 0, bytes);
-}
-
-static void hle_sceAtracDecodeData(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    // sceAtracDecodeData(atracID, u16* outPcm, u32* outSamples,
-    //                    u32* outEnd, u32* outRemainFrame)
-    // a0=r[4] id, a1=r[5] pcm, a2=r[6] samples,
-    // a3=r[7] end, t0=r[8] remainFrame (PSP HLE arg 5)
-    uint32_t pcm_ptr = static_cast<uint32_t>(ctx->r[5]);
-    uint32_t samples_written_ptr =
-        static_cast<uint32_t>(ctx->r[6]);
-    uint32_t end_ptr =
-        static_cast<uint32_t>(ctx->r[7]);
-    uint32_t remain_ptr = static_cast<uint32_t>(ctx->r[8]);
-
-    atrac_zero_pcm(rdram, pcm_ptr);
-    if (samples_written_ptr != 0) {
-        psp_mem_write<int32_t>(
-            rdram, samples_written_ptr, ATRAC_SAMPLES_PER_FRAME);
-    }
-    if (end_ptr != 0) {
-        // Bounded silence: report "not finished" for a while so the
-        // decode worker keeps a sane cadence, then signal end.
-        static uint32_t s_grains = 0;
-        int32_t finished = (++s_grains >= ATRAC_FINISH_GRAINS) ? 1 : 0;
-        psp_mem_write<int32_t>(rdram, end_ptr, finished);
-    }
-    if (remain_ptr != 0) {
-        psp_mem_write<int32_t>(rdram, remain_ptr, -1);
-    }
-
-    ctx->r[2] = SCE_OK;
-}
-
-static void hle_sceAtracGetNextSample(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    uint32_t out_ptr = static_cast<uint32_t>(ctx->r[5]);
-    if (out_ptr != 0) {
-        // ATRAC3 decodes 1024 samples per frame (PPSSPP semantics).
-        psp_mem_write<int32_t>(rdram, out_ptr, ATRAC_SAMPLES_PER_FRAME);
-    }
-    ctx->r[2] = SCE_OK;
-}
-
-static void hle_sceAtracGetStreamDataInfo(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    // sceAtracGetStreamDataInfo(atracID, u8** writePtr,
-    //                           u32* writableBytes, u32* readOffset)
-    // Must write all three out-params: the guest decode worker
-    // otherwise consumes stale stack as writePtr/writableBytes/
-    // readOffset and issues wild reads.
-    uint32_t write_ptr_ptr = static_cast<uint32_t>(ctx->r[5]);
-    uint32_t writable_ptr = static_cast<uint32_t>(ctx->r[6]);
-    uint32_t read_off_ptr = static_cast<uint32_t>(ctx->r[7]);
-    if (write_ptr_ptr != 0) {
-        psp_mem_write<uint32_t>(rdram, write_ptr_ptr, 0);
-    }
-    if (writable_ptr != 0) {
-        psp_mem_write<uint32_t>(rdram, writable_ptr, 0);
-    }
-    if (read_off_ptr != 0) {
-        psp_mem_write<uint32_t>(rdram, read_off_ptr, 0);
-    }
-    ctx->r[2] = SCE_OK;
-}
-
-static void hle_sceAtracAddStreamData(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    ctx->r[2] = SCE_OK;
-    (void)rdram;
-}
-
-static void hle_sceAtracSetLoopNum(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    ctx->r[2] = SCE_OK;
-    (void)rdram;
-}
-
-static void hle_sceAtracGetRemainFrame(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    uint32_t out_ptr = static_cast<uint32_t>(ctx->r[5]);
-    if (out_ptr != 0) {
-        // -1 = "all data in memory" (PPSSPP semantics) — tells the
-        // guest it never needs to stream more data in.
-        psp_mem_write<int32_t>(rdram, out_ptr, -1);
-    }
-    ctx->r[2] = SCE_OK;
-}
-
 // ---- Module Management ----
 
 struct ModuleInfo {
@@ -1522,14 +1377,10 @@ static constexpr int32_t PSP_UTILITY_STATUS_SHUTDOWN = 4;
 
 // PPSSPP Core/HLE/ErrorCodes.h
 static constexpr uint32_t SCE_ERROR_UTILITY_INVALID_STATUS = 0x80110001U;
-static constexpr uint32_t SCE_UTILITY_SAVEDATA_ERROR_LOAD_NO_DATA =
-    0x80110307U;
-static constexpr uint32_t SCE_UTILITY_SAVEDATA_ERROR_RW_NO_DATA =
-    0x80110327U;
 static constexpr uint32_t SCE_UTILITY_SAVEDATA_ERROR_DELETE_NO_DATA =
     0x80110347U;
-static constexpr uint32_t SCE_UTILITY_SAVEDATA_ERROR_SIZES_NO_DATA =
-    0x801103C7U;
+
+#include "hle/psp_savedata.h"
 
 // pspUtilityDialogCommon.result offset within the param struct.
 static constexpr uint32_t UTILITY_COMMON_RESULT_OFFSET = 28;
@@ -1545,16 +1396,13 @@ struct UtilityDialogState {
 static UtilityDialogState g_savedata_dialog;
 static UtilityDialogState g_msg_dialog;
 
-// We ship no /PSP/SAVEDATA, so every load/read/delete faithfully
-// reports "no data"; save-type modes pretend success (writes out of
-// scope). Mode values: PPSSPP SceUtilitySavedataType.
+// Modes handled by the real savedata back end (psp_savedata.cpp: AUTOLOAD,
+// AUTOSAVE, LOAD, SAVE, LISTLOAD, LISTSAVE, SIZES, LIST, FILES, MAKEDATA*,
+// READDATA*, WRITEDATA*, GETSIZE) never reach this. The rest (delete and
+// erase modes) keep the old behaviour: deletes report "no data", anything
+// else pretends success. Mode values: PPSSPP SceUtilitySavedataType.
 static int32_t savedata_completion_result(uint32_t mode) {
     switch (mode) {
-        case 0:   // AUTOLOAD
-        case 2:   // LOAD
-        case 4:   // LISTLOAD
-            return static_cast<int32_t>(
-                SCE_UTILITY_SAVEDATA_ERROR_LOAD_NO_DATA);
         case 6:   // LISTDELETE
         case 7:   // LISTALLDELETE
         case 9:   // AUTODELETE
@@ -1562,15 +1410,7 @@ static int32_t savedata_completion_result(uint32_t mode) {
         case 21:  // DELETEDATA
             return static_cast<int32_t>(
                 SCE_UTILITY_SAVEDATA_ERROR_DELETE_NO_DATA);
-        case 8:   // SIZES
-            return static_cast<int32_t>(
-                SCE_UTILITY_SAVEDATA_ERROR_SIZES_NO_DATA);
-        case 15:  // READDATASECURE
-        case 16:  // READDATA
-        case 22:  // GETSIZE
-            return static_cast<int32_t>(
-                SCE_UTILITY_SAVEDATA_ERROR_RW_NO_DATA);
-        default:  // AUTOSAVE/SAVE/LISTSAVE/MAKEDATA/WRITEDATA/...
+        default:  // ERASE/ERASESECURE/unknown
             return 0;  // pretend success
     }
 }
@@ -1640,6 +1480,17 @@ static void savedata_complete(UtilityDialogState& dlg, uint8_t* rdram) {
     }
     uint32_t mode = psp_mem_read<uint32_t>(
         rdram, dlg.param_addr + SAVEDATA_MODE_OFFSET);
+    if (psp_savedata::handles_mode(mode)) {
+        // Real host-backed savedata (root: $PSPRECOMP_SAVEDATA or ./SAVEDATA).
+        // execute() writes pspUtilityDialogCommon.result (+28) itself.
+        psp_savedata::Options opts;
+        opts.sdk_version = psp_kernel_compiled_sdk_version();
+        psp_savedata::Outcome out = psp_savedata::execute(
+            rdram, PSP_MEM_SIZE, dlg.param_addr, opts);
+        fprintf(stderr, "[HLE] sceUtilitySavedata %s\n",
+                out.summary.c_str());
+        return;
+    }
     int32_t result = savedata_completion_result(mode);
     psp_mem_write<int32_t>(
         rdram, dlg.param_addr + UTILITY_COMMON_RESULT_OFFSET, result);
@@ -1962,27 +1813,7 @@ void psp_hle_register_utility() {
     psp_hle_register("sceAudioSetChannelDataLen",
                       hle_sceAudioSetChannelDataLen);
 
-    // ATRAC3plus
-    psp_hle_register("sceAtracGetAtracID",
-                      hle_sceAtracGetAtracID);
-    psp_hle_register("sceAtracReleaseAtracID",
-                      hle_sceAtracReleaseAtracID);
-    psp_hle_register("sceAtracSetData",
-                      hle_sceAtracSetData);
-    psp_hle_register("sceAtracReinit",
-                      hle_sceAtracReinit);
-    psp_hle_register("sceAtracDecodeData",
-                      hle_sceAtracDecodeData);
-    psp_hle_register("sceAtracGetNextSample",
-                      hle_sceAtracGetNextSample);
-    psp_hle_register("sceAtracGetStreamDataInfo",
-                      hle_sceAtracGetStreamDataInfo);
-    psp_hle_register("sceAtracAddStreamData",
-                      hle_sceAtracAddStreamData);
-    psp_hle_register("sceAtracSetLoopNum",
-                      hle_sceAtracSetLoopNum);
-    psp_hle_register("sceAtracGetRemainFrame",
-                      hle_sceAtracGetRemainFrame);
+    // ATRAC3plus: registered by psp_hle_register_atrac() (psp_hle_atrac.cpp).
 
     // Module management
     psp_hle_register("sceKernelLoadModule",

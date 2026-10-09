@@ -552,4 +552,7 @@ void psp_hle_register_all_modules() {
 
     // SAS voice state machine (issue #29)
     psp_hle_register_sas();
+
+    // ATRAC3/ATRAC3plus decoding contexts
+    psp_hle_register_atrac();
 }

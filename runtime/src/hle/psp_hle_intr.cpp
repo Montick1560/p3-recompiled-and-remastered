@@ -1,23 +1,25 @@
 #include "hle/psp_hle_intr.h"
+#include "psp_vblank_clock.h"
 
 #include <atomic>
 #include <chrono>
 #include <cstdio>
-
-// PSP display refresh: 59.94 Hz -> 16683 us per frame.
-static constexpr int64_t VBLANK_PERIOD_US = 16683;
 
 PspSubIntrTable& psp_subintr_table() {
     static auto* table = new PspSubIntrTable();  // leaked: used until exit
     return *table;
 }
 
-void psp_intr_dispatch_vblank(uint8_t* rdram, recomp_context* ctx) {
+int64_t psp_display_elapsed_us() {
     static const auto start = std::chrono::steady_clock::now();
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - start).count();
+}
+
+void psp_intr_dispatch_vblank(uint8_t* rdram, recomp_context* ctx) {
     static std::atomic<int64_t> last_frame{-1};
 
-    const int64_t frame = std::chrono::duration_cast<std::chrono::microseconds>(
-        std::chrono::steady_clock::now() - start).count() / VBLANK_PERIOD_US;
+    const int64_t frame = psp_vblank_index(psp_display_elapsed_us());
     int64_t prev = last_frame.load();
     if (frame <= prev || !last_frame.compare_exchange_strong(prev, frame)) {
         return;

@@ -182,3 +182,6 @@ void psp_hle_register_utility();
 // SAS voice state machine (issue #29)
 void psp_hle_register_sas();
 
+// sceAtrac3plus (psp_hle_atrac.cpp, on the pure psp_atrac_ctx)
+void psp_hle_register_atrac();
+
