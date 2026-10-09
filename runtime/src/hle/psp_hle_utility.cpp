@@ -1130,56 +1130,7 @@ static void hle_sceMpegRingbufferAvailableSize(
     (void)rdram;
 }
 
-// ---- PSMF (PlayStation Media Framework) ----
-
-static void hle_scePsmfSetPsmf(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    ctx->r[2] = SCE_OK;
-    (void)rdram;
-}
-
-static void hle_scePsmfGetVideoInfo(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    ctx->r[2] = SCE_OK;
-    (void)rdram;
-}
-
-static void hle_scePsmfSpecifyStream(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    ctx->r[2] = SCE_OK;
-    (void)rdram;
-}
-
-static void hle_scePsmfGetNumberOfSpecificStreams(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    ctx->r[2] = 0;  // No streams
-    (void)rdram;
-}
-
-static void hle_scePsmfGetCurrentStreamType(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    ctx->r[2] = SCE_OK;
-    (void)rdram;
-}
-
-static void hle_scePsmfGetPsmfVersion(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    ctx->r[2] = 1;  // Version 1
-    (void)rdram;
-}
-
-static void hle_scePsmfGetNumberOfStreams(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    ctx->r[2] = 0;
-    (void)rdram;
-}
+// ---- PSMF: registered by psp_hle_register_psmf() (psp_hle_psmf.cpp).
 
 // ---- SAS (Software Audio Synthesis) ----
 // Moved to psp_hle_sas.cpp (issue #29: minimal voice state machine).
@@ -1929,22 +1880,6 @@ void psp_hle_register_utility() {
                       hle_sceMpegRingbufferPut);
     psp_hle_register("sceMpegRingbufferAvailableSize",
                       hle_sceMpegRingbufferAvailableSize);
-
-    // PSMF
-    psp_hle_register("scePsmfSetPsmf",
-                      hle_scePsmfSetPsmf);
-    psp_hle_register("scePsmfGetVideoInfo",
-                      hle_scePsmfGetVideoInfo);
-    psp_hle_register("scePsmfSpecifyStream",
-                      hle_scePsmfSpecifyStream);
-    psp_hle_register("scePsmfGetNumberOfSpecificStreams",
-                      hle_scePsmfGetNumberOfSpecificStreams);
-    psp_hle_register("scePsmfGetCurrentStreamType",
-                      hle_scePsmfGetCurrentStreamType);
-    psp_hle_register("scePsmfGetPsmfVersion",
-                      hle_scePsmfGetPsmfVersion);
-    psp_hle_register("scePsmfGetNumberOfStreams",
-                      hle_scePsmfGetNumberOfStreams);
 
     // SAS (Software Audio Synthesis) -- see psp_hle_sas.cpp
     // (registered by psp_hle_register_sas()).

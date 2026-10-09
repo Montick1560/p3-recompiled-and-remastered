@@ -185,3 +185,6 @@ void psp_hle_register_sas();
 // sceAtrac3plus (psp_hle_atrac.cpp, on the pure psp_atrac_ctx)
 void psp_hle_register_atrac();
 
+// scePsmf (psp_hle_psmf.cpp, on the pure PSMF parser)
+void psp_hle_register_psmf();
+

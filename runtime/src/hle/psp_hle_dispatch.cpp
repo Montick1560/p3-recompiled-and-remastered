@@ -555,4 +555,7 @@ void psp_hle_register_all_modules() {
 
     // ATRAC3/ATRAC3plus decoding contexts
     psp_hle_register_atrac();
+
+    // scePsmf header queries (psp_hle_psmf.cpp)
+    psp_hle_register_psmf();
 }
