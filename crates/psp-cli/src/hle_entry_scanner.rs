@@ -948,6 +948,36 @@ fn chrono_date_string() -> String {
     "2026-02-20".to_string()
 }
 
+/// True when `v` cannot be reached by fall-through: an unconditional transfer sits at q in
+/// {v-8, v-12, v-16} and every word in [q+8, v) is zero (alignment padding after the delay slot).
+fn follows_terminator(v: u32, segment_bytes: &[(u32, Vec<u8>)]) -> bool {
+    for delta in [8u32, 12, 16] {
+        let q = v.wrapping_sub(delta);
+        let Some(w) = read_word_at(q, segment_bytes) else {
+            continue;
+        };
+        if !is_unconditional_transfer(w) {
+            continue;
+        }
+        let mut padded = true;
+        let mut a = q.wrapping_add(8);
+        while a < v {
+            match read_word_at(a, segment_bytes) {
+                Some(0) => {}
+                _ => {
+                    padded = false;
+                    break;
+                }
+            }
+            a = a.wrapping_add(4);
+        }
+        if padded {
+            return true;
+        }
+    }
+    false
+}
+
 /// Code addresses stored as data words that land INSIDE a known function (not at its start) right
 /// after an unconditional control transfer + delay slot, i.e. not reachable by fall-through: a
 /// separate function Ghidra merged into its predecessor, reached only through a vtable or
@@ -975,16 +1005,69 @@ pub fn scan_data_code_pointers(
             if !inside {
                 continue;
             }
-            let Some(pred) = read_word_at(v.wrapping_sub(8), segment_bytes) else {
-                continue;
-            };
-            if !is_unconditional_transfer(pred) {
+            if !follows_terminator(v, segment_bytes) {
                 continue;
             }
             if read_word_at(v, segment_bytes).is_none() {
                 continue;
             }
             found.push(v);
+        }
+    }
+    found.sort_unstable();
+    found.dedup();
+    found
+}
+
+/// Data words pointing into a GAP between known functions (not inside, not at a start) that follow a
+/// terminator (`follows_terminator`) and reach a `jr ra` (0x03E00008) before the next known function
+/// start (scan at most 64 words): functions Ghidra never created, reached only through a vtable or
+/// function-pointer table. Sorted, deduplicated; for force entries.
+pub fn scan_data_gap_code_pointers(
+    segment_bytes: &[(u32, Vec<u8>)],
+    function_intervals: &[(u32, u32)], // sorted (start, end_exclusive)
+) -> Vec<u32> {
+    let mut found = Vec::new();
+    for (_base, bytes) in segment_bytes {
+        let n = bytes.len() / 4;
+        for i in 0..n {
+            let off = i * 4;
+            let v = u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap());
+            if v % 4 != 0 {
+                continue;
+            }
+            let idx = function_intervals.partition_point(|&(s, _)| s <= v);
+            if idx > 0 {
+                let (s, e) = function_intervals[idx - 1];
+                if s == v || (v >= s && v < e) {
+                    continue;
+                }
+            }
+            if read_word_at(v, segment_bytes).is_none() {
+                continue;
+            }
+            if !follows_terminator(v, segment_bytes) {
+                continue;
+            }
+            let next_start = function_intervals.get(idx).map(|&(s, _)| s);
+            let mut hit = false;
+            for k in 0..64u32 {
+                let addr = v.wrapping_add(k * 4);
+                if next_start.is_some_and(|ns| addr >= ns) {
+                    break;
+                }
+                match read_word_at(addr, segment_bytes) {
+                    Some(0x03E0_0008) => {
+                        hit = true;
+                        break;
+                    }
+                    Some(_) => {}
+                    None => break,
+                }
+            }
+            if hit {
+                found.push(v);
+            }
         }
     }
     found.sort_unstable();
@@ -1358,5 +1441,38 @@ mod tests {
         let mut segs = seg(0x1000, &code);
         segs.extend(seg(0x2000, &[0x00001010, 0x00001010]));
         assert_eq!(scan_data_code_pointers(&segs, &intervals), vec![0x1010]);
+    }
+
+    #[test]
+    fn test_follows_terminator() {
+        let s = seg(
+            0x1000,
+            &[
+                0x03E00008, 0x27BD02B0, 0x00000000, 0x03E00008, 0x00000000, 0x03E00008, 0x00000000,
+                0x27BDFFE0,
+            ],
+        );
+        assert!(follows_terminator(0x100C, &s));
+        assert!(follows_terminator(0x1014, &s));
+        assert!(!follows_terminator(0x1004, &s));
+        assert!(follows_terminator(0x101C, &s));
+    }
+
+    #[test]
+    fn test_scan_data_gap_code_pointers() {
+        let code = [
+            0x03E00008, 0x27BD02B0, 0x00000000, 0x03E00008, 0x00000000, 0x03E00008, 0x00000000,
+            0x27BDFFE0,
+        ];
+        let intervals = [(0x0F00, 0x1008), (0x101C, 0x1040)];
+        let mut segs = seg(0x1000, &code);
+        segs.extend(seg(
+            0x2000,
+            &[0x0000100C, 0x00001014, 0x00001010, 0x00001004, 0x0000101C, 0x0000100C],
+        ));
+        assert_eq!(
+            scan_data_gap_code_pointers(&segs, &intervals),
+            vec![0x100C, 0x1014]
+        );
     }
 }

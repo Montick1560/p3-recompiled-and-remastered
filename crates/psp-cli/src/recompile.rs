@@ -167,6 +167,18 @@ pub(crate) fn prepare_emission_with(
     let mut force_mid_entries = config.force_mid_entries(bank)?;
     force_mid_entries.extend(extra_mid);
 
+    if std::env::var("PSPRECOMP_NO_DATA_PTR_SCAN").as_deref() != Ok("1") {
+        let intervals = sorted_function_intervals(&analysis);
+        let gaps = crate::hle_entry_scanner::scan_data_gap_code_pointers(&segment_bytes, &intervals);
+        let n = gaps.len();
+        for a in gaps {
+            if !force_entries.contains(&a) {
+                force_entries.push(a);
+            }
+        }
+        tracing::info!("Data code-pointer scan: {} gap functions", n);
+    }
+
     // Enhanced function discovery: three-pass scan replaces vtable_miss_addresses.txt sidecar
     let discovery = enhance_function_discovery(
         &mut analysis,
