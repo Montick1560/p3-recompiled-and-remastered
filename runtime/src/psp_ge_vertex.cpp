@@ -1,6 +1,7 @@
 #include "psp_ge_vertex.h"
 #include "psp_ge.h"
 #include "psp_ge_constants.h"
+#include "psp_ge_lighting.h"
 #include "recomp.h"
 
 #include <cstdio>
@@ -495,6 +496,88 @@ static bool ge_mvp_collapses(
     return collapsed;
 }
 
+// ---- Per-vertex lighting ----
+
+// Snapshot the lighting registers from GeState into the pure lighting
+// input. Colors pass through as 0xBBGGRR; LIGHTTYPE splits into the
+// computation (bits [1:0]) and the type (bits [9:8]).
+static void ge_build_lighting_state(
+    const GeState& state, GeLightingState& out
+) {
+    out.ambientColor = state.ambient_color;
+    out.ambientAlpha =
+        static_cast<uint8_t>(state.ambient_alpha & 0xFFu);
+    out.materialEmissive = state.material_emissive;
+    out.materialAmbient = state.material_ambient;
+    out.materialDiffuse = state.material_diffuse;
+    out.materialSpecular = state.material_specular;
+    out.materialAlpha =
+        static_cast<uint8_t>(state.material_alpha & 0xFFu);
+    out.materialSpecularCoef = state.material_specular_coef;
+    out.materialUpdate = state.material_update;
+    out.lightMode = state.light_mode;
+    out.reverseNormal = state.reverse_normal;
+    for (int i = 0; i < 4; i++) {
+        GeLightParams& l = out.lights[i];
+        l.enabled = state.light_enable[i];
+        l.computation = state.light_type[i] & 0x3u;
+        l.type = (state.light_type[i] >> 8) & 0x3u;
+        l.pos[0] = state.light_pos[i][0];
+        l.pos[1] = state.light_pos[i][1];
+        l.pos[2] = state.light_pos[i][2];
+        l.dir[0] = state.light_dir[i][0];
+        l.dir[1] = state.light_dir[i][1];
+        l.dir[2] = state.light_dir[i][2];
+        l.att[0] = state.light_att[i][0];
+        l.att[1] = state.light_att[i][1];
+        l.att[2] = state.light_att[i][2];
+        l.spotExp = state.light_spot_exp[i];
+        l.spotCutoff = state.light_spot_cutoff[i];
+        l.ambient = state.light_ambient[i];
+        l.diffuse = state.light_diffuse[i];
+        l.specular = state.light_specular[i];
+    }
+}
+
+// Light one vertex: world-space normal is the model normal through the
+// upper 3x3 of the world matrix (no translation), normalized; the zero
+// vector when the vtype carries no normal. Colorless vertices pass null
+// so the material registers are used (their decoder-filled color is the
+// lighting-OFF path and stays untouched there).
+static void ge_light_vertex(
+    const GeState& state, const GeLightingState& ls,
+    DecodedVertex& v, const float wpos[3]
+) {
+    float wn[3] = {0.0f, 0.0f, 0.0f};
+    if (v.has_normal) {
+        wn[0] = v.normal[0] * state.world_matrix[0]
+              + v.normal[1] * state.world_matrix[3]
+              + v.normal[2] * state.world_matrix[6];
+        wn[1] = v.normal[0] * state.world_matrix[1]
+              + v.normal[1] * state.world_matrix[4]
+              + v.normal[2] * state.world_matrix[7];
+        wn[2] = v.normal[0] * state.world_matrix[2]
+              + v.normal[1] * state.world_matrix[5]
+              + v.normal[2] * state.world_matrix[8];
+        const float len = std::sqrt(
+            wn[0] * wn[0] + wn[1] * wn[1] + wn[2] * wn[2]);
+        if (len > 1e-6f && std::isfinite(len)) {
+            wn[0] /= len;
+            wn[1] /= len;
+            wn[2] /= len;
+        } else {
+            wn[0] = wn[1] = wn[2] = 0.0f;
+        }
+    }
+    const uint8_t* vc = v.has_color ? v.color : nullptr;
+    uint8_t lit[4];
+    ge_compute_lit_color(ls, wpos, wn, vc, lit);
+    v.color[0] = lit[0];
+    v.color[1] = lit[1];
+    v.color[2] = lit[2];
+    v.color[3] = lit[3];
+}
+
 // Game-module degenerate-matrix fallback slot (#47 P5 seam).
 static GeDegenerateFallbackFn g_degenerate_fallback = nullptr;
 
@@ -568,10 +651,15 @@ void ge_transform_vertices(
             !view_zero && !proj_bad && ge_mvp_collapses(state, verts);
         bool ndc_direct = view_zero || proj_bad || mvp_collapsed;
 
+        GeLightingState light_state;
+        const bool do_lighting = state.lighting_enable;
+        if (do_lighting) ge_build_lighting_state(state, light_state);
+
         for (auto& v : verts) {
             float wpos[3], vpos[3];
             vec3_by_matrix43(state.world_matrix,
                              v.pos, wpos);
+            if (do_lighting) ge_light_vertex(state, light_state, v, wpos);
             if (!ndc_direct) {
                 vec3_by_matrix43(state.view_matrix,
                                  wpos, vpos);

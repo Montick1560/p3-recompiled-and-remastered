@@ -89,15 +89,30 @@ struct GeState {
     bool clear_mode;          // GE_CMD_CLEARMODE bit 0
     uint32_t clear_flags;     // GE_CMD_CLEARMODE bits [10:8]
 
-    // -- Lighting (minimal for Phase 5) --
+    // -- Lighting (per-vertex, psp_ge_lighting.h) --
     bool lighting_enable;
     uint32_t shade_mode;      // 0=flat, 1=gouraud
-    uint32_t ambient_color;   // GE_CMD_AMBIENTCOLOR
+    uint32_t ambient_color;   // GE_CMD_AMBIENTCOLOR (0xBBGGRR)
     uint32_t ambient_alpha;   // GE_CMD_AMBIENTALPHA
     uint32_t material_emissive;
     uint32_t material_ambient;
     uint32_t material_alpha;  // GE_CMD_MATERIALALPHA (alpha of colorless verts)
     uint32_t material_diffuse;
+    uint32_t material_specular;     // GE_CMD_MATERIALSPECULAR (0xBBGGRR)
+    float material_specular_coef;   // GE_CMD_MATERIALSPECULARCOEF (pow exponent)
+    uint32_t material_update;       // GE_CMD_MATERIALUPDATE bits 1/2/4 amb/diff/spec
+    uint32_t light_mode;            // GE_CMD_LIGHTMODE (bit 0 separate-specular)
+    bool reverse_normal;            // GE_CMD_REVERSENORMAL
+    bool light_enable[4];           // GE_CMD_LIGHTENABLE0-3
+    uint32_t light_type[4];         // GE_CMD_LIGHTTYPE0-3 raw (comp [1:0], type [9:8])
+    float light_pos[4][3];          // GE_CMD_LX/LY/LZ0-3
+    float light_dir[4][3];          // GE_CMD_LDX/LDY/LDZ0-3 (spot axis)
+    float light_att[4][3];          // GE_CMD_LKA/LKB/LKC0-3 attenuation
+    float light_spot_exp[4];        // GE_CMD_LKS0-3 spot exponent
+    float light_spot_cutoff[4];     // GE_CMD_LKO0-3 spot cutoff
+    uint32_t light_ambient[4];      // GE_CMD_LAC0-3 (0xBBGGRR)
+    uint32_t light_diffuse[4];      // GE_CMD_LDC0-3 (0xBBGGRR)
+    uint32_t light_specular[4];     // GE_CMD_LSC0-3 (0xBBGGRR)
 
     // -- Fog --
     bool fog_enable;

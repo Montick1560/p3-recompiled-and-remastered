@@ -625,9 +625,13 @@ GeListResult ge_process_display_list(
             g_ge_state.stencil_test_enable = (data & 1) != 0;
             break;
 
-        // Ignored enable flags (no effect in Phase 5)
         case GE_CMD_LIGHTENABLE0: case GE_CMD_LIGHTENABLE1:
         case GE_CMD_LIGHTENABLE2: case GE_CMD_LIGHTENABLE3:
+            g_ge_state.light_enable[cmd - GE_CMD_LIGHTENABLE0] =
+                (data & 1) != 0;
+            break;
+
+        // Ignored enable flags (no effect in Phase 5)
         case GE_CMD_DEPTHCLAMPENABLE:
         case GE_CMD_DITHERENABLE:
         case GE_CMD_ANTIALIASENABLE:
@@ -708,6 +712,21 @@ GeListResult ge_process_display_list(
         case GE_CMD_MATERIALDIFFUSE:
             g_ge_state.material_diffuse = data;
             break;
+        case GE_CMD_MATERIALSPECULAR:
+            g_ge_state.material_specular = data;
+            break;
+        case GE_CMD_MATERIALSPECULARCOEF:
+            g_ge_state.material_specular_coef = data_to_float(data);
+            break;
+        case GE_CMD_MATERIALUPDATE:
+            g_ge_state.material_update = data;
+            break;
+        case GE_CMD_REVERSENORMAL:
+            g_ge_state.reverse_normal = (data & 1) != 0;
+            break;
+        case GE_CMD_LIGHTMODE:
+            g_ge_state.light_mode = data;
+            break;
 
         // ---- Fog ----
         case GE_CMD_FOGCOLOR:
@@ -764,11 +783,6 @@ GeListResult ge_process_display_list(
         case GE_CMD_PATCHFACING:
         case GE_CMD_BEZIER: case GE_CMD_SPLINE:
         case GE_CMD_BOUNDINGBOX:
-        case GE_CMD_MATERIALSPECULAR:
-        case GE_CMD_MATERIALSPECULARCOEF:
-        case GE_CMD_MATERIALUPDATE:
-        case GE_CMD_REVERSENORMAL:
-        case GE_CMD_LIGHTMODE:
         case GE_CMD_TEXMAPMODE: case GE_CMD_TEXSHADELS:
         case GE_CMD_TEXLEVEL: case GE_CMD_TEXLODSLOPE:
         case GE_CMD_LOGICOP:
@@ -780,30 +794,70 @@ GeListResult ge_process_display_list(
         case GE_CMD_TRANSFERSIZE: case GE_CMD_TRANSFERSTART:
             break;
 
-        // ---- Light positions/colors (skip all in Phase 5) ----
+        // ---- Light types / positions / colors ----
         case GE_CMD_LIGHTTYPE0: case GE_CMD_LIGHTTYPE1:
         case GE_CMD_LIGHTTYPE2: case GE_CMD_LIGHTTYPE3:
+            g_ge_state.light_type[cmd - GE_CMD_LIGHTTYPE0] = data;
+            break;
+
         case GE_CMD_LX0: case GE_CMD_LY0: case GE_CMD_LZ0:
         case GE_CMD_LX1: case GE_CMD_LY1: case GE_CMD_LZ1:
         case GE_CMD_LX2: case GE_CMD_LY2: case GE_CMD_LZ2:
-        case GE_CMD_LX3: case GE_CMD_LY3: case GE_CMD_LZ3:
+        case GE_CMD_LX3: case GE_CMD_LY3: case GE_CMD_LZ3: {
+            const int i = cmd - GE_CMD_LX0;
+            g_ge_state.light_pos[i / 3][i % 3] = data_to_float(data);
+            break;
+        }
+
         case GE_CMD_LDX0: case GE_CMD_LDY0: case GE_CMD_LDZ0:
         case GE_CMD_LDX1: case GE_CMD_LDY1: case GE_CMD_LDZ1:
         case GE_CMD_LDX2: case GE_CMD_LDY2: case GE_CMD_LDZ2:
-        case GE_CMD_LDX3: case GE_CMD_LDY3: case GE_CMD_LDZ3:
+        case GE_CMD_LDX3: case GE_CMD_LDY3: case GE_CMD_LDZ3: {
+            const int i = cmd - GE_CMD_LDX0;
+            g_ge_state.light_dir[i / 3][i % 3] = data_to_float(data);
+            break;
+        }
+
         case GE_CMD_LKA0: case GE_CMD_LKB0: case GE_CMD_LKC0:
         case GE_CMD_LKA1: case GE_CMD_LKB1: case GE_CMD_LKC1:
         case GE_CMD_LKA2: case GE_CMD_LKB2: case GE_CMD_LKC2:
-        case GE_CMD_LKA3: case GE_CMD_LKB3: case GE_CMD_LKC3:
+        case GE_CMD_LKA3: case GE_CMD_LKB3: case GE_CMD_LKC3: {
+            const int i = cmd - GE_CMD_LKA0;
+            g_ge_state.light_att[i / 3][i % 3] = data_to_float(data);
+            break;
+        }
+
         case GE_CMD_LKS0: case GE_CMD_LKS1:
         case GE_CMD_LKS2: case GE_CMD_LKS3:
+            g_ge_state.light_spot_exp[cmd - GE_CMD_LKS0] =
+                data_to_float(data);
+            break;
+
         case GE_CMD_LKO0: case GE_CMD_LKO1:
         case GE_CMD_LKO2: case GE_CMD_LKO3:
+            g_ge_state.light_spot_cutoff[cmd - GE_CMD_LKO0] =
+                data_to_float(data);
+            break;
+
         case GE_CMD_LAC0: case GE_CMD_LDC0: case GE_CMD_LSC0:
         case GE_CMD_LAC1: case GE_CMD_LDC1: case GE_CMD_LSC1:
         case GE_CMD_LAC2: case GE_CMD_LDC2: case GE_CMD_LSC2:
-        case GE_CMD_LAC3: case GE_CMD_LDC3: case GE_CMD_LSC3:
+        case GE_CMD_LAC3: case GE_CMD_LDC3: case GE_CMD_LSC3: {
+            const int i = cmd - GE_CMD_LAC0;
+            const int light = i / 3;
+            switch (i % 3) {
+            case 0:
+                g_ge_state.light_ambient[light] = data;
+                break;
+            case 1:
+                g_ge_state.light_diffuse[light] = data;
+                break;
+            default:
+                g_ge_state.light_specular[light] = data;
+                break;
+            }
             break;
+        }
 
         default:
             // Log-once for truly unknown commands
