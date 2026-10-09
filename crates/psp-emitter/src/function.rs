@@ -1632,6 +1632,24 @@ fn emit_op(
                  ctx->hi = (uint32_t)(_acc >> 32); ctx->lo = (uint32_t)_acc; }}"
             ));
         }
+        MipsOp::Maddu { rs, rt } => {
+            let rs_s = gen.emit_gpr_read(*rs);
+            let rt_s = gen.emit_gpr_read(*rt);
+            gen.emit_raw(&format!(
+                "{{ uint64_t _acc = ((uint64_t)ctx->hi << 32) | (uint64_t)ctx->lo; \
+                 _acc += (uint64_t)(uint32_t)({rs_s}) * (uint64_t)(uint32_t)({rt_s}); \
+                 ctx->hi = (uint32_t)(_acc >> 32); ctx->lo = (uint32_t)_acc; }}"
+            ));
+        }
+        MipsOp::Msubu { rs, rt } => {
+            let rs_s = gen.emit_gpr_read(*rs);
+            let rt_s = gen.emit_gpr_read(*rt);
+            gen.emit_raw(&format!(
+                "{{ uint64_t _acc = ((uint64_t)ctx->hi << 32) | (uint64_t)ctx->lo; \
+                 _acc -= (uint64_t)(uint32_t)({rs_s}) * (uint64_t)(uint32_t)({rt_s}); \
+                 ctx->hi = (uint32_t)(_acc >> 32); ctx->lo = (uint32_t)_acc; }}"
+            ));
+        }
         MipsOp::Mfc0 { .. } => {
             gen.emit_raw("/* MFC0 ignored */;");
         }
@@ -1947,6 +1965,20 @@ mod tests {
             assert!(out.contains(want), "{op:?}: want {want}, got {out}");
             assert!(!out.contains("(int32_t)"), "{op:?}: bare cast left: {out}");
         }
+    }
+
+    #[test]
+    fn maddu_emits_uint64_accumulate() {
+        let out = emit_one(MipsOp::Maddu { rs: Reg::Gpr(2), rt: Reg::Gpr(3) });
+        assert!(out.contains("uint64_t"), "{out}");
+        assert!(out.contains("+="), "{out}");
+    }
+
+    #[test]
+    fn msubu_emits_uint64_subtract() {
+        let out = emit_one(MipsOp::Msubu { rs: Reg::Gpr(2), rt: Reg::Gpr(3) });
+        assert!(out.contains("uint64_t"), "{out}");
+        assert!(out.contains("-="), "{out}");
     }
 
     #[test]
