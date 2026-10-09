@@ -135,6 +135,7 @@ set(RUNTIME_SOURCES
     src/psp_event_loop.cpp
     src/psp_ge.cpp
     src/psp_ge_vertex.cpp
+    src/psp_ge_lighting.cpp
     src/psp_ge_texture.cpp
     src/psp_ge_texdecode.cpp
     src/psp_ge_shader.cpp
