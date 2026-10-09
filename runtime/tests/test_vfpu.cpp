@@ -958,6 +958,497 @@ static void test_vmfvc_vmtvc() {
     ASSERT_INT_EQ(ctx.vfpu_ctrl[VFPU_CTRL_REV], 0u, "vmtvc REV read-only");
 }
 
+// ===================================================================
+// Tests below encode PPSSPP InterpreterVFPU.cpp results. Register map used:
+//   reg 0x00 -> ctx.vfpu[0..3]    (C000)    reg 0x04 -> ctx.vfpu[16..19]
+//   reg 0x08 -> ctx.vfpu[32..35]  (C200)    reg 0x0C -> ctx.vfpu[48..51]
+// ===================================================================
+static void set_bits(recomp_context& ctx, int idx, uint32_t u) {
+    std::memcpy(&ctx.vfpu[idx], &u, 4);
+}
+
+static void test_vcrs_is_half_cross() {
+    std::printf("  test_vcrs_is_half_cross...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    ctx.vfpu[0] = 1.0f; ctx.vfpu[1] = 2.0f; ctx.vfpu[2] = 3.0f;
+    ctx.vfpu[16] = 4.0f; ctx.vfpu[17] = 5.0f; ctx.vfpu[18] = 6.0f;
+    vfpu_vcrs(&ctx, nullptr, 0x08, 0x00, 0x04, 3);
+    // PV Int_Vcrs: (s1*t2, s2*t0, s0*t1)
+    ASSERT_EXACT(ctx.vfpu[32], 12.0f, "vcrs x = s1*t2");
+    ASSERT_EXACT(ctx.vfpu[33], 12.0f, "vcrs y = s2*t0");
+    ASSERT_EXACT(ctx.vfpu[34], 5.0f, "vcrs z = s0*t1");
+}
+
+static void test_vmin_vmax_nan_and_zero() {
+    std::printf("  test_vmin_vmax_nan_and_zero...\n");
+    recomp_context ctx;
+    // vmin s=1, t=NaN -> 1 (NaN sorts above every finite value)
+    init_ctx(ctx);
+    ctx.vfpu[0] = 1.0f;
+    set_bits(ctx, 16, 0x7FC00000u);
+    vfpu_vmin(&ctx, nullptr, 0x08, 0x00, 0x04, 1);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0x3F800000u, "vmin(1, NaN) = 1");
+    init_ctx(ctx);
+    ctx.vfpu[0] = 1.0f;
+    set_bits(ctx, 16, 0x7FC00000u);
+    vfpu_vmax(&ctx, nullptr, 0x08, 0x00, 0x04, 1);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0x7FC00000u, "vmax(1, NaN) = NaN");
+    // vmin(-0, +0): std::min(t, s) tie returns t = +0
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0x80000000u);
+    set_bits(ctx, 16, 0x00000000u);
+    vfpu_vmin(&ctx, nullptr, 0x08, 0x00, 0x04, 1);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0x00000000u, "vmin(-0, +0) = +0");
+    // vmin(+0, -0) tie returns t = -0
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0x00000000u);
+    set_bits(ctx, 16, 0x80000000u);
+    vfpu_vmin(&ctx, nullptr, 0x08, 0x00, 0x04, 1);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0x80000000u, "vmin(+0, -0) = -0");
+    // vmax(-0, +0) = t = +0; vmax(+0, -0) = -0
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0x80000000u);
+    set_bits(ctx, 16, 0x00000000u);
+    vfpu_vmax(&ctx, nullptr, 0x08, 0x00, 0x04, 1);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0x00000000u, "vmax(-0, +0) = +0");
+    // -inf vs finite: vmin picks -inf, vmax picks the finite value
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0xFF800000u);
+    ctx.vfpu[16] = -5.0f;
+    vfpu_vmin(&ctx, nullptr, 0x08, 0x00, 0x04, 1);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0xFF800000u, "vmin(-inf, -5) = -inf");
+}
+
+static void test_vcmp_keeps_unaffected_cc_bits() {
+    std::printf("  test_vcmp_keeps_unaffected_cc_bits...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    ctx.vfpu[0] = 1.0f;
+    ctx.vfpu[16] = 1.0f;
+    ctx.vfpu_ctrl[VFPU_CTRL_CC] = 0x0Eu;  // bits 1-3 set by an earlier vcmp.q
+    vfpu_vcmp(&ctx, nullptr, 0x00, 0x04, 1 /*EQ*/, 1);
+    // c=1: bit0, bit4 (or), bit5 (and) set; bits 1-3 untouched.
+    ASSERT_INT_EQ(ctx.vfpu_ctrl[VFPU_CTRL_CC], 0x3Fu, "vcmp.s EQ true keeps bits 1-3");
+    vfpu_vcmp(&ctx, nullptr, 0x00, 0x04, 0 /*FL*/, 1);
+    ASSERT_INT_EQ(ctx.vfpu_ctrl[VFPU_CTRL_CC], 0x0Eu, "vcmp.s FL clears 0,4,5 only");
+}
+
+static void test_vcmp_nan_conditions_test_s_only() {
+    std::printf("  test_vcmp_nan_conditions_test_s_only...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    ctx.vfpu[0] = 1.0f;
+    set_bits(ctx, 16, 0x7FC00000u);  // t = NaN
+    vfpu_vcmp(&ctx, nullptr, 0x00, 0x04, 9 /*EN*/, 1);
+    ASSERT_INT_EQ(ctx.vfpu_ctrl[VFPU_CTRL_CC] & 1u, 0u, "vcmp EN ignores t");
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0x7FC00000u);   // s = NaN
+    ctx.vfpu[16] = 1.0f;
+    vfpu_vcmp(&ctx, nullptr, 0x00, 0x04, 13 /*NN*/, 1);
+    ASSERT_INT_EQ(ctx.vfpu_ctrl[VFPU_CTRL_CC] & 1u, 0u, "vcmp NN false for s=NaN");
+    init_ctx(ctx);
+    ctx.vfpu[0] = 1.0f;
+    set_bits(ctx, 16, 0x7F800000u);  // t = +inf
+    vfpu_vcmp(&ctx, nullptr, 0x00, 0x04, 15 /*NS*/, 1);
+    ASSERT_INT_EQ(ctx.vfpu_ctrl[VFPU_CTRL_CC] & 1u, 1u, "vcmp NS true when only t is inf");
+}
+
+static void test_vscmp_vsge_vslt() {
+    std::printf("  test_vscmp_vsge_vslt...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    ctx.vfpu[0] = 2.0f; ctx.vfpu[16] = 1.0f;
+    vfpu_vscmp(&ctx, nullptr, 0x08, 0x00, 0x04, 1);
+    ASSERT_EXACT(ctx.vfpu[32], 1.0f, "vscmp(2,1)");
+    init_ctx(ctx);
+    ctx.vfpu[0] = 1.0f; ctx.vfpu[16] = 2.0f;
+    vfpu_vscmp(&ctx, nullptr, 0x08, 0x00, 0x04, 1);
+    ASSERT_EXACT(ctx.vfpu[32], -1.0f, "vscmp(1,2)");
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0x7FC00000u); ctx.vfpu[16] = 1.0f; ctx.vfpu[32] = 7.0f;
+    vfpu_vsge(&ctx, nullptr, 0x08, 0x00, 0x04, 1);
+    ASSERT_EXACT(ctx.vfpu[32], 0.0f, "vsge NaN -> 0");
+    init_ctx(ctx);
+    ctx.vfpu[0] = 1.0f; ctx.vfpu[16] = 1.0f;
+    vfpu_vsge(&ctx, nullptr, 0x08, 0x00, 0x04, 1);
+    ASSERT_EXACT(ctx.vfpu[32], 1.0f, "vsge(1,1)");
+    vfpu_vslt(&ctx, nullptr, 0x08, 0x00, 0x04, 1);
+    ASSERT_EXACT(ctx.vfpu[32], 0.0f, "vslt(1,1)");
+}
+
+static void test_vf2in_round_and_saturate() {
+    std::printf("  test_vf2in_round_and_saturate...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    ctx.vfpu[0] = 2.5f; ctx.vfpu[1] = 3.5f; ctx.vfpu[2] = 3.0e9f; ctx.vfpu[3] = -3.0e9f;
+    vfpu_vf2in(&ctx, nullptr, 0x08, 0x00, 0, 4);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 2u, "vf2in 2.5 -> 2 (nearest even)");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 33), 4u, "vf2in 3.5 -> 4");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 34), 0x7FFFFFFFu, "vf2in 3e9 saturates");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 35), 0x80000000u, "vf2in -3e9 saturates");
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0x7FC00000u);
+    vfpu_vf2in(&ctx, nullptr, 0x08, 0x00, 0, 1);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0x7FFFFFFFu, "vf2in NaN -> 0x7FFFFFFF");
+    // imm scaling and the other modes
+    init_ctx(ctx);
+    ctx.vfpu[0] = -1.5f;
+    vfpu_vf2iz(&ctx, nullptr, 0x08, 0x00, 1, 1);   // -3.0 -> -3
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0xFFFFFFFDu, "vf2iz -1.5*2");
+    ctx.vfpu[0] = 1.25f;
+    vfpu_vf2iu(&ctx, nullptr, 0x08, 0x00, 0, 1);   // ceil
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 2u, "vf2iu 1.25 -> 2");
+    vfpu_vf2id(&ctx, nullptr, 0x08, 0x00, 0, 1);   // floor
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 1u, "vf2id 1.25 -> 1");
+}
+
+static void test_vf2i_applies_dprefix_write_mask() {
+    std::printf("  test_vf2i_applies_dprefix_write_mask...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    ctx.vfpu[0] = 5.0f; ctx.vfpu[1] = 6.0f;
+    set_bits(ctx, 32, 0xAAAAAAAAu);
+    set_bits(ctx, 33, 0xBBBBBBBBu);
+    ctx.vfpu_ctrl[VFPU_CTRL_DPREFIX] = 0x100;  // mask lane 0
+    vfpu_vf2iz(&ctx, nullptr, 0x08, 0x00, 0, 2);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0xAAAAAAAAu, "masked lane kept");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 33), 6u, "unmasked lane written");
+}
+
+static void test_vi2f_applies_sprefix() {
+    std::printf("  test_vi2f_applies_sprefix...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    set_bits(ctx, 0, 7u);
+    // lane 0: constant 1.0 (const flag, swizzle 1) -> int bits 0x3F800000
+    ctx.vfpu_ctrl[VFPU_CTRL_SPREFIX] = 0x1001u;
+    vfpu_vi2f(&ctx, nullptr, 0x08, 0x00, 0, 1);
+    ASSERT_EXACT(ctx.vfpu[32], 1065353216.0f, "vi2f uses prefixed bits");
+}
+
+static void test_vsrt_variants() {
+    std::printf("  test_vsrt_variants...\n");
+    recomp_context ctx;
+    const float in[4] = {3, 1, 4, 2};
+    const float exp[4][4] = {
+        {1, 3, 2, 4},   // vsrt1 (min01, max01, min23, max23)
+        {2, 1, 4, 3},   // vsrt2 (min03, min12, max12, max03)
+        {3, 1, 4, 2},   // vsrt3 (max01, min01, max23, min23)
+        {3, 4, 1, 2},   // vsrt4 (max03, max12, min12, min03)
+    };
+    typedef void (*Fn)(recomp_context*, uint8_t*, uint8_t, uint8_t, uint8_t);
+    const Fn fns[4] = {vfpu_vsrt1, vfpu_vsrt2, vfpu_vsrt3, vfpu_vsrt4};
+    for (int v = 0; v < 4; v++) {
+        init_ctx(ctx);
+        for (int i = 0; i < 4; i++) ctx.vfpu[i] = in[i];
+        fns[v](&ctx, nullptr, 0x08, 0x00, 4);
+        for (int i = 0; i < 4; i++) {
+            char msg[48];
+            std::snprintf(msg, sizeof(msg), "vsrt%d lane %d", v + 1, i);
+            ASSERT_EXACT(ctx.vfpu[32 + i], exp[v][i], msg);
+        }
+    }
+}
+
+static void test_vsocp_doubles_size() {
+    std::printf("  test_vsocp_doubles_size...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    ctx.vfpu[0] = 0.25f;
+    vfpu_vsocp(&ctx, nullptr, 0x08, 0x00, 1);   // vsocp.s -> pair
+    ASSERT_EXACT(ctx.vfpu[32], 0.75f, "vsocp.s lane0 = 1-x");
+    ASSERT_EXACT(ctx.vfpu[33], 0.25f, "vsocp.s lane1 = x");
+    init_ctx(ctx);
+    ctx.vfpu[0] = 0.25f; ctx.vfpu[1] = 2.0f;
+    vfpu_vsocp(&ctx, nullptr, 0x08, 0x00, 2);   // vsocp.p -> quad
+    ASSERT_EXACT(ctx.vfpu[32], 0.75f, "vsocp.p lane0");
+    ASSERT_EXACT(ctx.vfpu[33], 0.25f, "vsocp.p lane1");
+    ASSERT_EXACT(ctx.vfpu[34], 0.0f, "vsocp.p lane2 = clamp(1-2)");
+    ASSERT_EXACT(ctx.vfpu[35], 1.0f, "vsocp.p lane3 = clamp(2)");
+}
+
+static void test_vwbn_rewrites_exponent() {
+    std::printf("  test_vwbn_rewrites_exponent...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    ctx.vfpu[0] = 1.0f;
+    vfpu_vwbn(&ctx, nullptr, 0x08, 0x00, 130, 1);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0x41100000u, "vwbn exp 130 shifts mantissa by 3");
+    init_ctx(ctx);
+    ctx.vfpu[0] = 1.0f;
+    vfpu_vwbn(&ctx, nullptr, 0x08, 0x00, 0x80, 1);  // needs the full 8 bit imm
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0x40400000u, "vwbn exp 128");
+    // other lanes copied unchanged
+    init_ctx(ctx);
+    ctx.vfpu[0] = 1.0f; ctx.vfpu[1] = 5.5f;
+    vfpu_vwbn(&ctx, nullptr, 0x08, 0x00, 127, 2);
+    ASSERT_EXACT(ctx.vfpu[32], 1.0f, "vwbn exp 127 keeps 1.0");
+    ASSERT_EXACT(ctx.vfpu[33], 5.5f, "vwbn copies lane 1");
+}
+
+static void test_vrot_equal_sine_cosine_lane() {
+    std::printf("  test_vrot_equal_sine_cosine_lane...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    ctx.vfpu[0] = 1.0f;   // one quarter turn: sin 1, cos 0
+    // imm: sine lane (bits 3:2) = 1, cosine lane (bits 1:0) = 1
+    vfpu_vrot(&ctx, nullptr, 0x0C, 0x00, 5, 4);
+    ASSERT_EXACT(ctx.vfpu[48], 1.0f, "vrot all lanes get sine (0)");
+    ASSERT_EXACT(ctx.vfpu[49], 0.0f, "vrot cosine overwrites lane 1");
+    ASSERT_EXACT(ctx.vfpu[50], 1.0f, "vrot all lanes get sine (2)");
+    ASSERT_EXACT(ctx.vfpu[51], 1.0f, "vrot all lanes get sine (3)");
+    // distinct lanes: other lanes stay zero, neg sine flips
+    init_ctx(ctx);
+    ctx.vfpu[0] = 1.0f;
+    vfpu_vrot(&ctx, nullptr, 0x0C, 0x00, 0x10 | (2 << 2) | 0, 4);
+    ASSERT_EXACT(ctx.vfpu[48], 0.0f, "vrot cos lane 0");
+    ASSERT_EXACT(ctx.vfpu[49], 0.0f, "vrot zero lane");
+    ASSERT_EXACT(ctx.vfpu[50], -1.0f, "vrot -sin lane 2");
+}
+
+static void test_vi2us_vi2s_pair_output() {
+    std::printf("  test_vi2us_vi2s_pair_output...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0x40000000u);
+    set_bits(ctx, 1, 0x7FFFFFFFu);
+    set_bits(ctx, 2, 0xFFFFFFFFu);
+    set_bits(ctx, 3, 0x00008000u);
+    vfpu_vi2us(&ctx, nullptr, 0x08, 0x00, 4);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0xFFFF8000u, "vi2us.q word 0");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 33), 0x00010000u, "vi2us.q word 1 (neg clamps to 0)");
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0x12345678u);
+    set_bits(ctx, 1, 0x9ABCDEF0u);
+    set_bits(ctx, 2, 0x11112222u);
+    set_bits(ctx, 3, 0x33334444u);
+    vfpu_vi2s(&ctx, nullptr, 0x08, 0x00, 4);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0x9ABC1234u, "vi2s.q word 0");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 33), 0x33331111u, "vi2s.q word 1");
+}
+
+static void test_vc2i_byte_order() {
+    std::printf("  test_vc2i_byte_order...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0x44332211u);
+    vfpu_vc2i(&ctx, nullptr, 0x08, 0x00, 1);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0x11000000u, "vc2i lane 0");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 33), 0x22000000u, "vc2i lane 1");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 34), 0x33000000u, "vc2i lane 2");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 35), 0x44000000u, "vc2i lane 3");
+}
+
+static void test_vus2i_vs2i_lane_counts() {
+    std::printf("  test_vus2i_vs2i_lane_counts...\n");
+    recomp_context ctx;
+    // vus2i.s: one word -> pair
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0x8001ABCDu);
+    vfpu_vus2i(&ctx, nullptr, 0x08, 0x00, 1);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0x55E68000u, "vus2i.s lo");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 33), 0x40008000u, "vus2i.s hi");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 34), 0u, "vus2i.s writes only 2 lanes");
+    // vs2i.s
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0x8001ABCDu);
+    vfpu_vs2i(&ctx, nullptr, 0x08, 0x00, 1);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0xABCD0000u, "vs2i.s lo");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 33), 0x80010000u, "vs2i.s hi");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 34), 0u, "vs2i.s writes only 2 lanes");
+    // vs2i.p: two words -> quad
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0x00010002u);
+    set_bits(ctx, 1, 0xFFFF8000u);
+    vfpu_vs2i(&ctx, nullptr, 0x08, 0x00, 2);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0x00020000u, "vs2i.p w0 lo");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 33), 0x00010000u, "vs2i.p w0 hi");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 34), 0x80000000u, "vs2i.p w1 lo");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 35), 0xFFFF0000u, "vs2i.p w1 hi");
+}
+
+static void test_vh2f_lane_counts_and_subnormal() {
+    std::printf("  test_vh2f_lane_counts_and_subnormal...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0x3C004000u);   // low 2.0, high 1.0
+    vfpu_vh2f(&ctx, nullptr, 0x08, 0x00, 1);   // vh2f.s -> pair
+    ASSERT_EXACT(ctx.vfpu[32], 2.0f, "vh2f.s low half");
+    ASSERT_EXACT(ctx.vfpu[33], 1.0f, "vh2f.s high half");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 34), 0u, "vh2f.s writes 2 lanes");
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0x3C004000u);
+    set_bits(ctx, 1, 0xC0003800u);   // low 0.5, high -2.0
+    vfpu_vh2f(&ctx, nullptr, 0x08, 0x00, 2);   // vh2f.p -> quad
+    ASSERT_EXACT(ctx.vfpu[34], 0.5f, "vh2f.p word1 low");
+    ASSERT_EXACT(ctx.vfpu[35], -2.0f, "vh2f.p word1 high");
+    // subnormal half -> signed zero (PPSSPP vfpu_h2f), not a normalised value
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0x80000001u);   // low half 0x0001 subnormal, high 0x8000 = -0
+    vfpu_vh2f(&ctx, nullptr, 0x08, 0x00, 1);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0x00000000u, "vh2f subnormal -> +0");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 33), 0x80000000u, "vh2f -0");
+}
+
+static void test_vsgn() {
+    std::printf("  test_vsgn...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    ctx.vfpu[0] = -2.0f; ctx.vfpu[1] = 0.0f; ctx.vfpu[2] = 5.0f;
+    vfpu_vsgn(&ctx, nullptr, 0x08, 0x00, 3);
+    ASSERT_EXACT(ctx.vfpu[32], -1.0f, "vsgn(-2)");
+    ASSERT_EXACT(ctx.vfpu[33], 0.0f, "vsgn(0)");
+    ASSERT_EXACT(ctx.vfpu[34], 1.0f, "vsgn(5)");
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0x00000400u);   // denormal -> 0
+    vfpu_vsgn(&ctx, nullptr, 0x08, 0x00, 1);
+    ASSERT_EXACT(ctx.vfpu[32], 0.0f, "vsgn(denormal)");
+}
+
+static void test_vsbn_vsbz_vlgb() {
+    std::printf("  test_vsbn_vsbz_vlgb...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    ctx.vfpu[0] = 1.0f;
+    set_bits(ctx, 16, 3u);   // integer 3 -> exponent 127 + 3
+    vfpu_vsbn(&ctx, nullptr, 0x08, 0x00, 0x04, 1);
+    ASSERT_EXACT(ctx.vfpu[32], 8.0f, "vsbn 1.0 * 2^3");
+    init_ctx(ctx);
+    ctx.vfpu[0] = 6.0f;
+    vfpu_vsbz(&ctx, nullptr, 0x08, 0x00, 1);
+    ASSERT_EXACT(ctx.vfpu[32], 1.5f, "vsbz 6.0 -> 1.5");
+    init_ctx(ctx);
+    ctx.vfpu[0] = 8.0f; ctx.vfpu[1] = 9.0f;
+    vfpu_vlgb(&ctx, nullptr, 0x08, 0x00, 2);
+    ASSERT_EXACT(ctx.vfpu[32], 3.0f, "vlgb 8.0 -> 3");
+    ASSERT_EXACT(ctx.vfpu[33], 9.0f, "vlgb copies lane 1");
+    init_ctx(ctx);
+    ctx.vfpu[0] = 0.0f;
+    vfpu_vlgb(&ctx, nullptr, 0x08, 0x00, 1);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0xFF800000u, "vlgb 0 -> -inf");
+}
+
+static void test_vt4444_vt5551_vt5650() {
+    std::printf("  test_vt4444_vt5551_vt5650...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0xFF804020u);
+    set_bits(ctx, 1, 0x11223344u);
+    vfpu_vt4444(&ctx, nullptr, 0x08, 0x00, 2);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0x1234F842u, "vt4444 word 0");
+    ASSERT_INT_EQ(vfpu_bits(ctx, 33), 0u, "vt4444 word 1");
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0xFF804020u);
+    vfpu_vt5551(&ctx, nullptr, 0x08, 0x00, 1);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0x0000C104u, "vt5551.s");
+    init_ctx(ctx);
+    set_bits(ctx, 0, 0xFF804020u);
+    vfpu_vt5650(&ctx, nullptr, 0x08, 0x00, 1);
+    ASSERT_INT_EQ(vfpu_bits(ctx, 32), 0x00008204u, "vt5650.s");
+}
+
+static void test_vabs_vneg_force_prefix() {
+    std::printf("  test_vabs_vneg_force_prefix...\n");
+    recomp_context ctx;
+    // vneg with a S-prefix negate: the forced negate ORs in, it does not
+    // cancel -> still -s.
+    init_ctx(ctx);
+    ctx.vfpu[0] = 2.0f;
+    ctx.vfpu_ctrl[VFPU_CTRL_SPREFIX] = 0xE4u | (1u << 16);
+    vfpu_vneg(&ctx, nullptr, 0x08, 0x00, 1);
+    ASSERT_EXACT(ctx.vfpu[32], -2.0f, "vneg with S negate = -s");
+    // vabs with S-prefix negate: abs is applied before negate -> -|s|
+    init_ctx(ctx);
+    ctx.vfpu[0] = 3.0f;
+    ctx.vfpu_ctrl[VFPU_CTRL_SPREFIX] = 0xE4u | (1u << 16);
+    vfpu_vabs(&ctx, nullptr, 0x08, 0x00, 1);
+    ASSERT_EXACT(ctx.vfpu[32], -3.0f, "vabs with S negate = -|s|");
+}
+
+static void test_last_lane_prefix_scoping() {
+    std::printf("  test_last_lane_prefix_scoping...\n");
+    recomp_context ctx;
+    // vdiv.p: the S prefix (lane 0 negate) applies to the LAST lane only.
+    init_ctx(ctx);
+    ctx.vfpu[0] = 6.0f; ctx.vfpu[1] = 8.0f;
+    ctx.vfpu[16] = 2.0f; ctx.vfpu[17] = 4.0f;
+    ctx.vfpu_ctrl[VFPU_CTRL_SPREFIX] = 0xE4u | (1u << 16);
+    vfpu_vdiv(&ctx, nullptr, 0x08, 0x00, 0x04, 2);
+    ASSERT_EXACT(ctx.vfpu[32], 3.0f, "vdiv.p lane 0 unprefixed");
+    ASSERT_EXACT(ctx.vfpu[33], -2.0f, "vdiv.p last lane takes prefix");
+    // vdiv.s with an out of range swizzle on the lane: result 0
+    init_ctx(ctx);
+    ctx.vfpu[0] = 6.0f; ctx.vfpu[16] = 2.0f; ctx.vfpu[32] = 9.0f;
+    ctx.vfpu_ctrl[VFPU_CTRL_SPREFIX] = 0xE5u;  // swizzle names lane 1
+    vfpu_vdiv(&ctx, nullptr, 0x08, 0x00, 0x04, 1);
+    ASSERT_EXACT(ctx.vfpu[32], 0.0f, "vdiv invalid swizzle -> 0");
+    // vrcp.p: same scoping
+    init_ctx(ctx);
+    ctx.vfpu[0] = 2.0f; ctx.vfpu[1] = 4.0f;
+    ctx.vfpu_ctrl[VFPU_CTRL_SPREFIX] = 0xE4u | (1u << 16);
+    vfpu_vrcp(&ctx, nullptr, 0x08, 0x00, 2);
+    ASSERT_EXACT(ctx.vfpu[32], 0.5f, "vrcp.p lane 0 unprefixed");
+    ASSERT_EXACT(ctx.vfpu[33], -0.25f, "vrcp.p last lane takes prefix");
+    // vnrcp ignores a negate flag in the S prefix
+    init_ctx(ctx);
+    ctx.vfpu[0] = 2.0f;
+    ctx.vfpu_ctrl[VFPU_CTRL_SPREFIX] = 0xE4u | (1u << 16);
+    vfpu_vnrcp(&ctx, nullptr, 0x08, 0x00, 1);
+    ASSERT_EXACT(ctx.vfpu[32], -0.5f, "vnrcp ignores S negate");
+    // D prefix: only lane 0's mask survives and moves to the last lane
+    init_ctx(ctx);
+    ctx.vfpu[0] = 2.0f; ctx.vfpu[1] = 4.0f;
+    ctx.vfpu[32] = 9.0f; ctx.vfpu[33] = 9.0f;
+    ctx.vfpu_ctrl[VFPU_CTRL_DPREFIX] = 0x100;  // mask lane 0
+    vfpu_vrcp(&ctx, nullptr, 0x08, 0x00, 2);
+    ASSERT_EXACT(ctx.vfpu[32], 0.5f, "vrcp.p lane 0 written (mask moved)");
+    ASSERT_EXACT(ctx.vfpu[33], 9.0f, "vrcp.p last lane masked");
+}
+
+static void test_vidt_pair_offset() {
+    std::printf("  test_vidt_pair_offset...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    // pair at column 2: PPSSPP off = vd & 1 = 0 -> (1, 0)
+    vfpu_vidt(&ctx, nullptr, 0x0A, 2);
+    ASSERT_EXACT(ctx.vfpu[40], 1.0f, "vidt.p vd&1==0 lane 0");
+    ASSERT_EXACT(ctx.vfpu[41], 0.0f, "vidt.p vd&1==0 lane 1");
+    init_ctx(ctx);
+    vfpu_vidt(&ctx, nullptr, 0x09, 2);
+    ASSERT_EXACT(ctx.vfpu[36], 0.0f, "vidt.p vd&1==1 lane 0");
+    ASSERT_EXACT(ctx.vfpu[37], 1.0f, "vidt.p vd&1==1 lane 1");
+}
+
+static void test_vsat1_skips_dprefix_saturation() {
+    std::printf("  test_vsat1_skips_dprefix_saturation...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    ctx.vfpu[0] = -0.5f;
+    ctx.vfpu_ctrl[VFPU_CTRL_DPREFIX] = 0x1;  // saturate 0..1 on lane 0
+    vfpu_vsat1(&ctx, nullptr, 0x08, 0x00, 1);
+    ASSERT_EXACT(ctx.vfpu[32], -0.5f, "vsat1 ignores D saturation");
+}
+
+static void test_vavg_vfad_forms() {
+    std::printf("  test_vavg_vfad_forms...\n");
+    recomp_context ctx;
+    init_ctx(ctx);
+    ctx.vfpu[0] = 5.0f;
+    vfpu_vavg(&ctx, nullptr, 0x08, 0x00, 1);
+    ASSERT_EXACT(ctx.vfpu[32], 0.0f, "vavg.s = 0");
+    init_ctx(ctx);
+    ctx.vfpu[0] = 1.0f; ctx.vfpu[1] = 2.0f; ctx.vfpu[2] = 6.0f;
+    vfpu_vavg(&ctx, nullptr, 0x08, 0x00, 3);
+    float c = 1.0f / 3.0f, e = 0.0f;
+    e += 1.0f * c; e += 2.0f * c; e += 6.0f * c; e += 0.0f * c;
+    ASSERT_EXACT(ctx.vfpu[32], e, "vavg.t sum of s*(1/3)");
+    init_ctx(ctx);
+    ctx.vfpu[0] = 1.0f; ctx.vfpu[1] = 2.0f; ctx.vfpu[2] = 6.0f; ctx.vfpu[3] = 3.0f;
+    vfpu_vfad(&ctx, nullptr, 0x08, 0x00, 4);
+    ASSERT_EXACT(ctx.vfpu[32], 12.0f, "vfad.q");
+}
+
 int main() {
     std::printf("Running VFPU runtime tests...\n\n");
 
@@ -987,6 +1478,30 @@ int main() {
     test_mtvc_masks_per_register();
     test_mfv_zero_register_is_interlock();
     test_vmfvc_vmtvc();
+    test_vcrs_is_half_cross();
+    test_vmin_vmax_nan_and_zero();
+    test_vcmp_keeps_unaffected_cc_bits();
+    test_vcmp_nan_conditions_test_s_only();
+    test_vscmp_vsge_vslt();
+    test_vf2in_round_and_saturate();
+    test_vf2i_applies_dprefix_write_mask();
+    test_vi2f_applies_sprefix();
+    test_vsrt_variants();
+    test_vsocp_doubles_size();
+    test_vwbn_rewrites_exponent();
+    test_vrot_equal_sine_cosine_lane();
+    test_vi2us_vi2s_pair_output();
+    test_vc2i_byte_order();
+    test_vus2i_vs2i_lane_counts();
+    test_vh2f_lane_counts_and_subnormal();
+    test_vsgn();
+    test_vsbn_vsbz_vlgb();
+    test_vt4444_vt5551_vt5650();
+    test_vabs_vneg_force_prefix();
+    test_last_lane_prefix_scoping();
+    test_vidt_pair_offset();
+    test_vsat1_skips_dprefix_saturation();
+    test_vavg_vfad_forms();
 
     std::printf("\n%d tests run, %d failures\n",
                 tests_run, failures);

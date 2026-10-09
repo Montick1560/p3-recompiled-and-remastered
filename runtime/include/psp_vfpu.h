@@ -329,6 +329,22 @@ void vfpu_vfad(recomp_context* ctx, uint8_t* rdram,
 void vfpu_vavg(recomp_context* ctx, uint8_t* rdram,
                uint8_t vd, uint8_t vs, uint8_t size);
 
+// Sign / exponent / color pack (decoded since the VFPU9/VFPU7/VFPU0 fixes)
+void vfpu_vsgn(recomp_context* ctx, uint8_t* rdram,
+               uint8_t vd, uint8_t vs, uint8_t size);
+void vfpu_vsbn(recomp_context* ctx, uint8_t* rdram,
+               uint8_t vd, uint8_t vs, uint8_t vt, uint8_t size);
+void vfpu_vsbz(recomp_context* ctx, uint8_t* rdram,
+               uint8_t vd, uint8_t vs, uint8_t size);
+void vfpu_vlgb(recomp_context* ctx, uint8_t* rdram,
+               uint8_t vd, uint8_t vs, uint8_t size);
+void vfpu_vt4444(recomp_context* ctx, uint8_t* rdram,
+                 uint8_t vd, uint8_t vs, uint8_t size);
+void vfpu_vt5551(recomp_context* ctx, uint8_t* rdram,
+                 uint8_t vd, uint8_t vs, uint8_t size);
+void vfpu_vt5650(recomp_context* ctx, uint8_t* rdram,
+                 uint8_t vd, uint8_t vs, uint8_t size);
+
 // Random
 void vfpu_vrnds(recomp_context* ctx, uint8_t* rdram,
                 uint8_t vs);
