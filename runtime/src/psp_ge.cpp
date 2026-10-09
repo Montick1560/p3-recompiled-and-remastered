@@ -2,6 +2,7 @@
 #include "psp_ge_vertex.h"
 #include "psp_ge_constants.h"
 #include "psp_ge_draw.h"
+#include "psp_ge_transfer.h"
 #include "recomp.h"
 #include "hle/psp_hle_kernel.h"  // psp_alloc_stack (needs recomp.h first)
 
@@ -12,6 +13,7 @@
 
 // -- Module state --
 static GeState g_ge_state;
+static GeTransferRegs g_transfer;  // latched TRANSFER* registers
 static bool g_ge_trace = false;
 static int g_total_lists = 0;
 static int g_total_prims = 0;
@@ -790,11 +792,31 @@ GeListResult ge_process_display_list(
         case GE_CMD_LOGICOP:
         case GE_CMD_DITH0: case GE_CMD_DITH1:
         case GE_CMD_DITH2: case GE_CMD_DITH3:
-        case GE_CMD_TRANSFERSRC: case GE_CMD_TRANSFERSRCW:
-        case GE_CMD_TRANSFERDST: case GE_CMD_TRANSFERDSTW:
-        case GE_CMD_TRANSFERSRCPOS: case GE_CMD_TRANSFERDSTPOS:
-        case GE_CMD_TRANSFERSIZE: case GE_CMD_TRANSFERSTART:
             break;
+
+        // ---- Block transfer (PPSSPP DoBlockTransfer, memory path) ----
+        case GE_CMD_TRANSFERSRC: g_transfer.src = data; break;
+        case GE_CMD_TRANSFERSRCW: g_transfer.srcw = data; break;
+        case GE_CMD_TRANSFERDST: g_transfer.dst = data; break;
+        case GE_CMD_TRANSFERDSTW: g_transfer.dstw = data; break;
+        case GE_CMD_TRANSFERSRCPOS: g_transfer.srcpos = data; break;
+        case GE_CMD_TRANSFERDSTPOS: g_transfer.dstpos = data; break;
+        case GE_CMD_TRANSFERSIZE: g_transfer.size = data; break;
+        case GE_CMD_TRANSFERSTART: {
+            g_transfer.start = data;
+            static int logged = 0;
+            if (logged < 16) {
+                logged++;
+                std::fprintf(stderr,
+                    "[GE] block transfer src=%06X/%06X dst=%06X/%06X pos=%06X->%06X "
+                    "size=%06X bpp=%d\n",
+                    g_transfer.src, g_transfer.srcw, g_transfer.dst, g_transfer.dstw,
+                    g_transfer.srcpos, g_transfer.dstpos, g_transfer.size,
+                    (data & 1) ? 32 : 16);
+            }
+            psp_ge_block_transfer(rdram, g_transfer);
+            break;
+        }
 
         // ---- Light types / positions / colors ----
         case GE_CMD_LIGHTTYPE0: case GE_CMD_LIGHTTYPE1:

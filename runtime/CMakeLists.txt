@@ -134,6 +134,7 @@ set(RUNTIME_SOURCES
     src/psp_render_queue.cpp
     src/psp_event_loop.cpp
     src/psp_ge.cpp
+    src/psp_ge_transfer.cpp
     src/psp_ge_vertex.cpp
     src/psp_ge_lighting.cpp
     src/psp_ge_texture.cpp
@@ -509,6 +510,12 @@ target_compile_options(test_subintr PRIVATE
 add_test(NAME subintr_tests COMMAND test_subintr)
 
 # 59.94 Hz vblank clock unit test (header-only integer math).
+# GE block transfer (memory path of PPSSPP DoBlockTransfer) on a fake RAM.
+add_executable(test_ge_transfer tests/test_ge_transfer.cpp src/psp_ge_transfer.cpp)
+target_include_directories(test_ge_transfer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_ge_transfer PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME ge_transfer_tests COMMAND test_ge_transfer)
+
 add_executable(test_vblank_clock tests/test_vblank_clock.cpp)
 
 target_include_directories(test_vblank_clock PRIVATE
