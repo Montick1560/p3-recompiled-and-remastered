@@ -558,4 +558,7 @@ void psp_hle_register_all_modules() {
 
     // sceMpeg movie playback (psp_hle_mpeg.cpp)
     psp_hle_register_mpeg();
+
+    // scePsmf header queries (psp_hle_psmf.cpp)
+    psp_hle_register_psmf();
 }

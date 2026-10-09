@@ -159,6 +159,8 @@ set(RUNTIME_SOURCES
     src/hle/psp_sas_core.cpp
     src/hle/psp_atrac_ctx.cpp
     src/hle/psp_hle_atrac.cpp
+    src/hle/psp_psmf.cpp
+    src/hle/psp_hle_psmf.cpp
     src/hle/psp_savedata.cpp
     src/hle/psp_psmf.cpp
     src/hle/psp_mpeg_demux.cpp
@@ -592,6 +594,28 @@ target_compile_options(test_psmf PRIVATE
 )
 
 add_test(NAME psmf_tests COMMAND test_psmf)
+
+# scePsmf HLE glue: real handlers through a stub registry, the PSMF parser,
+# and a fake guest RAM. The real-data case reads DATA_CMN.BND.
+add_executable(test_hle_psmf
+    tests/test_hle_psmf.cpp
+    src/hle/psp_hle_psmf.cpp
+    src/hle/psp_psmf.cpp
+)
+
+target_include_directories(test_hle_psmf PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${PSPRECOMP_OUTPUT_DIR}/include
+)
+
+target_compile_options(test_hle_psmf PRIVATE
+    -O2
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+
+add_test(NAME hle_psmf_tests COMMAND test_hle_psmf)
 
 # MPEG-PS demuxer unit test (pure: byte queue, H.264 AU splitter, PES/pack
 # parsing, ATRAC3plus frames; the real-data case streams the user's

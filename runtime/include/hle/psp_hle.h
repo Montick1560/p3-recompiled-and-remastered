@@ -186,3 +186,6 @@ void psp_hle_register_sas();
 void psp_hle_register_atrac();
 void psp_hle_register_mpeg();
 
+// scePsmf (psp_hle_psmf.cpp, on the pure PSMF parser)
+void psp_hle_register_psmf();
+
