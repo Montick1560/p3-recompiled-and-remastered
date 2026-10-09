@@ -2,6 +2,7 @@
 #include "hle/psp_hle_intr.h"
 #include "hle/psp_hle_kernel.h"
 #include "psp_audio_out.h"
+#include "psp_audio_volume.h"
 #include "psp_memory.h"
 #include "psp_runtime.h"
 #include "psp_scheduler.h"
@@ -185,8 +186,8 @@ struct AudioChannelState {
     bool reserved = false;
     int samples = 1024;
     bool mono = false;
-    int vol_left = 0x8000;
-    int vol_right = 0x8000;
+    // Live volume (PPSSPP AudioChannel::left/rightVolume): silent until set.
+    psp_audio_volume::ChannelVolume vol;
 };
 
 // Sample count from sceAudioOutput2Reserve (default one 1024 grain
@@ -221,7 +222,7 @@ static bool audio_push_guest(
     // Guest memory is little-endian s16 and so is every supported host.
     psp_audio_mixer().push(mix_ch,
         reinterpret_cast<const int16_t*>(rdram + off), frames, !mono,
-        vol_left & 0xFFFF, vol_right & 0xFFFF);
+        vol_left, vol_right);
     return true;
 }
 
@@ -247,15 +248,20 @@ static void audio_wait_drain(
 /// Play one grain on a normal channel: queue it and pace the caller.
 static void audio_output_channel(
     uint8_t* rdram, recomp_context* ctx, uint32_t channel, uint32_t buf,
-    int vol_left, int vol_right, bool blocking
+    int vol_left, int vol_right, bool blocking, bool panned
 ) {
     if (channel >= static_cast<uint32_t>(AUDIO_CHANNEL_COUNT)) {
         if (blocking) audio_block_for_samples(rdram, ctx, 1024);
         return;
     }
     AudioChannelState& ch = g_channels[channel];
-    const bool queued = audio_push_guest(rdram, static_cast<int>(channel),
-        buf, ch.samples, ch.mono, vol_left, vol_right);
+    // Negative = keep the channel's live volume; out of range is refused.
+    const bool vol_ok = panned
+        ? psp_audio_volume::resolve_panned(ch.vol, vol_left, vol_right)
+        : psp_audio_volume::resolve(ch.vol, vol_left, vol_right);
+    const bool queued = vol_ok && audio_push_guest(rdram,
+        static_cast<int>(channel), buf, ch.samples, ch.mono,
+        ch.vol.left, ch.vol.right);
     if (!blocking) return;
     if (queued) {
         audio_wait_drain(rdram, ctx, static_cast<int>(channel), ch.samples);
@@ -273,7 +279,7 @@ static void hle_sceAudioOutputBlocking(
     // Preserve existing return convention (a1) before callbacks can
     // clobber argument registers.
     int32_t ret = ctx->r[5];
-    audio_output_channel(rdram, ctx, channel, buf, vol, vol, true);
+    audio_output_channel(rdram, ctx, channel, buf, vol, vol, true, false);
     ctx->r[2] = ret;
 }
 
@@ -287,7 +293,8 @@ static void hle_sceAudioOutputPannedBlocking(
     // Preserve existing return convention (a3) before callbacks can
     // clobber argument registers.
     int32_t ret = ctx->r[7];
-    audio_output_channel(rdram, ctx, channel, buf, vol_left, vol_right, true);
+    audio_output_channel(rdram, ctx, channel, buf, vol_left, vol_right, true,
+                         true);
     ctx->r[2] = ret;
 }
 
@@ -311,6 +318,7 @@ static void hle_sceAudioChReserve(
         ch.samples = samples;
     }
     ch.mono = (format == AUDIO_FORMAT_MONO);
+    ch.vol = psp_audio_volume::ChannelVolume{};  // Reserve zeroes the volume
     psp_audio_mixer().clear(channel);
     ctx->r[2] = channel;
     (void)rdram;
@@ -348,7 +356,9 @@ static void hle_sceAudioOutput2OutputBlocking(
     int vol = static_cast<int>(ctx->r[4]);
     uint32_t buf = static_cast<uint32_t>(ctx->r[5]);
     const int frames = g_output2_samples;
-    if (audio_push_guest(rdram, PspAudioMixer::kOutput2, buf, frames, false,
+    // Output2 volume is unsigned 20-bit and not stored per channel.
+    if (psp_audio_volume::output2_volume(vol) &&
+        audio_push_guest(rdram, PspAudioMixer::kOutput2, buf, frames, false,
                          vol, vol)) {
         audio_wait_drain(rdram, ctx, PspAudioMixer::kOutput2, frames);
     } else {
@@ -372,7 +382,8 @@ static void hle_sceAudioOutputPanned(
     int vol_left = static_cast<int>(ctx->r[5]);
     int vol_right = static_cast<int>(ctx->r[6]);
     uint32_t buf = static_cast<uint32_t>(ctx->r[7]);
-    audio_output_channel(rdram, ctx, channel, buf, vol_left, vol_right, false);
+    audio_output_channel(rdram, ctx, channel, buf, vol_left, vol_right, false,
+                         false);
     ctx->r[2] = SCE_OK;
 }
 
@@ -405,8 +416,9 @@ static void hle_sceAudioChangeChannelVolume(
 ) {
     uint32_t channel = static_cast<uint32_t>(ctx->r[4]);
     if (channel < static_cast<uint32_t>(AUDIO_CHANNEL_COUNT)) {
-        g_channels[channel].vol_left = static_cast<int>(ctx->r[5]);
-        g_channels[channel].vol_right = static_cast<int>(ctx->r[6]);
+        // Negative leaves that side alone; > 0xFFFF is refused.
+        psp_audio_volume::resolve(g_channels[channel].vol,
+            static_cast<int>(ctx->r[5]), static_cast<int>(ctx->r[6]));
     }
     ctx->r[2] = SCE_OK;
     (void)rdram;
