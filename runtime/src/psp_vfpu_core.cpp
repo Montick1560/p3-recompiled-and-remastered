@@ -87,7 +87,8 @@ void vfpu_write_vector(const float* src, int n, int reg,
 // Prefix application
 // ---------------------------------------------------------------------------
 
-void vfpu_apply_prefix_st(float* r, uint32_t prefix, int n) {
+void vfpu_apply_prefix_st_inv(float* r, uint32_t prefix, int n,
+                              float invalid) {
     if (prefix == 0xE4u) return;  // identity -- fast path
 
     static const float constants[8] = {
@@ -95,12 +96,8 @@ void vfpu_apply_prefix_st(float* r, uint32_t prefix, int n) {
         3.0f, 1.0f / 3.0f, 0.25f, 1.0f / 6.0f
     };
 
-    float orig[4] = {
-        r[0],
-        n > 1 ? r[1] : 0.0f,
-        n > 2 ? r[2] : 0.0f,
-        n > 3 ? r[3] : 0.0f
-    };
+    float orig[4] = {invalid, invalid, invalid, invalid};
+    for (int i = 0; i < n; i++) orig[i] = r[i];
 
     for (int i = 0; i < n; i++) {
         int swizzle  = (prefix >> (i * 2)) & 3;
@@ -127,6 +124,66 @@ void vfpu_apply_prefix_st(float* r, uint32_t prefix, int n) {
             std::memcpy(&r[i], &u, 4);
         }
     }
+}
+
+void vfpu_apply_prefix_st(float* r, uint32_t prefix, int n) {
+    vfpu_apply_prefix_st_inv(r, prefix, n, 0.0f);
+}
+
+void vfpu_retain_invalid_swizzle(float* d, uint32_t sprefix,
+                                 uint32_t tprefix, int n) {
+    for (int i = 0; i < n; i++) {
+        int swizzle_s = (sprefix >> (i + i)) & 3;
+        int swizzle_t = (tprefix >> (i + i)) & 3;
+        int const_s = (sprefix >> (12 + i)) & 1;
+        int const_t = (tprefix >> (12 + i)) & 1;
+        if ((swizzle_s >= n && !const_s) || (swizzle_t >= n && !const_t))
+            d[i] = 0.0f;
+    }
+}
+
+bool vfpu_last_lane_swizzle_invalid(uint32_t prefix) {
+    return (prefix & 3) != 0 && (prefix & (1u << 12)) == 0;
+}
+
+// The ordering the hardware's min/max family compares with (PPSSPP
+// vfpu_order_key): denormals count as zero, so +-0 and every denormal tie;
+// inf/NaN sort by sign and magnitude. A tie returns the second operand.
+static inline int32_t vfpu_order_key(float f) {
+    uint32_t u;
+    std::memcpy(&u, &f, 4);
+    uint32_t mag = u & 0x7FFFFFFFu;
+    if (mag < 0x00800000u) mag = 0;
+    return (u & 0x80000000u) ? -static_cast<int32_t>(mag)
+                             : static_cast<int32_t>(mag);
+}
+
+float vfpu_min(float a, float b) {
+    return vfpu_order_key(a) < vfpu_order_key(b) ? a : b;
+}
+
+float vfpu_max(float a, float b) {
+    return vfpu_order_key(a) > vfpu_order_key(b) ? a : b;
+}
+
+uint32_t vfpu_h2f_bits(uint16_t h) {
+    uint32_t sign = static_cast<uint32_t>(h & 0x8000u) << 16;
+    uint32_t exp = (h >> 10) & 0x1F;
+    uint32_t mant = h & 0x3FF;
+    if (exp == 0) return sign;  // zero and subnormal halves: signed zero
+    if (exp == 31) return sign | 0x7F800000u | mant;  // mantissa not shifted
+    return sign | ((exp + 112) << 23) | (mant << 13);
+}
+
+uint16_t vfpu_f2h_bits(uint32_t f) {
+    uint16_t sign = static_cast<uint16_t>((f >> 16) & 0x8000u);
+    uint32_t exp = (f >> 23) & 0xFF;
+    uint32_t mant = f & 0x7FFFFFu;
+    if (exp == 255)
+        return static_cast<uint16_t>(sign | 0x7C00 | (mant & 0x3FF));
+    if (exp < 113) return sign;
+    if (exp >= 143) return static_cast<uint16_t>(sign | 0x7C00);
+    return static_cast<uint16_t>(sign | ((exp - 112) << 10) | (mant >> 13));
 }
 
 /// NaN-aware max: returns cst if f <= cst, else f.
@@ -185,6 +242,8 @@ void vfpu_set_prefix(recomp_context* ctx, int reg_idx,
 // ---------------------------------------------------------------------------
 
 void vfpu_mfv(recomp_context* ctx, int rt_idx, uint8_t vd) {
+    // PPSSPP Int_Mftv: rt == $zero is an interlock, nothing is written.
+    if (rt_idx == 0) return;
     int idx = vfpu_single_index(vd);
     uint32_t u;
     std::memcpy(&u, &ctx->vfpu[idx], 4);
@@ -197,16 +256,70 @@ void vfpu_mtv(recomp_context* ctx, int rt_idx, uint8_t vd) {
     std::memcpy(&ctx->vfpu[idx], &u, 4);
 }
 
+// PPSSPP GetVFPUCtrlMask / GetVFPUCtrlSetBits.
+static bool vfpu_ctrl_mask(int reg, uint32_t* mask) {
+    switch (reg) {
+    case VFPU_CTRL_SPREFIX:
+    case VFPU_CTRL_TPREFIX: *mask = 0x000FFFFFu; return true;
+    case VFPU_CTRL_DPREFIX: *mask = 0x00000FFFu; return true;
+    case VFPU_CTRL_CC:      *mask = 0x0000003Fu; return true;
+    case VFPU_CTRL_INF4:    *mask = 0xFFFFFFFFu; return true;
+    case VFPU_CTRL_RSV5:
+    case VFPU_CTRL_RSV6:
+    case VFPU_CTRL_REV:     return false;  // read only
+    default:
+        if (reg >= VFPU_CTRL_RCX0 && reg <= VFPU_CTRL_RCX7) {
+            *mask = 0x000FFFFFu;
+            return true;
+        }
+        return false;
+    }
+}
+
+static uint32_t vfpu_ctrl_set_bits(int reg) {
+    return (reg >= VFPU_CTRL_RCX0 && reg <= VFPU_CTRL_RCX7) ? 0x3F800000u : 0u;
+}
+
 // imm is the control register number (instruction imm - 128); PPSSPP
 // ignores numbers past VFPU_CTRL_MAX (16).
 void vfpu_mfvc(recomp_context* ctx, int rt_idx, int imm) {
+    if (rt_idx == 0) return;
     if (imm < 0 || imm >= 16) return;
     ctx->r[rt_idx] = static_cast<int32_t>(ctx->vfpu_ctrl[imm]);
 }
 
 void vfpu_mtvc(recomp_context* ctx, int rt_idx, int imm) {
     if (imm < 0 || imm >= 16) return;
-    ctx->vfpu_ctrl[imm] = static_cast<uint32_t>(ctx->r[rt_idx]);
+    uint32_t mask;
+    if (!vfpu_ctrl_mask(imm, &mask)) return;
+    ctx->vfpu_ctrl[imm] =
+        (static_cast<uint32_t>(ctx->r[rt_idx]) & mask) | vfpu_ctrl_set_bits(imm);
+}
+
+// VFPU9 vmfvc: vd (single register) <- control register imm; out of range
+// reads 0 (PPSSPP Int_Vmfvc). Does not eat prefixes.
+void vfpu_vmfvc(recomp_context* ctx, uint8_t vd, uint8_t imm) {
+    uint32_t u = (imm < 16) ? ctx->vfpu_ctrl[imm] : 0u;
+    std::memcpy(&ctx->vfpu[vfpu_single_index(vd)], &u, 4);
+}
+
+// VFPU9 vmtvc: control register imm <- single register vs, masked like mtvc
+// (PPSSPP Int_Vmtvc).
+void vfpu_vmtvc(recomp_context* ctx, uint8_t vs, uint8_t imm) {
+    if (imm >= 16) return;
+    uint32_t mask;
+    if (!vfpu_ctrl_mask(imm, &mask)) return;
+    uint32_t u;
+    std::memcpy(&u, &ctx->vfpu[vfpu_single_index(vs)], 4);
+    ctx->vfpu_ctrl[imm] = (u & mask) | vfpu_ctrl_set_bits(imm);
+}
+
+/// PPSSPP "last lane" D prefix for vrcp/vsin/vdiv...: only lane 0's mask and
+/// saturation survive, and they apply to lane n-1.
+uint32_t vfpu_last_lane_dprefix(uint32_t d, int n) {
+    uint32_t lastmask = (d & (1u << 8)) << (n - 1);
+    uint32_t lastsat = (d & 3u) << (n + n - 2);
+    return lastmask | lastsat;
 }
 
 // ---------------------------------------------------------------------------

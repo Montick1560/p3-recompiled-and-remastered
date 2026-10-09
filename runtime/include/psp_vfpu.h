@@ -47,7 +47,60 @@ void vfpu_write_vector(const float* src, int n, int reg,
 // Prefix helpers
 // ---------------------------------------------------------------------------
 void vfpu_apply_prefix_st(float* r, uint32_t prefix, int n);
+/// PPSSPP ApplyPrefixST with an explicit fill for lanes >= n (an out of range
+/// swizzle reads `invalid`; vfpu_apply_prefix_st uses 0.0f).
+void vfpu_apply_prefix_st_inv(float* r, uint32_t prefix, int n, float invalid);
 void vfpu_apply_prefix_d(float* r, uint32_t dprefix, int n);
+
+// ---------------------------------------------------------------------------
+// PPSSPP prefix-rewrite helpers (VFPURewritePrefix & friends). Several VFPU
+// ops force parts of the S/T prefix (a fixed swizzle, forced negate, forced
+// constants) while the user's other prefix bits still apply.
+// ---------------------------------------------------------------------------
+constexpr uint32_t VFPU_PFX_ANY_SWIZZLE = 0x000000FFu;
+inline uint32_t vfpu_pfx_swizzle(int x, int y, int z, int w) {
+    return (uint32_t)(x | (y << 2) | (z << 4) | (w << 6));
+}
+inline uint32_t vfpu_pfx_mask4(int x, int y, int z, int w) {
+    return (uint32_t)(x | (y << 1) | (z << 2) | (w << 3));
+}
+inline uint32_t vfpu_pfx_abs(int x, int y, int z, int w) {
+    return vfpu_pfx_mask4(x, y, z, w) << 8;
+}
+inline uint32_t vfpu_pfx_negate(int x, int y, int z, int w) {
+    return vfpu_pfx_mask4(x, y, z, w) << 16;
+}
+/// Constant selectors (index into the prefix constant table). -1 = leave lane.
+enum : int {
+    VFPU_CONST_NONE = -1, VFPU_CONST_ZERO = 0, VFPU_CONST_ONE, VFPU_CONST_TWO,
+    VFPU_CONST_HALF, VFPU_CONST_THREE, VFPU_CONST_THIRD, VFPU_CONST_FOURTH,
+    VFPU_CONST_SIXTH
+};
+/// Prefix bits that force lane `lane` to constant `c` (swizzle + abs + const flag).
+inline uint32_t vfpu_pfx_const_lane(int lane, int c) {
+    if (c < 0) return 0;
+    return (uint32_t)(((c & 3) << (lane * 2)) | (((c >> 2) & 1) << (8 + lane))
+                      | (1 << (12 + lane)));
+}
+inline uint32_t vfpu_pfx_constants(int x, int y, int z, int w) {
+    return vfpu_pfx_const_lane(0, x) | vfpu_pfx_const_lane(1, y)
+         | vfpu_pfx_const_lane(2, z) | vfpu_pfx_const_lane(3, w);
+}
+inline uint32_t vfpu_rewrite_prefix(uint32_t prefix, uint32_t remove, uint32_t add) {
+    return (prefix & ~remove) | add;
+}
+/// PPSSPP RetainInvalidSwizzleST: zero d[i] where the S or T swizzle of lane i
+/// names a lane >= n without the constant flag.
+void vfpu_retain_invalid_swizzle(float* d, uint32_t sprefix, uint32_t tprefix, int n);
+/// PPSSPP LastLaneSwizzleInvalid: the single-lane prefix of a last-lane op
+/// (vrcp, vsin, vdiv...) names a lane other than the first.
+bool vfpu_last_lane_swizzle_invalid(uint32_t prefix);
+/// PPSSPP's min/max ordering (ties return b; denormals and +-0 tie).
+float vfpu_min(float a, float b);
+float vfpu_max(float a, float b);
+/// Half-float conversions exactly as PPSSPP vfpu_h2f / vfpu_f2h.
+uint32_t vfpu_h2f_bits(uint16_t h);
+uint16_t vfpu_f2h_bits(uint32_t f);
 void vfpu_eat_prefixes(recomp_context* ctx);
 void vfpu_set_prefix(recomp_context* ctx, int reg_idx,
                      uint32_t data);
@@ -68,6 +121,9 @@ void vfpu_mfv(recomp_context* ctx, int rt_idx, uint8_t vd);
 void vfpu_mtv(recomp_context* ctx, int rt_idx, uint8_t vd);
 void vfpu_mfvc(recomp_context* ctx, int rt_idx, int imm);
 void vfpu_mtvc(recomp_context* ctx, int rt_idx, int imm);
+void vfpu_vmfvc(recomp_context* ctx, uint8_t vd, uint8_t imm);
+void vfpu_vmtvc(recomp_context* ctx, uint8_t vs, uint8_t imm);
+uint32_t vfpu_last_lane_dprefix(uint32_t d, int n);
 
 // ---------------------------------------------------------------------------
 // Immediate loads
@@ -272,6 +328,22 @@ void vfpu_vfad(recomp_context* ctx, uint8_t* rdram,
                uint8_t vd, uint8_t vs, uint8_t size);
 void vfpu_vavg(recomp_context* ctx, uint8_t* rdram,
                uint8_t vd, uint8_t vs, uint8_t size);
+
+// Sign / exponent / color pack (decoded since the VFPU9/VFPU7/VFPU0 fixes)
+void vfpu_vsgn(recomp_context* ctx, uint8_t* rdram,
+               uint8_t vd, uint8_t vs, uint8_t size);
+void vfpu_vsbn(recomp_context* ctx, uint8_t* rdram,
+               uint8_t vd, uint8_t vs, uint8_t vt, uint8_t size);
+void vfpu_vsbz(recomp_context* ctx, uint8_t* rdram,
+               uint8_t vd, uint8_t vs, uint8_t size);
+void vfpu_vlgb(recomp_context* ctx, uint8_t* rdram,
+               uint8_t vd, uint8_t vs, uint8_t size);
+void vfpu_vt4444(recomp_context* ctx, uint8_t* rdram,
+                 uint8_t vd, uint8_t vs, uint8_t size);
+void vfpu_vt5551(recomp_context* ctx, uint8_t* rdram,
+                 uint8_t vd, uint8_t vs, uint8_t size);
+void vfpu_vt5650(recomp_context* ctx, uint8_t* rdram,
+                 uint8_t vd, uint8_t vs, uint8_t size);
 
 // Random
 void vfpu_vrnds(recomp_context* ctx, uint8_t* rdram,
