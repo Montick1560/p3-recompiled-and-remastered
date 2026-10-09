@@ -332,3 +332,56 @@ static void psp_dump_pc_trace() {
     }
     std::fprintf(stderr, "[PC-TRACE] === END DUMP ===\n");
 }
+
+// ---- PSPRECOMP_FUNC_ARGS=<hex>[,<hex>...] (debug) ----
+// Wraps up to 8 guest functions in the dispatch table: every call through
+// RECOMP_LOOKUP logs a0-a3 on entry and v0 on return (first 400 calls each).
+// Calls the emitter resolved to direct C++ calls bypass the wrapper.
+static constexpr int FUNC_ARGS_MAX = 8;
+static uint32_t g_func_args_addr[FUNC_ARGS_MAX];
+static FuncPtr g_func_args_orig[FUNC_ARGS_MAX];
+static std::atomic<int> g_func_args_calls[FUNC_ARGS_MAX];
+
+static void func_args_call(int slot, uint8_t* rdram, recomp_context* ctx) {
+    const bool log = g_func_args_calls[slot].fetch_add(1, std::memory_order_relaxed) < 400;
+    const uint32_t a[4] = {(uint32_t)ctx->r[4], (uint32_t)ctx->r[5],
+                           (uint32_t)ctx->r[6], (uint32_t)ctx->r[7]};
+    const uint32_t ra = (uint32_t)ctx->r[31];
+    g_func_args_orig[slot](rdram, ctx);
+    if (log) {
+        std::fprintf(stderr,
+                     "[FUNC-ARGS] 0x%08X(a0=0x%08X a1=0x%08X a2=0x%08X a3=0x%08X) ra=0x%08X "
+                     "-> v0=0x%08X\n",
+                     g_func_args_addr[slot], a[0], a[1], a[2], a[3], ra, (uint32_t)ctx->r[2]);
+    }
+}
+
+#define FUNC_ARGS_WRAPPER(N) \
+    static void func_args_wrapper_##N(uint8_t* rdram, recomp_context* ctx) { \
+        func_args_call(N, rdram, ctx); \
+    }
+FUNC_ARGS_WRAPPER(0) FUNC_ARGS_WRAPPER(1) FUNC_ARGS_WRAPPER(2) FUNC_ARGS_WRAPPER(3)
+FUNC_ARGS_WRAPPER(4) FUNC_ARGS_WRAPPER(5) FUNC_ARGS_WRAPPER(6) FUNC_ARGS_WRAPPER(7)
+#undef FUNC_ARGS_WRAPPER
+
+void psp_func_args_install() {
+    static const FuncPtr wrappers[FUNC_ARGS_MAX] = {
+        func_args_wrapper_0, func_args_wrapper_1, func_args_wrapper_2, func_args_wrapper_3,
+        func_args_wrapper_4, func_args_wrapper_5, func_args_wrapper_6, func_args_wrapper_7};
+    const char* env = std::getenv("PSPRECOMP_FUNC_ARGS");
+    int n = 0;
+    while (env && *env && n < FUNC_ARGS_MAX) {
+        char* end = nullptr;
+        uint32_t addr = static_cast<uint32_t>(std::strtoul(env, &end, 16));
+        if (end == env) break;
+        FuncPtr orig = RECOMP_LOOKUP(addr);
+        if (orig) {
+            g_func_args_addr[n] = addr;
+            g_func_args_orig[n] = orig;
+            psp_dispatch_register(addr, wrappers[n]);
+            std::fprintf(stderr, "[FUNC-ARGS] watching 0x%08X\n", addr);
+            n++;
+        }
+        env = (*end == ',') ? end + 1 : end;
+    }
+}

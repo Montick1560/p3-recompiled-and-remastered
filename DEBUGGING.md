@@ -215,6 +215,13 @@ the socket for scripted/agent input.
 
 ## 7. Trace environment flags
 
+- `PSPRECOMP_HLE_TRACE=2`: trace wrappers installed but silent; debug socket `T 1` / `T 0` switches
+  them on/off (trace one moment of a long run).
+- `PSPRECOMP_FUNC_WATCH=<hex>[,<hex>...]`: log each entry of those guest functions with the caller
+  (previous checkpoint), first 200 hits each.
+- `PSPRECOMP_FUNC_ARGS=<hex>[,<hex>...]` (max 8): wrap those functions in the dispatch table and log
+  a0-a3 and v0 per call (first 400). Only calls that go through RECOMP_LOOKUP are seen.
+
 | Flag | Effect |
 |---|---|
 | `PSPRECOMP_STRICT=1` | Abort on LOOKUP_MISS / unimplemented NID |

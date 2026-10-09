@@ -96,6 +96,8 @@ extern RECOMP_FUNC void entry(uint8_t* rdram, recomp_context* ctx);
 /// - Constructors run BEFORE module_start (static initializers set up vtables)
 /// - SDL/GL initialized BEFORE module_start (render queue can accept requests)
 /// - Event loop runs AFTER module_start returns (module_start spawns threads)
+void psp_func_args_install();  // psp_dispatch.cpp
+
 int main(int argc, char* argv[]) {
     (void)argc;
     (void)argv;
@@ -196,6 +198,7 @@ int main(int argc, char* argv[]) {
     //    PSPRECOMP_GAME selects the module at build time; the generic build
     //    (-DPSPRECOMP_GAME=none) registers nothing here.
     game->register_hooks(rdram);
+    psp_func_args_install();  // PSPRECOMP_FUNC_ARGS debug wrappers
 
     // 4. RUNTIME-03: Copy .data/.rodata into rdram
     psp_init_data_sections(rdram);
