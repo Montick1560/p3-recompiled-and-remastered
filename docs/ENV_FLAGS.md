@@ -139,6 +139,19 @@ Read by the runtime binary at start-up or during execution.
   audio device.
 - **Set it when:** verifying audio output without listening to it.
 
+### `PSPRECOMP_SAVEDATA`
+- **Read in:** `runtime/src/hle/psp_savedata.cpp` (`default_root()`; used by the
+  `sceUtilitySavedata*` handlers in `runtime/src/hle/psp_hle_utility.cpp`)
+- **Type:** env (path string).
+- **Default:** `SAVEDATA` under the current working directory.
+- **Effect:** Host directory the savedata utility reads and writes. Each save
+  is a `<gameName><saveName>/` subdirectory holding the game's data file
+  (plaintext, not PSP-encrypted), a real `PARAM.SFO`, and `ICON0.PNG` /
+  `ICON1.PMF` / `PIC1.PNG` / `SND0.AT3` when the game supplies them. Created
+  on first save. An empty value is treated as unset.
+- **Set it when:** keeping saves outside the working directory, or giving a
+  test run its own throw-away save set.
+
 ### `PSPRECOMP_STRICT`
 - **Read in:** `runtime/src/psp_dispatch.cpp`, `runtime/src/main.cpp`,
   `runtime/src/hle/psp_hle_dispatch.cpp`

@@ -68,3 +68,6 @@ tmp-out/
 
 # Python bytecode from script tests
 __pycache__/
+
+# Runtime savedata (default PSPRECOMP_SAVEDATA root)
+SAVEDATA/

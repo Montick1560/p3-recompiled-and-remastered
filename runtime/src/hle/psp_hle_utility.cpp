@@ -1377,14 +1377,10 @@ static constexpr int32_t PSP_UTILITY_STATUS_SHUTDOWN = 4;
 
 // PPSSPP Core/HLE/ErrorCodes.h
 static constexpr uint32_t SCE_ERROR_UTILITY_INVALID_STATUS = 0x80110001U;
-static constexpr uint32_t SCE_UTILITY_SAVEDATA_ERROR_LOAD_NO_DATA =
-    0x80110307U;
-static constexpr uint32_t SCE_UTILITY_SAVEDATA_ERROR_RW_NO_DATA =
-    0x80110327U;
 static constexpr uint32_t SCE_UTILITY_SAVEDATA_ERROR_DELETE_NO_DATA =
     0x80110347U;
-static constexpr uint32_t SCE_UTILITY_SAVEDATA_ERROR_SIZES_NO_DATA =
-    0x801103C7U;
+
+#include "hle/psp_savedata.h"
 
 // pspUtilityDialogCommon.result offset within the param struct.
 static constexpr uint32_t UTILITY_COMMON_RESULT_OFFSET = 28;
@@ -1400,16 +1396,13 @@ struct UtilityDialogState {
 static UtilityDialogState g_savedata_dialog;
 static UtilityDialogState g_msg_dialog;
 
-// We ship no /PSP/SAVEDATA, so every load/read/delete faithfully
-// reports "no data"; save-type modes pretend success (writes out of
-// scope). Mode values: PPSSPP SceUtilitySavedataType.
+// Modes handled by the real savedata back end (psp_savedata.cpp: AUTOLOAD,
+// AUTOSAVE, LOAD, SAVE, LISTLOAD, LISTSAVE, SIZES, LIST, FILES, MAKEDATA*,
+// READDATA*, WRITEDATA*, GETSIZE) never reach this. The rest (delete and
+// erase modes) keep the old behaviour: deletes report "no data", anything
+// else pretends success. Mode values: PPSSPP SceUtilitySavedataType.
 static int32_t savedata_completion_result(uint32_t mode) {
     switch (mode) {
-        case 0:   // AUTOLOAD
-        case 2:   // LOAD
-        case 4:   // LISTLOAD
-            return static_cast<int32_t>(
-                SCE_UTILITY_SAVEDATA_ERROR_LOAD_NO_DATA);
         case 6:   // LISTDELETE
         case 7:   // LISTALLDELETE
         case 9:   // AUTODELETE
@@ -1417,15 +1410,7 @@ static int32_t savedata_completion_result(uint32_t mode) {
         case 21:  // DELETEDATA
             return static_cast<int32_t>(
                 SCE_UTILITY_SAVEDATA_ERROR_DELETE_NO_DATA);
-        case 8:   // SIZES
-            return static_cast<int32_t>(
-                SCE_UTILITY_SAVEDATA_ERROR_SIZES_NO_DATA);
-        case 15:  // READDATASECURE
-        case 16:  // READDATA
-        case 22:  // GETSIZE
-            return static_cast<int32_t>(
-                SCE_UTILITY_SAVEDATA_ERROR_RW_NO_DATA);
-        default:  // AUTOSAVE/SAVE/LISTSAVE/MAKEDATA/WRITEDATA/...
+        default:  // ERASE/ERASESECURE/unknown
             return 0;  // pretend success
     }
 }
@@ -1495,6 +1480,17 @@ static void savedata_complete(UtilityDialogState& dlg, uint8_t* rdram) {
     }
     uint32_t mode = psp_mem_read<uint32_t>(
         rdram, dlg.param_addr + SAVEDATA_MODE_OFFSET);
+    if (psp_savedata::handles_mode(mode)) {
+        // Real host-backed savedata (root: $PSPRECOMP_SAVEDATA or ./SAVEDATA).
+        // execute() writes pspUtilityDialogCommon.result (+28) itself.
+        psp_savedata::Options opts;
+        opts.sdk_version = psp_kernel_compiled_sdk_version();
+        psp_savedata::Outcome out = psp_savedata::execute(
+            rdram, PSP_MEM_SIZE, dlg.param_addr, opts);
+        fprintf(stderr, "[HLE] sceUtilitySavedata %s\n",
+                out.summary.c_str());
+        return;
+    }
     int32_t result = savedata_completion_result(mode);
     psp_mem_write<int32_t>(
         rdram, dlg.param_addr + UTILITY_COMMON_RESULT_OFFSET, result);
