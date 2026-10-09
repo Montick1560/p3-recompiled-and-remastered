@@ -184,4 +184,5 @@ void psp_hle_register_sas();
 
 // sceAtrac3plus (psp_hle_atrac.cpp, on the pure psp_atrac_ctx)
 void psp_hle_register_atrac();
+void psp_hle_register_mpeg();
 

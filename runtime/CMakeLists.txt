@@ -160,6 +160,9 @@ set(RUNTIME_SOURCES
     src/hle/psp_atrac_ctx.cpp
     src/hle/psp_hle_atrac.cpp
     src/hle/psp_savedata.cpp
+    src/hle/psp_psmf.cpp
+    src/hle/psp_mpeg_demux.cpp
+    src/hle/psp_hle_mpeg.cpp
     src/psp_vfpu_core.cpp
     src/psp_vfpu_arith.cpp
     src/psp_vfpu_trig.cpp

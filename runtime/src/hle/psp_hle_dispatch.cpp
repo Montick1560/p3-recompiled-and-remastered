@@ -555,4 +555,7 @@ void psp_hle_register_all_modules() {
 
     // ATRAC3/ATRAC3plus decoding contexts
     psp_hle_register_atrac();
+
+    // sceMpeg movie playback (psp_hle_mpeg.cpp)
+    psp_hle_register_mpeg();
 }
