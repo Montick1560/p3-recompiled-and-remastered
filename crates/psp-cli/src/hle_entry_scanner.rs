@@ -1020,7 +1020,7 @@ pub fn scan_data_code_pointers(
 }
 
 /// Data words pointing into a GAP between known functions (not inside, not at a start) that follow a
-/// terminator (`follows_terminator`) and reach a `jr ra` (0x03E00008) before the next known function
+/// terminator (`follows_terminator`) and reach an unconditional transfer (`jr`, `j`, `b`) before the next known function
 /// start (scan at most 64 words): functions Ghidra never created, reached only through a vtable or
 /// function-pointer table. Sorted, deduplicated; for force entries.
 pub fn scan_data_gap_code_pointers(
@@ -1057,7 +1057,9 @@ pub fn scan_data_gap_code_pointers(
                     break;
                 }
                 match read_word_at(addr, segment_bytes) {
-                    Some(0x03E0_0008) => {
+                    // `jr ra` ends a method; `j` ends an adjustor thunk
+                    // (`j method; addiu a0,a0,-N`).
+                    Some(w) if is_unconditional_transfer(w) => {
                         hit = true;
                         break;
                     }
@@ -1474,5 +1476,16 @@ mod tests {
             scan_data_gap_code_pointers(&segs, &intervals),
             vec![0x100C, 0x1014]
         );
+    }
+
+    #[test]
+    fn test_scan_data_gap_adjustor_thunk() {
+        // OL_Mission 0x08AD4518: `j method; addiu a0,a0,-52` right after an
+        // empty `jr ra; nop` method: a vtable-only adjustor thunk.
+        let code = [0x03E00008, 0x00000000, 0x0A2B4316, 0x2484FFCC, 0x27BDFFF0];
+        let intervals = [(0x1000, 0x1008), (0x1010, 0x1040)];
+        let mut segs = seg(0x1000, &code);
+        segs.extend(seg(0x2000, &[0x00001008]));
+        assert_eq!(scan_data_gap_code_pointers(&segs, &intervals), vec![0x1008]);
     }
 }
