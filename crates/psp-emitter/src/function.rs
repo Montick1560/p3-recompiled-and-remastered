@@ -1167,11 +1167,13 @@ fn emit_op(
         }
         MipsOp::Jalr { rd, rs } => {
             let rs_s = gen.emit_gpr_read(*rs);
-            if *rd != Reg::Zero {
-                // Return address (PC+8) -- in static recompilation this is a no-op;
-                // the caller's return path is handled by the C++ function return.
-            }
+            // Return address (PC+8) is implicit: the call returns to the next
+            // C++ statement. `jalr $zero, rs` links nothing (PPSSPP
+            // Int_JumpRegType), so it is a plain indirect jump like `jr rs`.
             gen.emit_call_lookup_reg(&rs_s);
+            if *rd == Reg::Zero {
+                gen.emit_return();
+            }
         }
 
         // -----------------------------------------------------------------
@@ -2114,6 +2116,13 @@ mod tests {
         let slot = out.find("ctx->r[4] = (int32_t)(ctx->r[4] + 1);").expect(&out);
         let jump = out.find("goto L_08804000;").expect(&out);
         assert!(slot < jump, "{out}");
+    }
+
+    #[test]
+    fn jalr_without_link_is_a_tail_jump() {
+        let out = emit_one(MipsOp::Jalr { rd: Reg::Zero, rs: Reg::Gpr(4) });
+        let call = out.find("CALL_LOOKUP_REG:").expect(&out);
+        assert!(out[call..].contains("return;"), "{out}");
     }
 
     fn emit_one_seq(ops: Vec<MipsOp>) -> String {
