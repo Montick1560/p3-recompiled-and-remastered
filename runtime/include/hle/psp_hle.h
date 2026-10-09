@@ -181,6 +181,7 @@ void psp_hle_register_io();
 void psp_hle_register_display();
 void psp_hle_register_ge();
 void psp_hle_register_power();
+void psp_hle_register_misc();
 void psp_hle_register_ctrl();
 void psp_hle_register_utility();
 
