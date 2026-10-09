@@ -195,7 +195,7 @@ silently dropped. Full protocol details in the issue #35 section below.
 
 | Command | Effect | Reply |
 |---|---|---|
-| `I` | Runtime info (uptime, GE counters, LOOKUP_MISS, recent funcs, threads) | `OK <len>` + one JSON line |
+| `I` | Runtime info (uptime, GE counters, LOOKUP_MISS, recent funcs, threads with their last entered guest function `func`) | `OK <len>` + one JSON line |
 | `R <hexaddr> <decsize>` | Read masked PSP memory (≤65536 bytes; out-of-range zero-filled) | `OK <size>` + raw bytes |
 | `RAW <hexaddr> <decsize>` | Legacy v1 read — unframed | raw bytes only |
 | `W <hexaddr> <hexbytes>` | Write bytes into rdram (masked; whole range must be in bounds) | `OK 0` |
@@ -221,6 +221,8 @@ the socket for scripted/agent input.
   (previous checkpoint), first 200 hits each.
 - `PSPRECOMP_FUNC_ARGS=<hex>[,<hex>...]` (max 8): wrap those functions in the dispatch table and log
   a0-a3 and v0 per call (first 400). Only calls that go through RECOMP_LOOKUP are seen.
+- `PSPRECOMP_FUNC_ARGS_DUMP=<bytes>`: with `PSPRECOMP_FUNC_ARGS`, also hex-dump that many bytes of
+  guest memory at v0 after each logged call (catches a returned block before it is reused).
 
 | Flag | Effect |
 |---|---|
