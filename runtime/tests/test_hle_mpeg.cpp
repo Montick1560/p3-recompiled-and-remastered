@@ -156,7 +156,7 @@ static void setup_mpeg() {
     CHECK_EQ(rd(RING + 0), PACKETS, "ring packets");
     CHECK_EQ(rd(RING + 16), 2048, "ring packet size");
     CHECK_EQ(rd(RING + 24), CALLBACK, "ring callback");
-    CHECK_EQ(callHle("sceMpegCreate", MPEG, MPEG_DATA, 0x10000, RING, 512, 0, 0), 0, "create");
+    CHECK_EQ(callHle("sceMpegCreate", MPEG, MPEG_DATA, 0x10000, RING, 512, 0), 0, "create");
     CHECK_EQ(rd(MPEG), MPEG_DATA + 0x30, "handle written to the mpeg cell");
     CHECK_EQ(rd(RING + 40), MPEG, "ring->mpeg");
     CHECK(std::memcmp(g_ram + ((MPEG_DATA + 0x30) & 0x07FFFFFF), "LIBMPEG", 7) == 0,

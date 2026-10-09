@@ -43,8 +43,6 @@ constexpr int32_t ERR_KERNEL_ILLEGAL_ADDRESS = (int32_t)0x800200D3U;
 
 constexpr int MPEG_AVC_STREAM = 0;
 constexpr int MPEG_ATRAC_STREAM = 1;
-constexpr int MPEG_PCM_STREAM = 2;
-constexpr int MPEG_DATA_STREAM = 3;
 constexpr int MPEG_AUDIO_STREAM = 15;
 
 constexpr uint32_t MPEG_AVC_ES_SIZE = 2048;
