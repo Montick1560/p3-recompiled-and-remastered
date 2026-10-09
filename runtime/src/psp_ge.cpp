@@ -197,6 +197,7 @@ GeListResult ge_process_display_list(
         switch (cmd) {
         // ---- Control flow ----
         case GE_CMD_NOP:
+        case 0xFF:  // GE_CMD_NOP_FF (PPSSPP ge_constants.h): also a no-op
             break;
 
         case GE_CMD_END:
