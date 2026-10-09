@@ -75,6 +75,8 @@ struct PspThread {
     char name[32];              ///< Thread name for debugging
     char wait_reason[24];       ///< Why the thread is blocked (e.g. "sema:259",
                                 ///< "sleep"); diagnostics only, racy reads OK
+    std::atomic<uint32_t> last_func{0}; ///< Last guest function entered by this
+                                        ///< thread (psp_trace_checkpoint; debug I)
 };
 
 /// Initialize scheduler — zero all 64 thread slots.

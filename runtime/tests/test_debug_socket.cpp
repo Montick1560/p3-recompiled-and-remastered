@@ -76,7 +76,7 @@ static int fake_thread_list(PspDebugThreadInfo* out, int max) {
     if (max < 2) return 0;
     out[0] = PspDebugThreadInfo{0, "user_main", "RUNNING", ""};
     // Hostile name: embedded quote + control char must be JSON-escaped.
-    out[1] = PspDebugThreadInfo{1, "ev\"il\x01", "WAIT", "sema:259"};
+    out[1] = PspDebugThreadInfo{1, "ev\"il\x01", "WAIT", "sema:259", 0x0884B23Cu};
     return 2;
 }
 
@@ -257,6 +257,8 @@ static void test_info_json(uint8_t* rdram) {
                 "JSON carries thread name");
     ASSERT_TRUE(j.find("\"wait\":\"sema:259\"") != std::string::npos,
                 "JSON carries wait reason");
+    ASSERT_TRUE(j.find("\"func\":\"0x0884B23C\"") != std::string::npos,
+                "JSON carries the last guest function the thread entered");
     ASSERT_TRUE(j.find("ev\\\"il\\u0001") != std::string::npos,
                 "hostile thread name is JSON-escaped");
 

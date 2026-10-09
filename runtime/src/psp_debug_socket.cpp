@@ -202,7 +202,9 @@ static std::string build_info_json() {
             json_append_escaped(j, threads[i].status);
             j += "\",\"wait\":\"";
             json_append_escaped(j, threads[i].wait_reason);
-            j += "\"}";
+            std::snprintf(buf, sizeof(buf), "\",\"func\":\"0x%08X\"}",
+                          threads[i].last_func);
+            j += buf;
         }
     }
     j += "]}\n";

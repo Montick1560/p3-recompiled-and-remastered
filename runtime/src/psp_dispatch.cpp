@@ -1,5 +1,6 @@
 #include "recomp.h"
 #include "psp_overlay.h"
+#include "psp_scheduler.h"
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_kernel.h"
 #include <atomic>
@@ -287,6 +288,10 @@ void psp_trace_checkpoint(uint32_t addr) {
     }
     g_prev_func_addr = g_last_func_addr;
     g_last_func_addr = addr;
+    // Per-thread last entry for the debug socket I command (the shared ring
+    // below interleaves every thread).
+    static thread_local PspThread* const self = psp_get_current_thread();
+    if (self) self->last_func.store(addr, std::memory_order_relaxed);
     g_func_ring[(g_func_ring_pos++) & 31u] = addr;
     // [#35] shared (cross-thread) ring for the debug socket I command.
     // One relaxed fetch_add + store per function entry; measured noise is
