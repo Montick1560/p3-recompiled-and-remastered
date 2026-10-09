@@ -33,6 +33,8 @@ struct PspDebugThreadInfo {
     char name[32];
     char status[16];       ///< "DORMANT"/"READY"/"RUNNING"/"WAIT"/"DEAD"/"WAIT_SLEEP"
     char wait_reason[24];  ///< e.g. "sema:259", "sleep", "" when not waiting
+    uint32_t ra = 0;       ///< guest $ra in the thread's context (racy snapshot;
+    uint32_t sp = 0;       ///< after a leaf call it points into the caller's loop)
 };
 
 /// Dependency seams for the I and S commands. All members are optional:
