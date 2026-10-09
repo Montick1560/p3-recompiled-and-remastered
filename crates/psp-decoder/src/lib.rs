@@ -141,6 +141,8 @@ pub fn decode_word(word: u32, vaddr: u32) -> Result<MipsOp, DecodeError> {
         0x2A => Ok(MipsOp::Swl { rt: rt_reg, rs: rs_reg, offset }),
         0x2B => Ok(MipsOp::Sw { rt: rt_reg, rs: rs_reg, offset }),
         0x2E => Ok(MipsOp::Swr { rt: rt_reg, rs: rs_reg, offset }),
+        0x30 => Ok(MipsOp::Ll { rt: rt_reg, base: rs_reg, offset }),
+        0x38 => Ok(MipsOp::Sc { rt: rt_reg, base: rs_reg, offset }),
         0x2F => {
             let op = ((word >> 16) & 0x1F) as u8;
             Ok(MipsOp::Cache { op, rs: rs_reg, offset })
@@ -165,6 +167,26 @@ pub fn decode_word(word: u32, vaddr: u32) -> Result<MipsOp, DecodeError> {
         0x3E => vfpu::decode_sv_q(word, vaddr),
         0x3F => Ok(MipsOp::VfpuFlush {}),
         _ => Err(DecodeError::Unknown(word, vaddr)),
+    }
+}
+
+#[cfg(test)]
+mod cpu_audit_tests {
+    use super::decode_word;
+    use psp_ir::{MipsOp, Reg};
+
+    #[test]
+    fn ll_sc_decode() {
+        let ll = decode_word(0xC0880004, 0x08800000).unwrap();
+        assert!(
+            matches!(ll, MipsOp::Ll { rt: Reg::Gpr(8), base: Reg::Gpr(4), offset: 4 }),
+            "{ll:?}"
+        );
+        let sc = decode_word(0xE0880004, 0x08800000).unwrap();
+        assert!(
+            matches!(sc, MipsOp::Sc { rt: Reg::Gpr(8), base: Reg::Gpr(4), offset: 4 }),
+            "{sc:?}"
+        );
     }
 }
 

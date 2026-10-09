@@ -88,6 +88,8 @@ struct recomp_context {
     // sched_preempt(ctx), which reloads it. With PSPRECOMP_PREEMPT unset/0 this
     // is a dead-effect counter + a no-op call (default-off — Patapon-identical).
     int32_t preempt_budget;
+    uint32_t llbit;
+    uint32_t fcr31;
 };
 // Alias helpers (emitted code uses ctx->r[N], ctx->f[N].fl, etc.)
 // ctx->r[0] is always 0 — enforced by emitter suppression, not runtime check.
@@ -640,6 +642,20 @@ mod tests {
             out.contains("psp_trace_checkpoint(0x08804000U)"),
             "function preamble must call psp_trace_checkpoint with address"
         );
+    }
+
+    #[test]
+    fn emit_recomp_h_appends_llbit_then_fcr31() {
+        let h = CppGenerator::emit_recomp_h();
+        let struct_start = h.find("struct recomp_context {").expect("recomp_context");
+        let struct_end = h[struct_start..].find("\n};").expect("struct end") + struct_start;
+        let body = &h[struct_start..struct_end];
+        let budget = body.find("int32_t preempt_budget;").expect("preempt_budget");
+        let ll = body.find("uint32_t llbit;").expect("llbit field");
+        let fcr = body.find("uint32_t fcr31;").expect("fcr31 field");
+        assert!(budget < ll && ll < fcr, "llbit then fcr31 must follow every existing field");
+        let tail = body[fcr + "uint32_t fcr31;".len()..].trim();
+        assert!(tail.is_empty(), "fcr31 must be the last field, tail={tail:?}");
     }
 
     #[test]

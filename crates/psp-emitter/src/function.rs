@@ -1407,7 +1407,19 @@ fn emit_op(
         }
         MipsOp::Sltiu { rt, rs, imm } => {
             let rs_s = gen.emit_gpr_read(*rs);
-            gen.emit_gpr_write(*rt, &format!("(uint32_t)({rs_s}) < {imm}u ? 1 : 0"));
+            let sext = *imm as i16;
+            let suimm = sext as u32;
+            let rhs = if sext < 0 {
+                format!("0x{suimm:08X}u")
+            } else {
+                format!("{sext}u")
+            };
+            gen.emit_gpr_write(
+                *rt,
+                &format!(
+                    "(uint32_t)({rs_s}) < (uint32_t)(int32_t)(int16_t){sext} /* {rhs} */ ? 1 : 0"
+                ),
+            );
         }
         MipsOp::Andi { rt, rs, imm } => {
             let rs_s = gen.emit_gpr_read(*rs);
@@ -1439,6 +1451,11 @@ fn emit_op(
         MipsOp::Lw { rt, rs, offset } => {
             let rs_s = gen.emit_gpr_read(*rs);
             gen.emit_gpr_write(*rt, &format!("MEM_W(rdram, {rs_s} + {offset})"));
+        }
+        MipsOp::Ll { rt, base, offset } => {
+            let base_s = gen.emit_gpr_read(*base);
+            gen.emit_gpr_write(*rt, &format!("MEM_W(rdram, {base_s} + {offset})"));
+            gen.emit_raw("ctx->llbit = 1;");
         }
         MipsOp::Lbu { rt, rs, offset } => {
             let rs_s = gen.emit_gpr_read(*rs);
@@ -1494,6 +1511,14 @@ fn emit_op(
             let rs_s = gen.emit_gpr_read(*rs);
             let rt_s = gen.emit_gpr_read(*rt);
             gen.emit_raw(&format!("MEM_W_WRITE(rdram, {rs_s} + {offset}, {rt_s});"));
+        }
+        MipsOp::Sc { rt, base, offset } => {
+            let base_s = gen.emit_gpr_read(*base);
+            let rt_s = gen.emit_gpr_read(*rt);
+            gen.emit_raw(&format!(
+                "if (ctx->llbit) {{ MEM_W_WRITE(rdram, {base_s} + {offset}, {rt_s}); }}"
+            ));
+            gen.emit_gpr_write(*rt, "ctx->llbit ? 1 : 0");
         }
         MipsOp::Swl { rt, rs, offset } => {
             let rs_s = gen.emit_gpr_read(*rs);
@@ -1770,6 +1795,30 @@ fn emit_op(
             let rt_s = gen.emit_gpr_read(*rt);
             gen.emit_raw(&format!("ctx->fi[{fs_n}] = (uint32_t)({rt_s});"));
         }
+        MipsOp::Cfc1 { rt, fs } => {
+            match *fs {
+                31 => {
+                    let cc = gen.emit_fpu_cc_read();
+                    gen.emit_raw(&format!(
+                        "ctx->fcr31 = (ctx->fcr31 & ~(1u << 23)) | ((({cc}) ? 1u : 0u) << 23);"
+                    ));
+                    gen.emit_gpr_write(*rt, "ctx->fcr31");
+                }
+                0 => {
+                    gen.emit_gpr_write(*rt, "0x00003351u");
+                }
+                _ => {
+                    gen.emit_gpr_write(*rt, "0");
+                }
+            }
+        }
+        MipsOp::Ctc1 { rt, fs } => {
+            let rt_s = gen.emit_gpr_read(*rt);
+            if *fs == 31 {
+                gen.emit_raw(&format!("ctx->fcr31 = (uint32_t)({rt_s}) & 0x0181FFFFu;"));
+                gen.emit_fpu_cc_write(&format!("(((uint32_t)({rt_s}) >> 23) & 1u) != 0"));
+            }
+        }
         MipsOp::Lwc1 { ft, rs, offset } => {
             let rs_s = gen.emit_gpr_read(*rs);
             let ft_n = ft.0;
@@ -1947,8 +1996,74 @@ mod tests {
     fn emit_one(op: MipsOp) -> String {
         let mut gen = TestGenerator::new();
         emit_function(&make_func(vec![op]), &mut gen, &ImportMap::new());
-        gen.output.join("
-")
+        gen.output.join("\n")
+    }
+
+    fn emit_word(word: u32) -> String {
+        let op = psp_decoder::decode_word(word, 0x08800000).unwrap();
+        emit_one(op)
+    }
+
+    #[test]
+    fn sltiu_sign_extends_immediate() {
+        let neg = emit_word(0x2C88FFFF);
+        assert!(
+            neg.contains("0xFFFFFFFF")
+                || neg.contains("(int16_t)-1")
+                || neg.contains("(int16_t)0xFFFF"),
+            "sltiu t0,a0,-1 must compare against the sign-extended immediate, got {neg}"
+        );
+        assert!(!neg.contains("65535"), "must not zero-extend -1 to 65535: {neg}");
+        let pos = emit_word(0x2C880010);
+        assert!(
+            pos.contains("16"),
+            "sltiu t0,a0,16 must still compare against 16, got {pos}"
+        );
+    }
+
+    #[test]
+    fn ll_emits_load_and_sets_llbit() {
+        let out = emit_one(MipsOp::Ll {
+            rt: Reg::Gpr(8),
+            base: Reg::Gpr(4),
+            offset: 4,
+        });
+        assert!(out.contains("MEM_W"), "ll must emit a 32-bit load, got {out}");
+        assert!(out.contains("llbit"), "ll must set llbit, got {out}");
+    }
+
+    #[test]
+    fn sc_emits_conditional_store_and_writes_rt() {
+        let out = emit_one(MipsOp::Sc {
+            rt: Reg::Gpr(8),
+            base: Reg::Gpr(4),
+            offset: 4,
+        });
+        assert!(out.contains("MEM_W_WRITE"), "sc must emit a word store, got {out}");
+        assert!(out.contains("llbit"), "sc must test llbit, got {out}");
+        assert!(out.contains("ctx->r[8]"), "sc must write rt, got {out}");
+    }
+
+    #[test]
+    fn cfc1_ctc1_reference_fcr31_and_fpu_cc() {
+        let cfc = emit_one(MipsOp::Cfc1 { rt: Reg::Gpr(2), fs: 31 });
+        assert!(cfc.contains("fcr31"), "{cfc}");
+        assert!(cfc.contains("fpu_cc"), "{cfc}");
+        let ctc = emit_one(MipsOp::Ctc1 { rt: Reg::Gpr(2), fs: 31 });
+        assert!(ctc.contains("fcr31"), "{ctc}");
+        assert!(ctc.contains("fpu_cc"), "{ctc}");
+    }
+
+    #[test]
+    fn jalr_rd_zero_does_not_assign_ra() {
+        let out = emit_one(MipsOp::Jalr {
+            rd: Reg::Zero,
+            rs: Reg::Gpr(4),
+        });
+        assert!(
+            !out.contains("ctx->r[31]"),
+            "jalr rd=0 must not link, got {out}"
+        );
     }
 
     #[test]
