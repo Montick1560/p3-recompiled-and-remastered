@@ -825,25 +825,14 @@ fn enhance_function_discovery(
     // caller. Iterated to a fixpoint because a rescued tail can itself
     // branch into a further gap; each round is re-sized + re-clamped so the
     // next round sees correct intervals.
-    // Fall-through ends of bodies cut at their placeholder size (long
-    // frameless constructors) are claimed the same way; each rescued piece is
-    // placeholder-sized too, so a long body needs one round per 256 bytes.
     let mut rescued_total = 0usize;
-    for _ in 0..512 {
-        let mut rescued = crate::hle_entry_scanner::rescue_gap_branch_targets(
+    for _ in 0..4 {
+        let rescued = crate::hle_entry_scanner::rescue_gap_branch_targets(
             &mut analysis.functions,
             segment_bytes,
             seg_start,
             seg_end,
         );
-        if std::env::var("PSPRECOMP_NO_FALLTHROUGH_RESCUE").as_deref() != Ok("1") {
-            rescued.extend(crate::hle_entry_scanner::rescue_fall_through_ends(
-                &mut analysis.functions,
-                segment_bytes,
-                seg_start,
-                seg_end,
-            ));
-        }
         if rescued.is_empty() {
             break;
         }
@@ -856,6 +845,35 @@ fn enhance_function_discovery(
             &mut analysis.functions,
         );
     }
+    // Pass 5: fall-through ends of bodies cut at their placeholder size (long
+    // frameless constructors) are claimed as functions. Each rescued piece is
+    // placeholder-sized too, so a long body needs one round per 256 bytes.
+    // Rounds only clamp (never re-grow): re-running the framed resize every
+    // round let existing functions grow over their neighbours and swallow
+    // real entries (FUN_08819C08 absorbed FUN_0881AB4C), so this pass can
+    // only add functions, never reshape the ones already found.
+    let mut fall_through_total = 0usize;
+    if std::env::var("PSPRECOMP_NO_FALLTHROUGH_RESCUE").as_deref() != Ok("1") {
+        for _ in 0..512 {
+            let rescued = crate::hle_entry_scanner::rescue_fall_through_ends(
+                &mut analysis.functions,
+                segment_bytes,
+                seg_start,
+                seg_end,
+            );
+            if rescued.is_empty() {
+                break;
+            }
+            fall_through_total += rescued.len();
+            crate::hle_entry_scanner::correct_function_sizes(
+                &mut analysis.functions,
+            );
+        }
+    }
+    tracing::info!(
+        "Fall-through rescue: {} placeholder-truncated body ends claimed",
+        fall_through_total,
+    );
     tracing::info!(
         "Gap-target rescue: {} unclaimed static branch/jump targets \
          claimed as recovered functions",
