@@ -192,6 +192,15 @@ extern void vfpu_vscl(recomp_context* ctx, uint8_t* rdram, uint8_t vd, uint8_t v
 extern void vfpu_vhdp(recomp_context* ctx, uint8_t* rdram, uint8_t vd, uint8_t vs, uint8_t vt, uint8_t size);
 extern void vfpu_vcrs(recomp_context* ctx, uint8_t* rdram, uint8_t vd, uint8_t vs, uint8_t vt, uint8_t size);
 extern void vfpu_vdet(recomp_context* ctx, uint8_t* rdram, uint8_t vd, uint8_t vs, uint8_t vt, uint8_t size);
+extern void vfpu_vsbn(recomp_context* ctx, uint8_t* rdram, uint8_t vd, uint8_t vs, uint8_t vt, uint8_t size);
+extern void vfpu_vmfvc(recomp_context* ctx, uint8_t vd, uint8_t imm);
+extern void vfpu_vmtvc(recomp_context* ctx, uint8_t vs, uint8_t imm);
+extern void vfpu_vsgn(recomp_context* ctx, uint8_t* rdram, uint8_t vd, uint8_t vs, uint8_t size);
+extern void vfpu_vt4444(recomp_context* ctx, uint8_t* rdram, uint8_t vd, uint8_t vs, uint8_t size);
+extern void vfpu_vt5551(recomp_context* ctx, uint8_t* rdram, uint8_t vd, uint8_t vs, uint8_t size);
+extern void vfpu_vt5650(recomp_context* ctx, uint8_t* rdram, uint8_t vd, uint8_t vs, uint8_t size);
+extern void vfpu_vsbz(recomp_context* ctx, uint8_t* rdram, uint8_t vd, uint8_t vs, uint8_t size);
+extern void vfpu_vlgb(recomp_context* ctx, uint8_t* rdram, uint8_t vd, uint8_t vs, uint8_t size);
 extern void vfpu_vcmp(recomp_context* ctx, uint8_t* rdram, uint8_t vs, uint8_t vt, uint8_t cond, uint8_t size);
 extern void vfpu_vcmov(recomp_context* ctx, uint8_t* rdram, uint8_t vd, uint8_t vs, uint8_t cc, uint8_t size);
 extern void vfpu_vmov(recomp_context* ctx, uint8_t* rdram, uint8_t vd, uint8_t vs, uint8_t size);
@@ -605,6 +614,10 @@ mod tests {
         assert!(h.contains("vfpu_unknown_stub"), "recomp.h must declare vfpu_unknown_stub");
         assert!(h.contains("vfpu_vrot"), "recomp.h must declare vfpu_vrot");
         assert!(h.contains("vfpu_mfv"), "recomp.h must declare vfpu_mfv");
+        for name in ["vfpu_vsbn", "vfpu_vmfvc", "vfpu_vmtvc", "vfpu_vsgn", "vfpu_vt4444",
+                     "vfpu_vt5551", "vfpu_vt5650", "vfpu_vsbz", "vfpu_vlgb"] {
+            assert!(h.contains(name), "recomp.h must declare {name}");
+        }
     }
 
     #[test]

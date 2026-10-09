@@ -177,7 +177,13 @@ pub(crate) fn decode_vfpu0(
             vt: t,
             size: sz,
         }),
-        // 6 => vsbn (subtract-negate, uncommon) -- treat as unknown
+        // PPSSPP tableVFPU0: 2 vsbn (scale by n), 7 vdiv.
+        2 => Ok(MipsOp::VfpuSbn {
+            vd: d,
+            vs: s,
+            vt: t,
+            size: sz,
+        }),
         7 => Ok(MipsOp::VfpuDiv {
             vd: d,
             vs: s,
@@ -390,7 +396,17 @@ pub(crate) fn decode_vfpu4(
                 imm: imm3 | (tf << 3),
             })
         }
-        24..=31 => unary_imm(VfpuUnaryOp::Wbn),
+        24..=31 => {
+            // vwbn: PPSSPP Int_Vwbn takes exp = (op >> 16) & 0xFF (8 bits;
+            // bits 23:21 overlap the dispatch index).
+            Ok(MipsOp::VfpuUnary {
+                vd: d,
+                vs: s,
+                op: VfpuUnaryOp::Wbn,
+                size: sz,
+                imm: ((word >> 16) & 0xFF) as u8,
+            })
+        }
         _ => unknown(),
     }
 }
@@ -458,10 +474,11 @@ fn decode_vfpu7(
         1 => VfpuUnaryOp::Vrndi,
         2 => VfpuUnaryOp::Vrndf1,
         3 => VfpuUnaryOp::Vrndf2,
-        // PPSSPP tableVFPU7: 4-17 and 20-21 are INVALID; 22 vsbz and
-        // 23 vlgb are not modelled.
+        // PPSSPP tableVFPU7: 4-17 and 20-21 are INVALID.
         18 => VfpuUnaryOp::Vf2h,
         19 => VfpuUnaryOp::Vh2f,
+        22 => VfpuUnaryOp::Vsbz,
+        23 => VfpuUnaryOp::Vlgb,
         24 => VfpuUnaryOp::Vuc2i,
         25 => VfpuUnaryOp::Vc2i,
         26 => VfpuUnaryOp::Vus2i,
@@ -507,7 +524,20 @@ fn decode_vfpu9(
         7 => VfpuUnaryOp::Vavg,
         8 => VfpuUnaryOp::Vsrt3,
         9 => VfpuUnaryOp::Vsrt4,
-        // 16/17 vmfvc/vmtvc, 24-26 vt4444/vt5551/vt5650 not yet modelled
+        10 => VfpuUnaryOp::Vsgn,
+        // vmfvc / vmtvc (PPSSPP Int_Vmfvc / Int_Vmtvc): vmfvc has
+        // vd = bits 6:0 and imm = (op >> 8) & 0x7F; vmtvc has
+        // vs = (op >> 8) & 0x7F and imm = op & 0x7F. Both are VFPU9 and
+        // take no size.
+        16 => {
+            return Ok(MipsOp::VfpuVmfvc { vd: d, imm: s });
+        }
+        17 => {
+            return Ok(MipsOp::VfpuVmtvc { vs: s, imm: d });
+        }
+        25 => VfpuUnaryOp::Vt4444,
+        26 => VfpuUnaryOp::Vt5551,
+        27 => VfpuUnaryOp::Vt5650,
         _ => {
             return Ok(MipsOp::VfpuUnknown {
                 opcode: word,
@@ -983,6 +1013,64 @@ mod tests {
         // Former (wrong) slots are invalid in PPSSPP.
         assert_eq!(unary_op_of(0xD02C0100), None);
         assert_eq!(unary_op_of(0xD0280100), None);
+    }
+
+    #[test]
+    fn test_vfpu9_new_ops_decode() {
+        // PPSSPP tableVFPU9: 10 vsgn, 16 vmfvc, 17 vmtvc, 25/26/27 vt4444/5551/5650.
+        assert_eq!(unary_op_of(0xD04A0000), Some(VfpuUnaryOp::Vsgn));
+        assert_eq!(unary_op_of(0xD0590000), Some(VfpuUnaryOp::Vt4444));
+        assert_eq!(unary_op_of(0xD05A0000), Some(VfpuUnaryOp::Vt5551));
+        assert_eq!(unary_op_of(0xD05B0000), Some(VfpuUnaryOp::Vt5650));
+        // Still invalid slots stay unknown.
+        assert_eq!(unary_op_of(0xD04B0000), None);
+        assert_eq!(unary_op_of(0xD0580000), None);
+        // vmfvc vd=0x05, imm=(op>>8)&0x7F=0x23
+        match decode_vfpu4(0xD0502305, 0).unwrap() {
+            MipsOp::VfpuVmfvc { vd, imm } => {
+                assert_eq!((vd, imm), (0x05, 0x23));
+            }
+            other => panic!("expected VfpuVmfvc, got {other:?}"),
+        }
+        // vmtvc vs=(op>>8)&0x7F=0x06, imm=op&0x7F=0x03
+        match decode_vfpu4(0xD0510603, 0).unwrap() {
+            MipsOp::VfpuVmtvc { vs, imm } => {
+                assert_eq!((vs, imm), (0x06, 0x03));
+            }
+            other => panic!("expected VfpuVmtvc, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_vfpu7_vsbz_vlgb_and_vfpu0_vsbn_decode() {
+        assert_eq!(unary_op_of(0xD0360000), Some(VfpuUnaryOp::Vsbz));
+        assert_eq!(unary_op_of(0xD0370000), Some(VfpuUnaryOp::Vlgb));
+        let w = encode_vfpu0(2, 0x01, 0x02, 0x03, 4);
+        match decode_vfpu0(w, 0).unwrap() {
+            MipsOp::VfpuSbn { vd, vs, vt, size } => {
+                assert_eq!((vd, vs, vt, size), (1, 2, 3, 4));
+            }
+            other => panic!("expected VfpuSbn, got {other:?}"),
+        }
+        // sub 3..6 stay invalid
+        for sub in 3..7u8 {
+            let w = encode_vfpu0(sub, 1, 2, 3, 4);
+            assert!(matches!(decode_vfpu0(w, 0).unwrap(), MipsOp::VfpuUnknown { .. }));
+        }
+    }
+
+    #[test]
+    fn test_vwbn_immediate_is_eight_bits() {
+        // idx 31 (bits 25:21 = 0b11111) with bits 23:16 = 0xE5: the exponent
+        // is the full byte, not the low 5 bits.
+        match decode_vfpu4(0xD3E50000, 0).unwrap() {
+            MipsOp::VfpuUnary { op: VfpuUnaryOp::Wbn, imm, .. } => assert_eq!(imm, 0xE5),
+            other => panic!("expected Wbn, got {other:?}"),
+        }
+        match decode_vfpu4(0xD3000000 | (0x1F << 16), 0).unwrap() {
+            MipsOp::VfpuUnary { op: VfpuUnaryOp::Wbn, imm, .. } => assert_eq!(imm, 0x1F),
+            other => panic!("expected Wbn, got {other:?}"),
+        }
     }
 
     #[test]

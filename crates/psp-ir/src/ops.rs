@@ -64,6 +64,16 @@ pub enum VfpuUnaryOp {
     Vrndf1,
     Vrndf2,
     Vcst,
+    /// vsgn (VFPU9 10): per-lane sign of s - 0.
+    Vsgn,
+    /// vt4444 / vt5551 / vt5650 (VFPU9 25/26/27): pack RGBA words to 16 bit.
+    Vt4444,
+    Vt5551,
+    Vt5650,
+    /// vsbz (VFPU7 22): scale by zero (exponent forced to 127).
+    Vsbz,
+    /// vlgb (VFPU7 23): extract the unbiased exponent.
+    Vlgb,
 }
 
 /// VFPU matrix unary operation sub-op discriminator for opcode 0x3C (VFPU6).
@@ -370,6 +380,10 @@ pub enum MipsOp {
     VfpuMfvc { rt: Reg, imm: u8 },
     /// Move to VFPU control register.
     VfpuMtvc { rt: Reg, imm: u8 },
+    /// vmfvc (VFPU9 16): VFPU single register `vd` <- control register `imm`.
+    VfpuVmfvc { vd: u8, imm: u8 },
+    /// vmtvc (VFPU9 17): control register `imm` <- VFPU single register `vs`.
+    VfpuVmtvc { vs: u8, imm: u8 },
 
     // -------------------------------------------------------------------------
     // VFPU — Prefix (opcode 0x37 sub-ops 0-2)
@@ -394,6 +408,8 @@ pub enum MipsOp {
     VfpuSub { vd: u8, vs: u8, vt: u8, size: u8 },
     /// VFPU vector divide.
     VfpuDiv { vd: u8, vs: u8, vt: u8, size: u8 },
+    /// VFPU scale-by-n (vsbn, VFPU0 sub 2): replaces lane 0's exponent.
+    VfpuSbn { vd: u8, vs: u8, vt: u8, size: u8 },
 
     // -------------------------------------------------------------------------
     // VFPU — Arithmetic (VFPU1 group, opcode 0x19)

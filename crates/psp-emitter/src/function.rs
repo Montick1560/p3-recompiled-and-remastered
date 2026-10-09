@@ -1794,6 +1794,9 @@ fn emit_op(
         | MipsOp::VfpuBvt { .. }
         | MipsOp::VfpuMfvc { .. }
         | MipsOp::VfpuMtvc { .. }
+        | MipsOp::VfpuVmfvc { .. }
+        | MipsOp::VfpuVmtvc { .. }
+        | MipsOp::VfpuSbn { .. }
         | MipsOp::VfpuPrefix { .. }
         | MipsOp::VfpuViim { .. }
         | MipsOp::VfpuVfim { .. }

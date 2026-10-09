@@ -57,6 +57,9 @@ pub(crate) fn emit_vfpu_op(
         MipsOp::VfpuSub { vd, vs, vt, size } => {
             emit_binary(gen, "vfpu_vsub", *vd, *vs, *vt, *size);
         }
+        MipsOp::VfpuSbn { vd, vs, vt, size } => {
+            emit_binary(gen, "vfpu_vsbn", *vd, *vs, *vt, *size);
+        }
         MipsOp::VfpuMul { vd, vs, vt, size } => {
             emit_binary(gen, "vfpu_vmul", *vd, *vs, *vt, *size);
         }
@@ -219,6 +222,17 @@ pub(crate) fn emit_vfpu_op(
             ));
         }
 
+        MipsOp::VfpuVmfvc { vd, imm } => {
+            gen.emit_raw(&format!(
+                "vfpu_vmfvc(ctx, 0x{vd:02X}, {imm});"
+            ));
+        }
+        MipsOp::VfpuVmtvc { vs, imm } => {
+            gen.emit_raw(&format!(
+                "vfpu_vmtvc(ctx, 0x{vs:02X}, {imm});"
+            ));
+        }
+
         // -------------------------------------------------------------
         // Branches
         // -------------------------------------------------------------
@@ -365,6 +379,12 @@ fn emit_unary_op(
         VfpuUnaryOp::Vavg => {
             emit_unary(gen, "vfpu_vavg", vd, vs, size);
         }
+        VfpuUnaryOp::Vsgn => emit_unary(gen, "vfpu_vsgn", vd, vs, size),
+        VfpuUnaryOp::Vt4444 => emit_unary(gen, "vfpu_vt4444", vd, vs, size),
+        VfpuUnaryOp::Vt5551 => emit_unary(gen, "vfpu_vt5551", vd, vs, size),
+        VfpuUnaryOp::Vt5650 => emit_unary(gen, "vfpu_vt5650", vd, vs, size),
+        VfpuUnaryOp::Vsbz => emit_unary(gen, "vfpu_vsbz", vd, vs, size),
+        VfpuUnaryOp::Vlgb => emit_unary(gen, "vfpu_vlgb", vd, vs, size),
 
         // Conversion ops with int-to-float: fn(ctx, rdram, vd, vs, size)
         VfpuUnaryOp::Vi2uc => {
@@ -560,6 +580,47 @@ mod tests {
         emit_vfpu_op(&op, &mut gen, 0, 0x1000);
         assert!(gen.output[0].contains("vfpu_vocp("), "{:?}", gen.output);
         assert!(!gen.output[0].contains("vfpu_vsocp"), "{:?}", gen.output);
+    }
+
+    #[test]
+    fn emit_new_vfpu_ops_call_runtime() {
+        let cases: [(VfpuUnaryOp, &str); 6] = [
+            (VfpuUnaryOp::Vsgn, "vfpu_vsgn("),
+            (VfpuUnaryOp::Vt4444, "vfpu_vt4444("),
+            (VfpuUnaryOp::Vt5551, "vfpu_vt5551("),
+            (VfpuUnaryOp::Vt5650, "vfpu_vt5650("),
+            (VfpuUnaryOp::Vsbz, "vfpu_vsbz("),
+            (VfpuUnaryOp::Vlgb, "vfpu_vlgb("),
+        ];
+        for (op, name) in cases {
+            let mut gen = TestGenerator::new();
+            let m = MipsOp::VfpuUnary { vd: 0x08, vs: 0x04, op, size: 2, imm: 0 };
+            emit_vfpu_op(&m, &mut gen, 0, 0x1000);
+            assert!(gen.output[0].contains(name), "{:?}", gen.output);
+            assert!(gen.output[0].contains("0x08, 0x04, 2)"), "{:?}", gen.output);
+        }
+        let mut gen = TestGenerator::new();
+        emit_vfpu_op(
+            &MipsOp::VfpuSbn { vd: 1, vs: 2, vt: 3, size: 4 },
+            &mut gen, 0, 0x1000,
+        );
+        assert!(gen.output[0].contains("vfpu_vsbn(ctx, rdram, 0x01, 0x02, 0x03, 4)"));
+        let mut gen = TestGenerator::new();
+        emit_vfpu_op(&MipsOp::VfpuVmfvc { vd: 5, imm: 35 }, &mut gen, 0, 0x1000);
+        assert!(gen.output[0].contains("vfpu_vmfvc(ctx, 0x05, 35)"), "{:?}", gen.output);
+        let mut gen = TestGenerator::new();
+        emit_vfpu_op(&MipsOp::VfpuVmtvc { vs: 6, imm: 3 }, &mut gen, 0, 0x1000);
+        assert!(gen.output[0].contains("vfpu_vmtvc(ctx, 0x06, 3)"), "{:?}", gen.output);
+    }
+
+    #[test]
+    fn emit_vwbn_passes_full_immediate() {
+        let mut gen = TestGenerator::new();
+        let op = MipsOp::VfpuUnary {
+            vd: 1, vs: 2, op: VfpuUnaryOp::Wbn, size: 1, imm: 0xE5,
+        };
+        emit_vfpu_op(&op, &mut gen, 0, 0x1000);
+        assert!(gen.output[0].contains(", 229, 1)"), "{:?}", gen.output);
     }
 
     #[test]
