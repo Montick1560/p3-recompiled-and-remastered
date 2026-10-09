@@ -944,6 +944,18 @@ void hle_sceMpegAvcDecodeYCbCr(uint8_t* rdram, recomp_context* ctx) {
     } else {
         c->avcFrameStatus = 0;
     }
+    {
+        static int calls = 0, misses = 0;
+        calls++;
+        misses += c->avcFrameStatus == 0;
+        if ((calls % 120) == 0) {
+            std::fprintf(stderr,
+                         "[HLE] sceMpegAvcDecodeYCbCr stats: %d calls, %d without picture, "
+                         "pending video bytes=%zu ended=%d\n",
+                         calls, misses, c->demux ? c->demux->pendingVideoBytes() : 0,
+                         c->inputEnded ? 1 : 0);
+        }
+    }
     r.packetsAvail = occupied_packets(c, r.packets);
     write_ring(rdram, c->ringAddr, r);
     au.pts = c->videoPts + c->firstTimestamp;

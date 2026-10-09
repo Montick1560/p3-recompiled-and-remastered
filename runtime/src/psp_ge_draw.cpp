@@ -362,12 +362,9 @@ static int acquire_target(uint32_t key) {
 // Bind the FBO for the current FRAMEBUFPTR. key==0 (FRAMEBUFPTR not yet seen)
 // keeps the current/last target so early lists still land somewhere.
 void ge_draw_select_target(uint32_t fb_addr_raw) {
+    // Offset 0 is a real buffer (games double-buffer 0x04000000 and
+    // 0x04044000); before any FRAMEBUFPTR the GE default is offset 0 too.
     uint32_t key = ge_fb_key(fb_addr_raw);
-    if (key == 0) {
-        if (g_current_target < 0) g_current_target = acquire_target(0);
-        glBindFramebuffer(GL_FRAMEBUFFER, g_targets[g_current_target].fbo);
-        return;
-    }
     int slot = acquire_target(key);
     g_current_target = slot;
     if (g_front_target < 0) g_front_target = slot;
@@ -945,11 +942,11 @@ void ge_present_frame(
         if (g_targets[i].fbo != 0 && g_targets[i].key == key) { slot = i; break; }
     }
     if (slot < 0) {
-        if (key != 0) {
+        if (fb_addr != 0) {
             // Materialize the displayed buffer's own (cleared) FBO.
             slot = acquire_target(key);
         } else {
-            // key==0 (FRAMEBUFPTR/displayed addr not yet meaningful): keep the
+            // fb_addr==0 (no display buffer set yet): keep the
             // most-recently-rendered target so present never blanks.
             slot = (g_front_target >= 0) ? g_front_target : g_current_target;
             static int fallback_count = 0;
