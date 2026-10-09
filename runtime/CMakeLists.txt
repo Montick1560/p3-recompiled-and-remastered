@@ -475,6 +475,28 @@ target_compile_options(test_psmf PRIVATE
 
 add_test(NAME psmf_tests COMMAND test_psmf)
 
+# MPEG-PS demuxer unit test (pure: byte queue, H.264 AU splitter, PES/pack
+# parsing, ATRAC3plus frames; the real-data case streams the user's
+# DATA_CMN.BND movie and is skipped when absent).
+add_executable(test_mpeg_demux
+    tests/test_mpeg_demux.cpp
+    src/hle/psp_mpeg_demux.cpp
+    src/hle/psp_psmf.cpp
+)
+
+target_include_directories(test_mpeg_demux PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_compile_options(test_mpeg_demux PRIVATE
+    -O2
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+
+add_test(NAME mpeg_demux_tests COMMAND test_mpeg_demux)
+
 # GE vertex transform unit test target (dothack-L6c fix). Links the real
 # psp_ge_vertex.cpp and calls ge_transform_vertices directly to verify
 # through-mode UV texel->[0,1] normalization. No SDL2/GL/scheduler deps
