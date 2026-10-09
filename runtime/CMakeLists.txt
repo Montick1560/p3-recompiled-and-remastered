@@ -162,7 +162,6 @@ set(RUNTIME_SOURCES
     src/hle/psp_psmf.cpp
     src/hle/psp_hle_psmf.cpp
     src/hle/psp_savedata.cpp
-    src/hle/psp_psmf.cpp
     src/hle/psp_mpeg_demux.cpp
     src/hle/psp_hle_mpeg.cpp
     src/hle/psp_media_engine.cpp
