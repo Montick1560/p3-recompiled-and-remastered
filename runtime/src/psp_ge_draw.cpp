@@ -323,6 +323,7 @@ static GeTarget make_target(uint32_t key) {
         std::fprintf(stderr, "[DRAW] FBO incomplete: 0x%04X (key=0x%06X)\n",
                      status, key);
     }
+    glDisable(GL_SCISSOR_TEST);  // a new buffer starts fully cleared
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     t.last_use = ++g_target_clock;
@@ -575,6 +576,24 @@ void ge_draw_prim(
     prim_call_count++;
 
     const GeState& state = ge_get_state();
+
+    // Scissor (GE_CMD_SCISSOR1/2: inclusive x1,y1 / x2,y2, 10 bits each,
+    // top-left origin) applies to every draw, clears included. The FBO uses
+    // GL's bottom-left origin, so y is flipped.
+    {
+        const int x1 = static_cast<int>(state.scissor1 & 0x3FF);
+        const int y1 = static_cast<int>((state.scissor1 >> 10) & 0x3FF);
+        const int x2 = static_cast<int>(state.scissor2 & 0x3FF);
+        const int y2 = static_cast<int>((state.scissor2 >> 10) & 0x3FF);
+        if (state.scissor2 == 0 && state.scissor1 == 0) {
+            glDisable(GL_SCISSOR_TEST);  // never set: whole buffer
+        } else {
+            glEnable(GL_SCISSOR_TEST);
+            const int w = x2 >= x1 ? x2 - x1 + 1 : 0;
+            const int h = y2 >= y1 ? y2 - y1 + 1 : 0;
+            glScissor(x1, PSP_FB_HEIGHT - 1 - y2, w, h);
+        }
+    }
     {
         int t_idx = (prim_type >= 0 && prim_type < 8) ? prim_type : 7;
         if (state.clear_mode) {
@@ -904,6 +923,7 @@ static void present_service_screenshot(GLuint fbo) {
 static void present_blit(GLuint fbo) {
     SDL_Window* window = psp_get_sdl_window();
     if (!window) return;
+    glDisable(GL_SCISSOR_TEST);  // the GE scissor must not crop the blit
     present_service_screenshot(fbo);
     int win_w = 480, win_h = 272;
     SDL_GetWindowSize(window, &win_w, &win_h);
