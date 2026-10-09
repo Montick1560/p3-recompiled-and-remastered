@@ -102,9 +102,12 @@ pub fn gpr_write_of(op: &MipsOp) -> Option<Reg> {
         Addi { rt, .. } | Addiu { rt, .. } | Slti { rt, .. } | Sltiu { rt, .. }
         | Andi { rt, .. } | Ori { rt, .. } | Xori { rt, .. } | Lui { rt, .. }
         | Lb { rt, .. } | Lh { rt, .. } | Lwl { rt, .. } | Lw { rt, .. }
-        | Lbu { rt, .. } | Lhu { rt, .. } | Lwr { rt, .. } | Ext { rt, .. }
-        | Ins { rt, .. } | Mfc0 { rt, .. } | Mfc1 { rt, .. } | VfpuMfv { rt, .. }
-        | VfpuMfvc { rt, .. } | RelocHi16 { rt, .. } | RelocLo16 { rt, .. } => *rt,
+        | Lbu { rt, .. } | Lhu { rt, .. } | Lwr { rt, .. } | Ll { rt, .. }
+        | Ext { rt, .. }
+        | Ins { rt, .. } | Mfc0 { rt, .. } | Mfc1 { rt, .. } | Cfc1 { rt, .. }
+        | VfpuMfv { rt, .. }
+        | VfpuMfvc { rt, .. } | RelocHi16 { rt, .. } | RelocLo16 { rt, .. }
+        | Sc { rt, .. } => *rt,
         // Link writers (cannot legally sit in a delay slot, but be safe)
         Jalr { rd, .. } => *rd,
         Jal { .. } | Bltzal { .. } | Bgezal { .. } => Reg::Gpr(31),
@@ -216,5 +219,17 @@ mod tests {
             "Expected Jr{{rs: Gpr(31)}}, got {:?}", ops);
         assert!(!ops.iter().any(|op| matches!(op, MipsOp::JumpTable { .. })),
             "jr $ra should NOT become JumpTable");
+    }
+
+    #[test]
+    fn ll_sc_cfc1_write_rt_ctc1_does_not() {
+        let ll = MipsOp::Ll { rt: Reg::Gpr(8), base: Reg::Gpr(4), offset: 4 };
+        let sc = MipsOp::Sc { rt: Reg::Gpr(8), base: Reg::Gpr(4), offset: 4 };
+        let cfc = MipsOp::Cfc1 { rt: Reg::Gpr(2), fs: 31 };
+        let ctc = MipsOp::Ctc1 { rt: Reg::Gpr(2), fs: 31 };
+        assert_eq!(gpr_write_of(&ll), Some(Reg::Gpr(8)));
+        assert_eq!(gpr_write_of(&sc), Some(Reg::Gpr(8)));
+        assert_eq!(gpr_write_of(&cfc), Some(Reg::Gpr(2)));
+        assert_eq!(gpr_write_of(&ctc), None);
     }
 }

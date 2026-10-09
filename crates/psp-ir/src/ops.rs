@@ -106,7 +106,8 @@ pub enum MipsOp {
     // -------------------------------------------------------------------------
     /// Jump register (return when rs == $ra).
     Jr { rs: Reg },
-    /// Jump and link register: rd = PC+8; PC = rs
+    /// Jump and link register: if rd != 0, rd = PC+8; PC = rs.
+    /// rd == $zero does not link (PPSSPP `Int_JumpRegType`).
     Jalr { rd: Reg, rs: Reg },
 
     // -------------------------------------------------------------------------
@@ -214,7 +215,8 @@ pub enum MipsOp {
     Addiu { rt: Reg, rs: Reg, imm: i16 },
     /// Set if less than immediate (signed): rt = (rs < imm) ? 1 : 0
     Slti { rt: Reg, rs: Reg, imm: i16 },
-    /// Set if less than immediate unsigned: rt = (rs < imm) ? 1 : 0
+    /// Set if less than immediate unsigned. The 16-bit immediate is
+    /// sign-extended, then compared as unsigned (PPSSPP `suimm`).
     Sltiu { rt: Reg, rs: Reg, imm: u16 },
     /// Bitwise AND immediate: rt = rs & imm
     Andi { rt: Reg, rs: Reg, imm: u16 },
@@ -242,6 +244,8 @@ pub enum MipsOp {
     Lhu { rt: Reg, rs: Reg, offset: i16 },
     /// Load word right (unaligned): rt = LWR(rs + offset)
     Lwr { rt: Reg, rs: Reg, offset: i16 },
+    /// Load linked: rt = MEM_W(base + offset); llbit = 1 (PPSSPP `ll`).
+    Ll { rt: Reg, base: Reg, offset: i16 },
 
     // -------------------------------------------------------------------------
     // MIPS32 Base — Stores (DECODE-01)
@@ -256,6 +260,9 @@ pub enum MipsOp {
     Sw { rt: Reg, rs: Reg, offset: i16 },
     /// Store word right (unaligned): SWR(rs + offset) = rt
     Swr { rt: Reg, rs: Reg, offset: i16 },
+    /// Store conditional: if llbit, MEM_W(base + offset) = rt and rt = 1, else rt = 0.
+    /// PPSSPP does not clear llbit (Interpreter.cpp Int_StoreSync).
+    Sc { rt: Reg, base: Reg, offset: i16 },
 
     // -------------------------------------------------------------------------
     // MIPS32 Base — Misc (DECODE-01)
@@ -350,6 +357,11 @@ pub enum MipsOp {
     Mfc1 { rt: Reg, fs: FpReg },
     /// Move to FPU: fs = rt (integer view)
     Mtc1 { rt: Reg, fs: FpReg },
+    /// Copy from FPU control register. fs is the control-register number
+    /// (0 = FCR0, 31 = FCR31), not an FPU data register.
+    Cfc1 { rt: Reg, fs: u8 },
+    /// Copy to FPU control register. Reads rt; fs as in `Cfc1`.
+    Ctc1 { rt: Reg, fs: u8 },
     /// Load word to FPU: ft = MEM_W(rs + offset)
     Lwc1 { ft: FpReg, rs: Reg, offset: i16 },
     /// Store word from FPU: MEM_W(rs + offset) = ft

@@ -16,7 +16,9 @@ pub(crate) fn decode_cop1(word: u32, vaddr: u32) -> Result<MipsOp, DecodeError> 
 
     match rs_field {
         0x00 => Ok(MipsOp::Mfc1 { rt, fs }),
+        0x02 => Ok(MipsOp::Cfc1 { rt, fs: fs.0 }),
         0x04 => Ok(MipsOp::Mtc1 { rt, fs }),
+        0x06 => Ok(MipsOp::Ctc1 { rt, fs: fs.0 }),
         0x08 => {
             // BC1: branch on FPU condition code
             let rt_field = (word >> 16) & 0x1F;
@@ -71,7 +73,7 @@ pub(crate) fn decode_cop1(word: u32, vaddr: u32) -> Result<MipsOp, DecodeError> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use psp_ir::FpReg;
+    use psp_ir::{FpReg, Reg};
 
     /// Encode a COP1 S-format instruction word.
     /// opcode=0x11, rs=0x10 (S format), ft, fs, fd, func.
@@ -149,5 +151,19 @@ mod tests {
         // Real word from Patapon 3 EBOOT at 0x089DBA08: floor.w.s f1, f0
         let floor = decode_cop1(0x4600004F, 0x089DBA08).unwrap();
         assert!(matches!(floor, MipsOp::FloorWS { fd: FpReg(1), fs: FpReg(0) }), "{floor:?}");
+    }
+
+    #[test]
+    fn cfc1_ctc1_decode_fcr31() {
+        let cfc = decode_cop1(0x4442F800, 0x08800000).unwrap();
+        assert!(
+            matches!(cfc, MipsOp::Cfc1 { rt: Reg::Gpr(2), fs: 31 }),
+            "{cfc:?}"
+        );
+        let ctc = decode_cop1(0x44C2F800, 0x08800000).unwrap();
+        assert!(
+            matches!(ctc, MipsOp::Ctc1 { rt: Reg::Gpr(2), fs: 31 }),
+            "{ctc:?}"
+        );
     }
 }

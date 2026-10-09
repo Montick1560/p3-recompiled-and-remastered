@@ -2,7 +2,7 @@
 //!
 //! Covers all SPECIAL and REGIMM encodings. Invoked from `lib.rs` `decode_word`.
 
-use psp_ir::{MipsOp, Reg};
+use psp_ir::MipsOp;
 use crate::{DecodeError, rs as reg_rs, rt as reg_rt, rd as reg_rd, branch_target};
 
 /// Decode a SPECIAL (opcode=0x00) instruction word.
@@ -44,11 +44,7 @@ pub(crate) fn decode_special(word: u32, vaddr: u32) -> Result<MipsOp, DecodeErro
         }
         0x07 => Ok(MipsOp::Srav { rd, rt, rs }),
         0x08 => Ok(MipsOp::Jr { rs }),
-        0x09 => {
-            // JALR: rd defaults to $ra (31) if rd field is 0
-            let link_reg = if matches!(rd, Reg::Zero) { Reg::Gpr(31) } else { rd };
-            Ok(MipsOp::Jalr { rd: link_reg, rs })
-        }
+        0x09 => Ok(MipsOp::Jalr { rd, rs }),
         0x0C => Ok(MipsOp::Syscall { code: (word >> 6) & 0xFFFFF }),
         0x0D => Ok(MipsOp::Break_ { code: (word >> 6) & 0xFFFFF }),
         0x0F => Ok(MipsOp::Sync {}),
@@ -212,6 +208,20 @@ mod tests {
         assert!(
             matches!(msubu, MipsOp::Msubu { rs: Reg::Gpr(2), rt: Reg::Gpr(3) }),
             "{msubu:?}"
+        );
+    }
+
+    #[test]
+    fn jalr_rd_zero_does_not_rewrite_to_ra() {
+        let linked = decode_special(0x0080F809, 0x08800000).unwrap();
+        assert!(
+            matches!(linked, MipsOp::Jalr { rd: Reg::Gpr(31), rs: Reg::Gpr(4) }),
+            "{linked:?}"
+        );
+        let unlinked = decode_special(0x00800009, 0x08800000).unwrap();
+        assert!(
+            matches!(unlinked, MipsOp::Jalr { rd: Reg::Zero, rs: Reg::Gpr(4) }),
+            "{unlinked:?}"
         );
     }
 }
