@@ -263,7 +263,7 @@ fn build_ra_ctx(seq: &[MipsOp], func_start: u32, func_end: u32) -> RaCtx {
     for (idx, op) in seq.iter().enumerate() {
         // (target, resume offset from this op's positional vaddr)
         let (target, resume_off) = match op {
-            MipsOp::Jal { target } => (*target, 4),
+            MipsOp::Jal { target } if *target != func_start => (*target, 4),
             MipsOp::Bltzal { target, .. } | MipsOp::Bgezal { target, .. } => (*target, 4),
             // Hazard-fused link branch: the fused node sits at the BRANCH's own
             // word position (its delay slot lives inside it, padded by a Nop),
@@ -314,7 +314,10 @@ fn emit_coalesced_link_ra(
             }
             true
         }
-        MipsOp::Jal { target } if *target >= func_start && *target < func_end => {
+        // A `jal` to the owner's own entry is recursion: it stays a real C++
+        // call (baseline lowering). As a goto it would share this C++ frame and
+        // the EXIT `jr ra` of the inner guest frame would return from all of them.
+        MipsOp::Jal { target } if *target > func_start && *target < func_end => {
             let ret = instr_vaddr.saturating_add(4);
             gen.emit_raw(&format!("ctx->r[31] = (int32_t)0x{ret:08X};"));
             gen.emit_raw("_ra_active = true;");
@@ -726,7 +729,7 @@ fn op_ends_guest_flow(op: &MipsOp, ra_modeled: bool, func_start: u32, func_end: 
         // RA-modeled INTERNAL `jal` lowers to a link write + unconditional
         // goto (see `emit_coalesced_link_ra`). The baseline internal/external
         // `jal` is a call that falls through and must NOT match here.
-        MipsOp::Jal { target } if ra_modeled && *target >= func_start && *target < func_end => {
+        MipsOp::Jal { target } if ra_modeled && *target > func_start && *target < func_end => {
             true
         }
         // Always-taken non-linking branches: `b` (beq r,r), `bgez zero`,
@@ -2535,6 +2538,31 @@ mod tests {
         assert!(out.contains("ctx->r[31] = (int32_t)0x08804004"), "internal link write");
         assert!(out.contains("switch ((uint32_t)ctx->r[31])"), "internal jr-ra switch");
         assert!(out.contains("ctx->r[31] = _ra_saved;"), "EXIT restores caller link");
+    }
+
+    #[test]
+    fn coalesced_self_recursive_jal_is_a_real_call() {
+        // Quicksort shape (FUN_088757FC): the owner recurses into its own entry.
+        // A goto there would share one C++ frame, and the owner's EXIT `jr ra`
+        // (restore + return) would leave the C++ function from the INNER guest
+        // frame, abandoning the outer one. The self call must be a real call.
+        let ops = vec![
+            MipsOp::Jal { target: 0x08804000 },          // 0x4000 self (recursion)
+            MipsOp::Jal { target: 0x08804014 },          // 0x4004 internal helper
+            MipsOp::Jal { target: 0x08804014 },          // 0x4008 internal helper
+            MipsOp::Lw { rt: Reg::Gpr(31), rs: Reg::Gpr(29), offset: 0x10 }, // 0x400C
+            MipsOp::Jr { rs: Reg::Gpr(31) },             // 0x4010 EXIT
+            MipsOp::Jr { rs: Reg::Gpr(31) },             // 0x4014 INTERNAL
+        ];
+        let mut func = make_func(ops);
+        func.size = 0x18;
+        func.coalesced = true;
+        let mut gen = TestGenerator::new();
+        emit_function(&func, &mut gen, &ImportMap::new());
+        let out = gen.output.join("\n");
+        assert!(out.contains("_ra_active = true;"), "helpers stay RA-modeled");
+        assert!(out.contains("CALL_LOOKUP:0x08804000"), "self call is a real call");
+        assert!(!out.contains("ctx->r[31] = (int32_t)0x08804004"), "no link write for the self call");
     }
 
     #[test]
