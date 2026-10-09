@@ -294,8 +294,12 @@ pub enum MipsOp {
     Max { rd: Reg, rs: Reg, rt: Reg },
     /// Multiply-add (signed): HI:LO += rs * rt
     Madd { rs: Reg, rt: Reg },
+    /// Multiply-add (unsigned): HI:LO += (uint32)rs * (uint32)rt
+    Maddu { rs: Reg, rt: Reg },
     /// Multiply-subtract (signed): HI:LO -= rs * rt
     Msub { rs: Reg, rt: Reg },
+    /// Multiply-subtract (unsigned): HI:LO -= (uint32)rs * (uint32)rt
+    Msubu { rs: Reg, rt: Reg },
     /// Rotate right: rd = rotr(rt, sa)
     Rotr { rd: Reg, rt: Reg, sa: u8 },
     /// Rotate right variable: rd = rotr(rt, rs & 31)

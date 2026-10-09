@@ -56,7 +56,13 @@ pub(crate) fn decode_special(word: u32, vaddr: u32) -> Result<MipsOp, DecodeErro
         0x11 => Ok(MipsOp::Mthi { rs }),
         0x12 => Ok(MipsOp::Mflo { rd }),
         0x13 => Ok(MipsOp::Mtlo { rs }),
-        0x1C => Ok(MipsOp::Mul { rd, rs, rt }),
+        // Allegrex SPECIAL encodings (not MIPS32r2 MUL, which writes rd and
+        // leaves HI:LO alone). rd is unused; the 64-bit product accumulates
+        // into HI:LO.
+        //   func 0x1C = MADD  (HI:LO += signed rs * rt)
+        //   func 0x1D = MADDU (HI:LO += unsigned rs * rt)
+        0x1C => Ok(MipsOp::Madd { rs, rt }),
+        0x1D => Ok(MipsOp::Maddu { rs, rt }),
         0x18 => Ok(MipsOp::Mult { rs, rt }),
         0x19 => Ok(MipsOp::Multu { rs, rt }),
         0x1A => Ok(MipsOp::Div { rs, rt }),
@@ -82,10 +88,12 @@ pub(crate) fn decode_special(word: u32, vaddr: u32) -> Result<MipsOp, DecodeErro
         // 32-bit ops (the Allegrex has no DADD/DADDU/DSUB):
         //   func 0x2C = MAX (rd = max(rs, rt))
         //   func 0x2D = MIN (rd = min(rs, rt))
-        //   func 0x2E = MSUB (HI:LO -= rs * rt)
+        //   func 0x2E = MSUB  (HI:LO -= signed rs * rt)
+        //   func 0x2F = MSUBU (HI:LO -= unsigned rs * rt)
         0x2C => Ok(MipsOp::Max { rd, rs, rt }),
         0x2D => Ok(MipsOp::Min { rd, rs, rt }),
         0x2E => Ok(MipsOp::Msub { rs, rt }),
+        0x2F => Ok(MipsOp::Msubu { rs, rt }),
         _ => Err(DecodeError::Unknown(word, vaddr)),
     }
 }
@@ -178,5 +186,32 @@ mod tests {
             }
             _ => panic!("Expected Bltz, got {op:?}"),
         }
+    }
+
+    #[test]
+    fn test_decode_allegrex_special_madd_family() {
+        // SPECIAL funct 0x1C/0x1D/0x2E/0x2F are Allegrex madd/maddu/msub/msubu.
+        // 0x0043001C: rs=v0(2), rt=v1(3), rd unused.
+        let vaddr = 0x08800000;
+        let madd = decode_special(0x0043001C, vaddr).unwrap();
+        assert!(
+            matches!(madd, MipsOp::Madd { rs: Reg::Gpr(2), rt: Reg::Gpr(3) }),
+            "{madd:?}"
+        );
+        let maddu = decode_special(0x0043001D, vaddr).unwrap();
+        assert!(
+            matches!(maddu, MipsOp::Maddu { rs: Reg::Gpr(2), rt: Reg::Gpr(3) }),
+            "{maddu:?}"
+        );
+        let msub = decode_special(0x0043002E, vaddr).unwrap();
+        assert!(
+            matches!(msub, MipsOp::Msub { rs: Reg::Gpr(2), rt: Reg::Gpr(3) }),
+            "{msub:?}"
+        );
+        let msubu = decode_special(0x0043002F, vaddr).unwrap();
+        assert!(
+            matches!(msubu, MipsOp::Msubu { rs: Reg::Gpr(2), rt: Reg::Gpr(3) }),
+            "{msubu:?}"
+        );
     }
 }
