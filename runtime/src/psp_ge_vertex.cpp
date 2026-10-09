@@ -545,6 +545,7 @@ void ge_transform_vertices(
             v.pos[0] = v.pos[0] / 240.0f - 1.0f;
             v.pos[1] = 1.0f - v.pos[1] / 136.0f;
             v.pos[2] = v.pos[2] / 65535.0f;
+            v.w = 1.0f;  // screen-space: already NDC
 
             // Apply tex scale/offset, then texel -> [0,1] normalize.
             if (v.has_uv) {
@@ -613,21 +614,21 @@ void ge_transform_vertices(
                     v.pos[1] = wpos[1];
                     v.pos[2] = wpos[2];
                 }
+                v.w = 1.0f;  // positions are already NDC
             } else {
                 float clip[4];
                 vec3_by_matrix44(state.proj_matrix,
                                  vpos, clip);
 
-                // Perspective divide
-                if (std::fabs(clip[3]) > 1e-6f) {
-                    v.pos[0] = clip[0] / clip[3];
-                    v.pos[1] = clip[1] / clip[3];
-                    v.pos[2] = clip[2] / clip[3];
-                } else {
-                    v.pos[0] = clip[0];
-                    v.pos[1] = clip[1];
-                    v.pos[2] = clip[2];
-                }
+                // Clip-space out, NO CPU perspective divide: GL's own
+                // divide provides near-plane clipping (a vertex with
+                // w <= 0 no longer flips to the opposite screen side and
+                // drags a "fan" spike across the frame) and perspective-
+                // correct UV interpolation.
+                v.pos[0] = clip[0];
+                v.pos[1] = clip[1];
+                v.pos[2] = clip[2];
+                v.w = clip[3];
             }
 
             // Apply tex scale/offset
@@ -639,4 +640,50 @@ void ge_transform_vertices(
             }
         }
     }
+}
+
+// ---- Rectangle expansion (GE_PRIM_RECTANGLES) ----
+//
+// Rectangles arrive as 2 diagonal corner vertices and are drawn as two
+// screen-aligned triangles (6 vertices). In transform mode the corners are
+// in clip space now, so the divide happens here: only the position is
+// divided (UVs/colors must stay untouched for correct interpolation), and
+// the emitted quad is flat NDC with w = 1. A corner with w <= 0 is behind
+// the eye plane -- it has no screen position (dividing would flip it to the
+// opposite side of the screen), so the whole rectangle is dropped.
+bool ge_expand_rectangle(
+    const DecodedVertex& v0,
+    const DecodedVertex& v1,
+    DecodedVertex out[6]
+) {
+    if (!(v0.w > 0.0f) || !(v1.w > 0.0f)) return false;
+
+    // Perspective-divided corners (position only).
+    DecodedVertex a = v0;  // top-left
+    DecodedVertex b = v1;  // bottom-right
+    for (int k = 0; k < 3; k++) {
+        a.pos[k] = v0.pos[k] / v0.w;
+        b.pos[k] = v1.pos[k] / v1.w;
+    }
+    a.w = 1.0f;
+    b.w = 1.0f;
+
+    // 4 corners from the 2 diagonal vertices (same mixing as the
+    // historical expansion: z from v0 except the pure-v1 corner).
+    DecodedVertex c1 = b;  // top-right: (v1.x, v0.y, v0.z), uv (v1.u, v0.v)
+    c1.pos[1] = a.pos[1];
+    c1.pos[2] = a.pos[2];
+    c1.uv[1] = a.uv[1];
+    DecodedVertex c3 = a;  // bottom-left: (v0.x, v1.y, v0.z), uv (v0.u, v1.v)
+    c3.pos[1] = b.pos[1];
+    c3.uv[1] = b.uv[1];
+
+    // Two triangles: a-c1-b and a-b-c3
+    out[0] = a;
+    out[1] = c1;
+    out[2] = b;
+    out[3] = a;
+    out[4] = b;
+    out[5] = c3;
+    return true;
 }

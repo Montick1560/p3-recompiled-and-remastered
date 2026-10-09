@@ -81,15 +81,15 @@ enum SsReqState { SS_IDLE = 0, SS_PENDING = 1, SS_DONE = 2, SS_FAILED = 3 };
 static int g_ss_req_state = SS_IDLE;
 
 // ---- Packed vertex for VBO upload ----
-// Layout: 3 floats (pos) + 2 floats (uv) + 4 bytes (color)
-// Total: 12 + 8 + 4 = 24 bytes
+// Layout: 4 floats (clip pos) + 2 floats (uv) + 4 bytes (color)
+// Total: 16 + 8 + 4 = 28 bytes
 struct PackedVertex {
-    float pos[3];
+    float pos[4];   // Clip-space (x,y,z,w); GL does the perspective divide
     float uv[2];
     uint8_t color[4];
 };
-static_assert(sizeof(PackedVertex) == 24,
-              "PackedVertex must be 24 bytes");
+static_assert(sizeof(PackedVertex) == 28,
+              "PackedVertex must be 28 bytes");
 
 // ---- Screenshot (TGA format -- no external dependency) ----
 
@@ -407,25 +407,25 @@ void ge_draw_init() {
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
 
     // Vertex attributes for PackedVertex layout
-    // location 0: position (3 floats, offset 0)
+    // location 0: position (4 floats, offset 0)
     glVertexAttribPointer(
-        0, 3, GL_FLOAT, GL_FALSE,
+        0, 4, GL_FLOAT, GL_FALSE,
         sizeof(PackedVertex),
         reinterpret_cast<void*>(0));
     glEnableVertexAttribArray(0);
 
-    // location 1: texcoord (2 floats, offset 12)
+    // location 1: texcoord (2 floats, offset 16)
     glVertexAttribPointer(
         1, 2, GL_FLOAT, GL_FALSE,
         sizeof(PackedVertex),
-        reinterpret_cast<void*>(12));
+        reinterpret_cast<void*>(16));
     glEnableVertexAttribArray(1);
 
-    // location 2: color (4 bytes normalized, offset 20)
+    // location 2: color (4 bytes normalized, offset 24)
     glVertexAttribPointer(
         2, 4, GL_UNSIGNED_BYTE, GL_TRUE,
         sizeof(PackedVertex),
-        reinterpret_cast<void*>(20));
+        reinterpret_cast<void*>(24));
     glEnableVertexAttribArray(2);
 
     glBindVertexArray(0);
@@ -720,7 +720,10 @@ void ge_draw_prim(
     // Handle RECTANGLES: expand 2 verts to 6 (two tris)
     std::vector<PackedVertex> packed;
     if (prim_type == GE_PRIM_RECTANGLES) {
-        // Each rectangle is 2 vertices (top-left, bottom-right)
+        // Each rectangle is 2 vertices (top-left, bottom-right). The
+        // corners arrive in clip space (transform mode); ge_expand_rectangle
+        // divides by w and drops rectangles with a corner behind the eye
+        // plane (w <= 0), emitting flat NDC quads with w = 1.
         int rect_count = count / 2;
         packed.reserve(rect_count * 6);
         for (int r = 0; r < rect_count; r++) {
@@ -729,47 +732,19 @@ void ge_draw_prim(
             if (i1 >= static_cast<int>(decoded.size()))
                 break;
 
-            const auto& v0 = decoded[i0];
-            const auto& v1 = decoded[i1];
-
-            // Build 4 corners from 2 vertices
-            PackedVertex corners[4];
-            // v0 (top-left)
-            corners[0] = {
-                {v0.pos[0], v0.pos[1], v0.pos[2]},
-                {v0.uv[0], v0.uv[1]},
-                {v0.color[0], v0.color[1],
-                 v0.color[2], v0.color[3]}
-            };
-            // top-right
-            corners[1] = {
-                {v1.pos[0], v0.pos[1], v0.pos[2]},
-                {v1.uv[0], v0.uv[1]},
-                {v1.color[0], v1.color[1],
-                 v1.color[2], v1.color[3]}
-            };
-            // bottom-right (v1)
-            corners[2] = {
-                {v1.pos[0], v1.pos[1], v1.pos[2]},
-                {v1.uv[0], v1.uv[1]},
-                {v1.color[0], v1.color[1],
-                 v1.color[2], v1.color[3]}
-            };
-            // bottom-left
-            corners[3] = {
-                {v0.pos[0], v1.pos[1], v1.pos[2]},
-                {v0.uv[0], v1.uv[1]},
-                {v0.color[0], v0.color[1],
-                 v0.color[2], v0.color[3]}
-            };
-
-            // Two triangles: 0-1-2 and 0-2-3
-            packed.push_back(corners[0]);
-            packed.push_back(corners[1]);
-            packed.push_back(corners[2]);
-            packed.push_back(corners[0]);
-            packed.push_back(corners[2]);
-            packed.push_back(corners[3]);
+            DecodedVertex expanded[6];
+            if (!ge_expand_rectangle(decoded[i0], decoded[i1],
+                                     expanded))
+                continue;
+            for (int k = 0; k < 6; k++) {
+                const DecodedVertex& v = expanded[k];
+                packed.push_back({
+                    {v.pos[0], v.pos[1], v.pos[2], v.w},
+                    {v.uv[0], v.uv[1]},
+                    {v.color[0], v.color[1],
+                     v.color[2], v.color[3]}
+                });
+            }
         }
     } else {
         // Pack decoded vertices
@@ -777,7 +752,7 @@ void ge_draw_prim(
         for (size_t i = 0; i < decoded.size(); i++) {
             const auto& v = decoded[i];
             packed[i] = {
-                {v.pos[0], v.pos[1], v.pos[2]},
+                {v.pos[0], v.pos[1], v.pos[2], v.w},
                 {v.uv[0], v.uv[1]},
                 {v.color[0], v.color[1],
                  v.color[2], v.color[3]}

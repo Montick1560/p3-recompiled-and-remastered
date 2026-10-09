@@ -8,6 +8,7 @@
 /// All PSP vertex formats are converted to this before rendering.
 struct DecodedVertex {
     float pos[3];       // Position (x, y, z)
+    float w = 1.0f;     // Clip-space w (1.0 = already NDC/screen-space)
     float uv[2];        // Texture coordinates (u, v)
     uint8_t color[4];   // RGBA color
     float normal[3];    // Normal vector
@@ -35,6 +36,17 @@ void ge_decode_vertices(
 void ge_transform_vertices(
     std::vector<DecodedVertex>& verts,
     const GeState& state
+);
+
+/// Rectangle (GE_PRIM_RECTANGLES) expansion: perspective-divide the two
+/// clip-space corner vertices and emit the 6 vertices (two triangles) of
+/// the screen-aligned quad, each with w = 1 (NDC). A corner with w <= 0
+/// lies behind the eye plane and has no screen position, so the whole
+/// rectangle is dropped (returns false). Pure: no GL, no global state.
+bool ge_expand_rectangle(
+    const DecodedVertex& v0,
+    const DecodedVertex& v1,
+    DecodedVertex out[6]
 );
 
 // ---- Game-module degenerate-matrix fallback (issue #47 Phase 5 seam) ----

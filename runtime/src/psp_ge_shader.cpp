@@ -10,7 +10,7 @@
 static const char* const k_vertex_shader_src = R"GLSL(
 #version 330 core
 
-layout(location = 0) in vec3 a_position;
+layout(location = 0) in vec4 a_position;
 layout(location = 1) in vec2 a_texcoord;
 layout(location = 2) in vec4 a_color;
 
@@ -18,9 +18,11 @@ out vec2 v_texcoord;
 out vec4 v_color;
 
 void main() {
-    // CPU has already transformed to NDC (both through
-    // and transform modes). Just pass through.
-    gl_Position = vec4(a_position, 1.0);
+    // CPU sends clip-space (x,y,z,w) in transform mode (GL's own
+    // perspective divide gives near-plane clipping and perspective-
+    // correct UV interpolation) or NDC with w = 1 in through mode /
+    // fallback paths. Pass through untouched.
+    gl_Position = a_position;
     v_texcoord = a_texcoord;
     v_color = a_color;
 }

@@ -5,6 +5,12 @@
 // dimensions. Oracle: PPSSPP GPU/Common/SoftwareTransformCommon.cpp
 // (uscale /= curTextureWidth; vscale /= curTextureHeight).
 //
+// Also covers the clip-space output contract: transform mode emits clip
+// (x,y,z,w) WITHOUT the CPU perspective divide (GL performs it, giving
+// near-plane clipping and perspective-correct UV interpolation), through
+// mode emits NDC with w = 1, and ge_expand_rectangle divides rectangle
+// corners by clip w (dropping rectangles with a w <= 0 corner).
+//
 // Standalone executable (test_vfpu convention): links psp_ge_vertex.cpp
 // and calls the real ge_transform_vertices — no SDL/GL/scheduler deps.
 
@@ -58,6 +64,14 @@ static DecodedVertex make_vertex(float u, float v) {
     return vtx;
 }
 
+static DecodedVertex make_pos_vertex(float x, float y, float z) {
+    DecodedVertex v;
+    v.pos[0] = x; v.pos[1] = y; v.pos[2] = z;
+    v.uv[0] = 0.0f; v.uv[1] = 0.0f;
+    v.has_uv = false; v.has_color = false; v.has_normal = false;
+    return v;
+}
+
 // Texturing enabled: texel-unit UVs are normalized by texW/texH.
 static void test_through_textured_normalizes() {
     GeState s = make_through_state(true);
@@ -95,6 +109,80 @@ static void test_through_scale_offset_then_normalize() {
         "through textured v: 64/128 -> 0.5");
 }
 
+// ---- Clip-space output (near-plane clipping + perspective-correct UVs) ----
+//
+// Transform mode must emit clip coordinates (pos = clip.xyz, w = clip.w)
+// WITHOUT the CPU perspective divide: GL's own divide provides near-plane
+// clipping (vertices with w <= 0 no longer flip to the opposite screen
+// side and drag "fan" spikes across the frame) and perspective-correct
+// UV interpolation.
+
+// Transform-mode state: identity world & view, minimal perspective proj
+// (col-major 4x4): clip = (x, y, z, -z). z < 0 is in front (w > 0);
+// z > 0 is behind the camera (w < 0).
+static GeState make_perspective_state() {
+    GeState s;
+    s.reset();
+    s.vertex_type = 0x000183u;  // transform mode (bit 23 clear)
+    s.world_matrix[0] = 1; s.world_matrix[4] = 1; s.world_matrix[8] = 1;
+    s.view_matrix[0] = 1; s.view_matrix[4] = 1; s.view_matrix[8] = 1;
+    s.proj_matrix[0] = 1.0f;
+    s.proj_matrix[5] = 1.0f;
+    s.proj_matrix[10] = 1.0f;
+    s.proj_matrix[11] = -1.0f;  // clip.w = -z
+    return s;
+}
+
+// A vertex in front of the camera keeps clip xyz in pos and clip w in w
+// (no divide).
+static void test_transform_front_keeps_clip() {
+    GeState s = make_perspective_state();
+    // z = -2 -> clip = (1, 2, -2, 2)
+    std::vector<DecodedVertex> verts = {make_pos_vertex(1.0f, 2.0f, -2.0f)};
+    ge_transform_vertices(verts, s);
+    ASSERT_NEAR(verts[0].pos[0], 1.0f,
+        "front: pos.x == clip.x (no divide)");
+    ASSERT_NEAR(verts[0].pos[1], 2.0f,
+        "front: pos.y == clip.y (no divide)");
+    ASSERT_NEAR(verts[0].pos[2], -2.0f,
+        "front: pos.z == clip.z (no divide)");
+    ASSERT_NEAR(verts[0].w, 2.0f,
+        "front: w == clip.w (no divide)");
+}
+
+// A vertex behind the camera keeps w < 0: the old CPU divide flipped it
+// to the opposite screen side; GL now clips it at the near plane.
+static void test_transform_behind_keeps_negative_w() {
+    GeState s = make_perspective_state();
+    // z = 3 -> clip = (1, 2, 3, -3)
+    std::vector<DecodedVertex> verts = {make_pos_vertex(1.0f, 2.0f, 3.0f)};
+    ge_transform_vertices(verts, s);
+    ASSERT_NEAR(verts[0].pos[0], 1.0f,
+        "behind: pos.x not divided/flipped");
+    ASSERT_NEAR(verts[0].pos[1], 2.0f,
+        "behind: pos.y not divided/flipped");
+    ASSERT_NEAR(verts[0].pos[2], 3.0f,
+        "behind: pos.z not divided/flipped");
+    ASSERT_NEAR(verts[0].w, -3.0f,
+        "behind: w < 0 reaches GL (near-clipped)");
+}
+
+// Through mode still maps to NDC and emits w == 1.
+static void test_through_w_is_one() {
+    GeState s = make_through_state(false);
+    std::vector<DecodedVertex> verts = {make_vertex(64.0f, 128.0f)};
+    ge_transform_vertices(verts, s);
+    // make_vertex pos = (100, 100, 0)
+    ASSERT_NEAR(verts[0].pos[0], 100.0f / 240.0f - 1.0f,
+        "through: NDC x");
+    ASSERT_NEAR(verts[0].pos[1], 1.0f - 100.0f / 136.0f,
+        "through: NDC y");
+    ASSERT_NEAR(verts[0].pos[2], 0.0f,
+        "through: NDC z");
+    ASSERT_NEAR(verts[0].w, 1.0f,
+        "through: w == 1");
+}
+
 // ---- Collapsed-MVP degeneracy detection (Patapon-restore fix) ----
 //
 // The guest uploads matrices that are non-zero and non-singular but compose
@@ -129,14 +217,6 @@ static GeState make_broken_title_state() {
                                    s.view_matrix[i] = view[i]; }
     for (int i = 0; i < 16; i++) s.proj_matrix[i] = proj[i];
     return s;
-}
-
-static DecodedVertex make_pos_vertex(float x, float y, float z) {
-    DecodedVertex v;
-    v.pos[0] = x; v.pos[1] = y; v.pos[2] = z;
-    v.uv[0] = 0.0f; v.uv[1] = 0.0f;
-    v.has_uv = false; v.has_color = false; v.has_normal = false;
-    return v;
 }
 
 // The broken title matrices must be detected as collapsed and routed to the
@@ -219,13 +299,87 @@ static void test_tiny_prim_no_overtrigger() {
     ge_vertex_set_degenerate_fallback(nullptr);
 }
 
+// ---- Rectangle expansion (clip-space corners) ----
+//
+// ge_expand_rectangle divides both corners by their clip w and emits the
+// 6 vertices (two triangles) of the screen-aligned quad with w = 1,
+// preserving the historical corner mixing (z from v0 except the pure-v1
+// corner; uv components cross-matched the same way).
+
+// Both corners in front (w > 0): positions are divided by w.
+static void test_rect_expand_divides_by_w() {
+    DecodedVertex v0 = make_pos_vertex(-2.0f, -2.0f, -2.0f);
+    DecodedVertex v1 = make_pos_vertex(2.0f, 2.0f, -4.0f);
+    v0.w = 2.0f;
+    v1.w = 4.0f;
+    // Divided corners: a = (-1, -1, -1), b = (0.5, 0.5, -1)
+    DecodedVertex out[6];
+    tests_run++;
+    if (!ge_expand_rectangle(v0, v1, out)) {
+        std::fprintf(stderr,
+            "FAIL: rect expand dropped a w > 0 rectangle\n");
+        failures++;
+        return;
+    }
+    // Triangle 1: a, c1 = (b.x, a.y, a.z), b
+    ASSERT_NEAR(out[0].pos[0], -1.0f, "rect: out0 x = -2/2");
+    ASSERT_NEAR(out[0].pos[1], -1.0f, "rect: out0 y = -2/2");
+    ASSERT_NEAR(out[0].pos[2], -1.0f, "rect: out0 z = -2/2");
+    ASSERT_NEAR(out[1].pos[0], 0.5f, "rect: out1 x = 2/4");
+    ASSERT_NEAR(out[1].pos[1], -1.0f, "rect: out1 y = v0.y/w0");
+    ASSERT_NEAR(out[1].pos[2], -1.0f, "rect: out1 z = v0.z/w0");
+    ASSERT_NEAR(out[2].pos[0], 0.5f, "rect: out2 x = 2/4");
+    ASSERT_NEAR(out[2].pos[1], 0.5f, "rect: out2 y = 2/4");
+    ASSERT_NEAR(out[2].pos[2], -1.0f, "rect: out2 z = -4/4");
+    // Triangle 2: a, b, c3 = (a.x, b.y, a.z)
+    ASSERT_NEAR(out[3].pos[0], -1.0f, "rect: out3 == out0 x");
+    ASSERT_NEAR(out[3].pos[1], -1.0f, "rect: out3 == out0 y");
+    ASSERT_NEAR(out[4].pos[0], 0.5f, "rect: out4 == out2 x");
+    ASSERT_NEAR(out[4].pos[1], 0.5f, "rect: out4 == out2 y");
+    ASSERT_NEAR(out[5].pos[0], -1.0f, "rect: out5 x = v0.x/w0");
+    ASSERT_NEAR(out[5].pos[1], 0.5f, "rect: out5 y = v1.y/w1");
+    ASSERT_NEAR(out[5].pos[2], -1.0f, "rect: out5 z = v0.z/w0");
+    for (int k = 0; k < 6; k++)
+        ASSERT_NEAR(out[k].w, 1.0f, "rect: expanded vertex w == 1");
+}
+
+// A corner with w <= 0 (behind / on the eye plane) drops the rectangle.
+static void test_rect_expand_drops_nonpositive_w() {
+    DecodedVertex v0 = make_pos_vertex(-2.0f, -2.0f, -2.0f);
+    DecodedVertex v1 = make_pos_vertex(2.0f, 2.0f, -4.0f);
+    DecodedVertex out[6];
+
+    tests_run++;
+    v0.w = -1.0f;  // first corner behind the eye
+    v1.w = 4.0f;
+    if (ge_expand_rectangle(v0, v1, out)) {
+        std::fprintf(stderr,
+            "FAIL: rect expand kept a w < 0 corner\n");
+        failures++;
+    }
+
+    tests_run++;
+    v0.w = 2.0f;
+    v1.w = 0.0f;   // second corner on the eye plane
+    if (ge_expand_rectangle(v0, v1, out)) {
+        std::fprintf(stderr,
+            "FAIL: rect expand kept a w == 0 corner\n");
+        failures++;
+    }
+}
+
 int main() {
     test_through_textured_normalizes();
     test_through_untextured_unchanged();
     test_through_scale_offset_then_normalize();
+    test_transform_front_keeps_clip();
+    test_transform_behind_keeps_negative_w();
+    test_through_w_is_one();
     test_collapsed_mvp_routes_to_fallback();
     test_healthy_mvp_no_fallback();
     test_tiny_prim_no_overtrigger();
+    test_rect_expand_divides_by_w();
+    test_rect_expand_drops_nonpositive_w();
 
     if (failures == 0) {
         std::printf("test_ge_vertex: %d/%d PASS\n", tests_run, tests_run);
