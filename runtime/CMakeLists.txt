@@ -743,6 +743,7 @@ add_test(NAME hle_mpeg_tests COMMAND test_hle_mpeg)
 add_executable(test_ge_vertex
     tests/test_ge_vertex.cpp
     src/psp_ge_vertex.cpp
+    src/psp_ge_lighting.cpp
 )
 
 target_include_directories(test_ge_vertex PRIVATE
@@ -758,6 +759,26 @@ target_compile_options(test_ge_vertex PRIVATE
 )
 
 add_test(NAME ge_vertex_tests COMMAND test_ge_vertex)
+
+# GE per-vertex lighting unit test (pure: links psp_ge_lighting.cpp only --
+# no SDL2/GL/scheduler deps).
+add_executable(test_ge_lighting
+    tests/test_ge_lighting.cpp
+    src/psp_ge_lighting.cpp
+)
+
+target_include_directories(test_ge_lighting PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_compile_options(test_ge_lighting PRIVATE
+    -O2
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+
+add_test(NAME ge_lighting_tests COMMAND test_ge_lighting)
 
 # GE viewport/depth-range mapping unit test (issue #23). Pure math: links
 # psp_ge_viewport.cpp only -- no SDL2/GL/scheduler deps.
