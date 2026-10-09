@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <limits>
 #include <algorithm>
 
 // ---- Matrix helpers (PSP column-major layout) ----
@@ -700,6 +701,12 @@ void ge_transform_vertices(
                 v.pos[1] = clip[1];
                 v.pos[2] = clip[2];
                 v.w = clip[3];
+                // Range culling like the hardware (PPSSPP sets the vertex
+                // to NaN so GL drops every primitive that uses it).
+                if (ge_vertex_range_culled(state, clip)) {
+                    const float nan = std::numeric_limits<float>::quiet_NaN();
+                    v.pos[0] = v.pos[1] = v.pos[2] = v.w = nan;
+                }
             }
 
             // Apply tex scale/offset
@@ -711,6 +718,23 @@ void ge_transform_vertices(
             }
         }
     }
+}
+
+// ---- Vertex range culling (PPSSPP VertexShaderGenerator.cpp) ----
+//
+// The GE drops a primitive when one of its transformed vertices lands
+// outside the [0, 4096) drawing space after the viewport transform, or has
+// w < -1 -- unless the vertex is z-clipped (z < -w), where near-plane
+// clipping applies instead. Without it a quad crossing the camera projected
+// to a huge screen-filling triangle (the black rectangles in the prologue).
+bool ge_vertex_range_culled(const GeState& state, const float clip[4]) {
+    const float w = clip[3];
+    if (clip[2] < -w) return false;  // z-clipped: clipped, not culled
+    if (w < -1.0f) return true;
+    if (w == 0.0f) return false;
+    const float sx = clip[0] * state.viewport_x_scale / w + state.viewport_x_center;
+    const float sy = clip[1] * state.viewport_y_scale / w + state.viewport_y_center;
+    return !(sx >= 0.0f && sy >= 0.0f && sx < 4096.0f && sy < 4096.0f);
 }
 
 // ---- Rectangle expansion (GE_PRIM_RECTANGLES) ----

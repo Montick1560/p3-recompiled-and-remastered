@@ -50,6 +50,12 @@ void ge_transform_vertices(
     const GeState& state
 );
 
+/// PPSSPP vertex range culling: true when the clip-space position (x,y,z,w)
+/// lands outside the GE's [0, 4096) drawing space after the viewport
+/// transform, or has w < -1, and is not z-clipped (z < -w). The hardware
+/// drops every primitive using such a vertex.
+bool ge_vertex_range_culled(const GeState& state, const float clip[4]);
+
 /// Rectangle (GE_PRIM_RECTANGLES) expansion: perspective-divide the two
 /// clip-space corner vertices and emit the 6 vertices (two triangles) of
 /// the screen-aligned quad, each with w = 1 (NDC). A corner with w <= 0

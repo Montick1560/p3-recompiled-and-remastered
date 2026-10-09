@@ -1,4 +1,5 @@
 #include "psp_ge_draw.h"
+#include "psp_ge_mask.h"
 #include "psp_ge.h"
 #include "psp_ge_constants.h"
 #include "psp_ge_vertex.h"
@@ -677,8 +678,8 @@ void ge_draw_prim(
         }
 
         // Periodic heartbeat: a killed or hung run still leaves a current tally
-        // in the log (every 256 PRIMs observed). real_nonsprite>0 == graphics.
-        if (g_prim_total_observed % 256 == 0) {
+        // in the log (every 64K PRIMs observed). real_nonsprite>0 == graphics.
+        if (g_prim_total_observed % 65536 == 0) {
             int real_ns = 0, sprite_nc = 0, clears = 0;
             for (int t = 0; t < 8; ++t) {
                 clears += g_prim_type_count_clear[t];
@@ -693,13 +694,13 @@ void ge_draw_prim(
         }
     }
 
-    // Log a wider window so non-clear PRIMs in the middle of a run are
-    // not silently dropped. Also log every 25th PRIM after the first 50
-    // and log the first non-clear PRIM unconditionally.
+    // Log the first 50 PRIMs and the first non-clear ones; every 25th PRIM
+    // only with PSPRECOMP_PRIM_LOG (it grew logs to 1 GB in a 3 h run).
     static int non_clear_logged = 0;
+    static const bool prim_log_all = std::getenv("PSPRECOMP_PRIM_LOG") != nullptr;
     bool is_non_clear_first = (!state.clear_mode && non_clear_logged < 5);
     if (prim_call_count <= 50
-        || (prim_call_count % 25 == 0)
+        || (prim_log_all && prim_call_count % 25 == 0)
         || is_non_clear_first) {
         std::fprintf(stderr,
             "[DRAW_PRIM] #%d type=%d count=%d clear=%d "
@@ -712,6 +713,7 @@ void ge_draw_prim(
 
     // Clear mode: use glClear instead of drawing
     if (state.clear_mode) {
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         // Decode first vertex for clear color
         std::vector<DecodedVertex> clear_verts;
         ge_decode_vertices(
@@ -908,6 +910,15 @@ void ge_draw_prim(
                          rv[13], rv[14], rv[15], rv[16], rv[17], rv[18], rv[19], rv[20], rv[21],
                          rv[22], rv[23]);
         }
+    }
+
+    // Pixel write masks (MASKRGB/MASKALPHA): games draw opaque quads with
+    // RGB masked off to touch only alpha/stencil; ignoring the mask painted
+    // them as black rectangles.
+    {
+        bool w[4];
+        ge_color_write_mask(state.mask_rgb, state.mask_alpha, w);
+        glColorMask(w[0], w[1], w[2], w[3]);
     }
 
     // Set GL state: alpha blend

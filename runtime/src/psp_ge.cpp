@@ -767,7 +767,10 @@ GeListResult ge_process_display_list(
 
         // ---- Mask ----
         case GE_CMD_MASKRGB:
+            g_ge_state.mask_rgb = data;
+            break;
         case GE_CMD_MASKALPHA:
+            g_ge_state.mask_alpha = data & 0xFFu;
             break;
 
         // ---- Color test ----

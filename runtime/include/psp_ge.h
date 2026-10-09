@@ -92,6 +92,8 @@ struct GeState {
 
     bool stencil_test_enable;
     uint32_t stencil_test;    // GE_CMD_STENCILTEST
+    uint32_t mask_rgb;        // GE_CMD_MASKRGB (1 bits = keep framebuffer)
+    uint32_t mask_alpha;      // GE_CMD_MASKALPHA
     uint32_t stencil_op;      // GE_CMD_STENCILOP
 
     bool cull_enable;

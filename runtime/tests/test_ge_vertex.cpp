@@ -16,6 +16,7 @@
 
 #include "psp_ge_vertex.h"
 #include "psp_ge.h"
+#include "psp_ge_mask.h"
 
 #include <cmath>
 #include <cstdint>
@@ -450,7 +451,43 @@ static void test_relative_address_adds_offset() {
                 0x00000010u, "sum wraps to 28 bits");
 }
 
+// PPSSPP vertex range culling (VertexShaderGenerator.cpp): a transformed
+// vertex whose screen position (after the viewport) leaves [0, 4096) in x or
+// y, or whose w < -1, kills its primitives -- unless it is z-clipped
+// (z < -w), in which case clipping, not culling, applies.
+static void test_range_culling() {
+    GeState s{};
+    s.viewport_x_scale = 240.0f; s.viewport_y_scale = -136.0f;
+    s.viewport_x_center = 2048.0f; s.viewport_y_center = 2048.0f;
+    const float on_screen[4] = {0.5f, -0.5f, 0.2f, 1.0f};
+    const float far_right[4] = {9.0f, 0.0f, 0.2f, 1.0f};    // x = 2048 + 2160 > 4096
+    const float far_up[4] = {0.0f, -16.0f, 0.2f, 1.0f};     // y = 2048 + 2176 > 4096
+    const float z_clipped[4] = {9.0f, 0.0f, -2.0f, 1.0f};   // z < -w: clipped, not culled
+    const float w_behind[4] = {0.0f, 0.0f, 5.0f, -2.0f};    // w < -1, z >= -w
+    tests_run++; if (ge_vertex_range_culled(s, on_screen)) { failures++; std::fprintf(stderr, "FAIL: on-screen vertex culled\n"); }
+    tests_run++; if (!ge_vertex_range_culled(s, far_right)) { failures++; std::fprintf(stderr, "FAIL: x >= 4096 not culled\n"); }
+    tests_run++; if (!ge_vertex_range_culled(s, far_up)) { failures++; std::fprintf(stderr, "FAIL: y >= 4096 not culled\n"); }
+    tests_run++; if (ge_vertex_range_culled(s, z_clipped)) { failures++; std::fprintf(stderr, "FAIL: z-clipped vertex culled\n"); }
+    tests_run++; if (!ge_vertex_range_culled(s, w_behind)) { failures++; std::fprintf(stderr, "FAIL: w < -1 not culled\n"); }
+}
+
+// GE pixel masks (MASKRGB/MASKALPHA, 1 = keep) -> GL channel write enables,
+// PPSSPP ConvertMaskState: 0x00 writes, 0xFF keeps, partial >= 128 writes.
+static void test_color_write_mask() {
+    bool w[4];
+    ge_color_write_mask(0x000000, 0x00, w);
+    tests_run++; if (!(w[0] && w[1] && w[2] && w[3])) { failures++; std::fprintf(stderr, "FAIL: no mask writes all" "\n"); }
+    ge_color_write_mask(0xFFFFFF, 0x00, w);
+    tests_run++; if (w[0] || w[1] || w[2] || !w[3]) { failures++; std::fprintf(stderr, "FAIL: RGB masked, alpha written" "\n"); }
+    ge_color_write_mask(0x00FF00, 0xFF, w);
+    tests_run++; if (!w[0] || w[1] || !w[2] || w[3]) { failures++; std::fprintf(stderr, "FAIL: G and A masked" "\n"); }
+    ge_color_write_mask(0x0000F0, 0x00, w);  // R partially masked: 0x0F writable < 128
+    tests_run++; if (w[0] || !w[1]) { failures++; std::fprintf(stderr, "FAIL: partial mask heuristic" "\n"); }
+}
+
 int main() {
+    test_color_write_mask();
+    test_range_culling();
     test_through_textured_normalizes();
     test_through_untextured_unchanged();
     test_through_scale_offset_then_normalize();
