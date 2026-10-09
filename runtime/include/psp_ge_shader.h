@@ -7,6 +7,9 @@ struct ShaderUniforms {
     GLint u_texture_enable;
     GLint u_texture;
     GLint u_tex_func;
+    GLint u_tex_alpha;
+    GLint u_tex_double;
+    GLint u_tex_env;
     GLint u_alpha_test_enable;
     GLint u_alpha_test_ref;
     GLint u_alpha_test_func;

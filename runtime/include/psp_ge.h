@@ -37,7 +37,10 @@ struct GeState {
     uint32_t tex_size[8];     // GE_CMD_TEXSIZE0-7: log2_w | (log2_h << 8)
     uint32_t tex_format;      // GE_CMD_TEXFORMAT: GETextureFormat value
     uint32_t tex_mode;        // GE_CMD_TEXMODE: bit 0 = swizzle
-    uint32_t tex_func;        // GE_CMD_TEXFUNC: GeTexFunc value
+    uint32_t tex_func;        // GE_CMD_TEXFUNC: GeTexFunc value (bits 0-2)
+    bool tex_alpha;           // GE_CMD_TEXFUNC bit 8 (TCC): texture alpha used (RGBA)
+    bool tex_color_double;    // GE_CMD_TEXFUNC bit 16: fragment RGB doubled
+    uint32_t tex_func_raw;    // GE_CMD_TEXFUNC data as written (diagnostics)
     uint32_t tex_filter;      // GE_CMD_TEXFILTER
     uint32_t tex_wrap;        // GE_CMD_TEXWRAP
     uint32_t tex_env_color;   // GE_CMD_TEXENVCOLOR

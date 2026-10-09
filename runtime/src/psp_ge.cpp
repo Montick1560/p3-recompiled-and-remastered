@@ -551,6 +551,9 @@ GeListResult ge_process_display_list(
             break;
         case GE_CMD_TEXFUNC:
             g_ge_state.tex_func = data & 0x7;
+            g_ge_state.tex_func_raw = data;
+            g_ge_state.tex_alpha = (data & 0x100) != 0;
+            g_ge_state.tex_color_double = (data & 0x10000) != 0;
             break;
         case GE_CMD_TEXFILTER:
             g_ge_state.tex_filter = data;

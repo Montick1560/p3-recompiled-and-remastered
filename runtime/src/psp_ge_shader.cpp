@@ -35,6 +35,9 @@ in vec4 v_color;
 uniform bool u_texture_enable;
 uniform sampler2D u_texture;
 uniform int u_tex_func;
+uniform bool u_tex_alpha;   // TCC: RGBA (true) or RGB (false)
+uniform bool u_tex_double;
+uniform vec3 u_tex_env;
 uniform bool u_alpha_test_enable;
 uniform float u_alpha_test_ref;
 uniform int u_alpha_test_func;
@@ -47,27 +50,30 @@ void main() {
     if (u_texture_enable) {
         vec4 tex = texture(u_texture, v_texcoord);
 
-        // Texture function (GE tex func)
+        // Texture function (GE tex func), PPSSPP FragmentShaderGenerator
+        // semantics. With TCC = RGB the texture alpha is ignored and the
+        // fragment keeps the primary color's alpha.
+        vec4 p = v_color;
         if (u_tex_func == 0) {
             // MODULATE
-            color = color * tex;
+            color = vec4(p.rgb * tex.rgb, u_tex_alpha ? p.a * tex.a : p.a);
         } else if (u_tex_func == 1) {
             // DECAL
-            color.rgb = mix(color.rgb, tex.rgb, tex.a);
-            // color.a unchanged
+            color = vec4(u_tex_alpha ? mix(p.rgb, tex.rgb, tex.a) : tex.rgb, p.a);
         } else if (u_tex_func == 2) {
-            // BLEND -- simplified (no env color)
-            color.rgb = mix(color.rgb, vec3(1.0),
-                            tex.rgb);
-            color.a *= tex.a;
+            // BLEND (with the texture environment color)
+            color = vec4(mix(p.rgb, u_tex_env, tex.rgb), u_tex_alpha ? p.a * tex.a : p.a);
         } else if (u_tex_func == 3) {
             // REPLACE
-            color = tex;
-        } else if (u_tex_func == 4) {
-            // ADD
-            color.rgb = color.rgb + tex.rgb;
-            color.a *= tex.a;
+            color = vec4(tex.rgb, u_tex_alpha ? tex.a : p.a);
+        } else {
+            // ADD (5..7 behave as ADD too)
+            color = vec4(p.rgb + tex.rgb, u_tex_alpha ? p.a * tex.a : p.a);
         }
+        if (u_tex_double) {
+            color.rgb *= 2.0;
+        }
+        color = clamp(color, 0.0, 1.0);
     }
 
     // Alpha test
@@ -177,6 +183,9 @@ void ge_shader_init() {
         g_uniforms.u_tex_func =
             glGetUniformLocation(
                 g_program, "u_tex_func");
+        g_uniforms.u_tex_alpha = glGetUniformLocation(g_program, "u_tex_alpha");
+        g_uniforms.u_tex_double = glGetUniformLocation(g_program, "u_tex_double");
+        g_uniforms.u_tex_env = glGetUniformLocation(g_program, "u_tex_env");
         g_uniforms.u_alpha_test_enable =
             glGetUniformLocation(
                 g_program, "u_alpha_test_enable");
@@ -214,6 +223,12 @@ void ge_shader_set_uniforms(const GeState& state) {
     glUniform1i(g_uniforms.u_texture, 0);  // unit 0
     glUniform1i(g_uniforms.u_tex_func,
                 static_cast<int>(state.tex_func));
+    glUniform1i(g_uniforms.u_tex_alpha, state.tex_alpha ? 1 : 0);
+    glUniform1i(g_uniforms.u_tex_double, state.tex_color_double ? 1 : 0);
+    glUniform3f(g_uniforms.u_tex_env,
+                (state.tex_env_color & 0xFF) / 255.0f,
+                ((state.tex_env_color >> 8) & 0xFF) / 255.0f,
+                ((state.tex_env_color >> 16) & 0xFF) / 255.0f);
 
     // Alpha test
     glUniform1i(g_uniforms.u_alpha_test_enable,
