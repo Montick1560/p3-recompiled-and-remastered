@@ -181,7 +181,9 @@ pub(crate) fn prepare_emission_with(
         let ptrs = crate::hle_entry_scanner::scan_data_code_pointers(&segment_bytes, &intervals);
         let n = ptrs.len();
         for a in ptrs {
-            force_mid_entries.push((a, a));
+            if let Some(owner) = owning_function_start(&intervals, a) {
+                force_mid_entries.push((a, owner));
+            }
         }
         tracing::info!("Data code-pointer scan: {} mid-entries", n);
     }
