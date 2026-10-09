@@ -84,16 +84,25 @@ pub(crate) fn decode_cop2(
             Ok(MipsOp::VfpuMtv { rt, vd: vd_field })
         }
         0x03 => {
-            // MFVC: move from VFPU control
+            // MFV / MFVC (PPSSPP Int_Mftv): imm = bits 7:0; below 128 it
+            // names a VFPU data register, above it control register imm-128.
             let rt = mips_rt(word);
-            let imm = ((word >> 8) & 0xFF) as u8;
-            Ok(MipsOp::VfpuMfvc { rt, imm })
+            let imm = (word & 0xFF) as u8;
+            if imm < 128 {
+                Ok(MipsOp::VfpuMfv { rt, vd: imm })
+            } else {
+                Ok(MipsOp::VfpuMfvc { rt, imm: imm - 128 })
+            }
         }
         0x07 => {
-            // MTVC: move to VFPU control
+            // MTV / MTVC, same imm split as MFV / MFVC.
             let rt = mips_rt(word);
-            let imm = ((word >> 8) & 0xFF) as u8;
-            Ok(MipsOp::VfpuMtvc { rt, imm })
+            let imm = (word & 0xFF) as u8;
+            if imm < 128 {
+                Ok(MipsOp::VfpuMtv { rt, vd: imm })
+            } else {
+                Ok(MipsOp::VfpuMtvc { rt, imm: imm - 128 })
+            }
         }
         0x08 => {
             // VFPU branch: bit 16 selects bvf(0)/bvt(1),
@@ -1028,6 +1037,41 @@ mod tests {
                 assert_eq!(vd, 3);
             }
             _ => panic!("Expected VfpuMfv, got {op:?}"),
+        }
+    }
+
+    #[test]
+    fn test_decode_cop2_mfv_mtv_vs_control() {
+        // PPSSPP Int_Mftv: rs=3 is mfv when imm (bits 7:0) < 128, else mfvc
+        // of control register imm-128; rs=7 likewise for mtv/mtvc.
+        // Words from Patapon 3 (0x08835D50, 0x088358D4).
+        match decode_cop2(0x4862_0000, 0x08835D50).unwrap() {
+            MipsOp::VfpuMfv { rt, vd } => {
+                assert_eq!(rt, Reg::Gpr(2));
+                assert_eq!(vd, 0);
+            }
+            op => panic!("Expected VfpuMfv, got {op:?}"),
+        }
+        match decode_cop2(0x48E8_0001, 0x088358D4).unwrap() {
+            MipsOp::VfpuMtv { rt, vd } => {
+                assert_eq!(rt, Reg::Gpr(8));
+                assert_eq!(vd, 1);
+            }
+            op => panic!("Expected VfpuMtv, got {op:?}"),
+        }
+        match decode_cop2(0x4862_0083, 0x08800000).unwrap() {
+            MipsOp::VfpuMfvc { rt, imm } => {
+                assert_eq!(rt, Reg::Gpr(2));
+                assert_eq!(imm, 3);
+            }
+            op => panic!("Expected VfpuMfvc, got {op:?}"),
+        }
+        match decode_cop2(0x48E5_0080, 0x08800000).unwrap() {
+            MipsOp::VfpuMtvc { rt, imm } => {
+                assert_eq!(rt, Reg::Gpr(5));
+                assert_eq!(imm, 0);
+            }
+            op => panic!("Expected VfpuMtvc, got {op:?}"),
         }
     }
 

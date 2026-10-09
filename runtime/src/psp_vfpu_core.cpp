@@ -197,14 +197,16 @@ void vfpu_mtv(recomp_context* ctx, int rt_idx, uint8_t vd) {
     std::memcpy(&ctx->vfpu[idx], &u, 4);
 }
 
+// imm is the control register number (instruction imm - 128); PPSSPP
+// ignores numbers past VFPU_CTRL_MAX (16).
 void vfpu_mfvc(recomp_context* ctx, int rt_idx, int imm) {
-    ctx->r[rt_idx] = static_cast<int32_t>(
-        ctx->vfpu_ctrl[imm & 0xF]);
+    if (imm < 0 || imm >= 16) return;
+    ctx->r[rt_idx] = static_cast<int32_t>(ctx->vfpu_ctrl[imm]);
 }
 
 void vfpu_mtvc(recomp_context* ctx, int rt_idx, int imm) {
-    ctx->vfpu_ctrl[imm & 0xF] =
-        static_cast<uint32_t>(ctx->r[rt_idx]);
+    if (imm < 0 || imm >= 16) return;
+    ctx->vfpu_ctrl[imm] = static_cast<uint32_t>(ctx->r[rt_idx]);
 }
 
 // ---------------------------------------------------------------------------
