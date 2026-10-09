@@ -504,6 +504,10 @@ void ge_draw_request_log(int lists) {
     g_drawlog_lists.store(lists, std::memory_order_relaxed);
 }
 
+bool ge_draw_log_active() {
+    return g_drawlog_lists.load(std::memory_order_relaxed) > 0;
+}
+
 void ge_draw_end_list() {
     // Mark the front buffer dirty so the liveness net can publish content
     // even for a title that draws but never calls sceDisplaySetFrameBuf.
@@ -517,11 +521,12 @@ void ge_draw_end_list() {
 
 static void drawlog_prim(const GeState& s, int prim_type, int count) {
     std::fprintf(stderr,
-        "[DL] prim=%d n=%d vt=0x%06X va=0x%08X fb=0x%06X clr=%d thr=%d "
+        "[DL] prim=%d n=%d vt=0x%06X va=0x%08X base=0x%06X off=0x%08X fb=0x%06X clr=%d thr=%d "
         "tex=%d ta=0x%08X tf=%u tsz=0x%04X bw=%u clut=0x%08X cf=0x%06X "
         "tfn=0x%X blend=%d bm=0x%03X fa=0x%06X fb2=0x%06X at=%d atv=0x%06X "
         "zt=%d zf=%u zw=%d st=%d lit=%d mat=0x%06X/%02X amb=0x%06X sc=0x%06X/0x%06X\n",
-        prim_type, count, s.vertex_type, s.vertex_addr, s.framebuf_ptr,
+        prim_type, count, s.vertex_type, s.vertex_addr, s.base_addr, s.offset_addr,
+        s.framebuf_ptr,
         s.clear_mode ? 1 : 0, ge_vtype_through(s.vertex_type) ? 1 : 0,
         s.texture_enable ? 1 : 0, s.tex_addr[0], s.tex_format, s.tex_size[0],
         s.tex_bufw[0], s.clut_addr, s.clut_format, s.tex_func_raw,

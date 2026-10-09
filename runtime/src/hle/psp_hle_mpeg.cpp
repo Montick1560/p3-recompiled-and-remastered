@@ -191,6 +191,7 @@ struct MpegCtx {
     uint64_t fedBytes = 0;
     bool inputEnded = false;
     bool videoEnd = false;
+    bool audioEnded = false;  // input ended and the audio ES ran dry
     int starvedCalls = 0;  // decodes in a row with no AU and no new data
     int64_t videoPts = 0;  // relative to firstTimestamp, after the last picture
     int64_t audioPts = 0;  // relative, after the last audio frame
@@ -227,6 +228,7 @@ void reset_engine(MpegCtx* c, int ringPackets) {
     c->fedBytes = 0;
     c->inputEnded = false;
     c->videoEnd = false;
+    c->audioEnded = false;
     c->starvedCalls = 0;
     c->videoPts = 0;
     c->audioPts = 0;
@@ -237,14 +239,18 @@ void reset_engine(MpegCtx* c, int ringPackets) {
 
 // Packets the video path still holds (PPSSPP: packets - getRemainSize()/2048).
 // While the input has ended but pictures may still come out, at least one
-// packet is reported so the game keeps asking for AUs until the true end.
+// packet is reported so the game keeps asking for AUs until the true end --
+// but only while the audio still runs: Patapon 3's player paces pictures on
+// the audio clock and ends a movie once sceMpegRingbufferAvailableSize
+// reports the whole ring free, so with the audio dry and every byte consumed
+// the forced packet deadlocked the story movie (PPSSPP has no forced packet).
 int occupied_packets(const MpegCtx* c, int ringPackets) {
     if (!c->demux) {
         return 0;
     }
     size_t pending = c->demux->pendingVideoBytes();
     int n = (int)((pending + PACKET_SIZE - 1) / PACKET_SIZE);
-    if (c->inputEnded && !c->videoEnd && n == 0) {
+    if (c->inputEnded && !c->videoEnd && !c->audioEnded && n == 0) {
         n = 1;
     }
     return std::min(n, ringPackets);
@@ -718,9 +724,28 @@ void hle_sceMpegRingbufferPut(uint8_t* rdram, recomp_context* ctx) {
         ret(ctx, -1);
         return;
     }
+    const int asked = numPackets;
     numPackets = std::min(numPackets, available);
     numPackets = std::min(numPackets, r.packets - r.packetsAvail);
     if (numPackets <= 0) {
+        // A feeder that asks for 0 packets while the ring has room has no
+        // file data left (Patapon 3's movie reader passes min(free, bytes
+        // left) and the file ends short of the PSMF header's stream size),
+        // so the read callback never runs to report EOF. Treat it as the
+        // end of input so the demuxer releases its trailing AUs and the
+        // ring drains (the game ends a movie only once
+        // sceMpegRingbufferAvailableSize reports the whole ring free).
+        if (asked == 0 && r.packets - r.packetsAvail > 0) {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            MpegCtx* c = get_ctx(rdram, r.mpeg);
+            if (c && c->fedBytes > 0 && !c->inputEnded) {
+                c->inputEnded = true;
+                std::fprintf(stderr,
+                             "[HLE] sceMpegRingbufferPut: feeder asked 0 packets after %zu bytes "
+                             "-> end of input\n",
+                             (size_t)c->fedBytes);
+            }
+        }
         ret(ctx, 0);
         return;
     }
@@ -883,6 +908,21 @@ void hle_sceMpegGetAtracAu(uint8_t* rdram, recomp_context* ctx) {
     if (noAudio) {
         au.dts = -1;
         result = ERR_NO_DATA;
+        if (c->inputEnded) {
+            c->audioEnded = true;
+            sync_avail(rdram, c);
+        }
+        static int noAudioLogs = 0;
+        if (++noAudioLogs <= 20 || noAudioLogs % 300 == 0) {
+            std::fprintf(stderr,
+                         "[HLE] sceMpegGetAtracAu: no audio frame #%d (audioFrames=%u videoFrames=%u "
+                         "apts=%lld vpts=%lld pendingVideo=%zu inputEnded=%d)\n",
+                         noAudioLogs, (uint32_t)c->audioFrameCount,
+                         (uint32_t)c->videoFrameCount, (long long)c->audioPts,
+                         (long long)c->videoPts,
+                         c->demux ? c->demux->pendingVideoBytes() : 0,
+                         c->inputEnded ? 1 : 0);
+        }
     }
     write_au(rdram, auAddr, au);
     if (result == 0 && gptr(rdram, attrAddr, 4) && (attrAddr & 3) == 0) {

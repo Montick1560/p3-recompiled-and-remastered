@@ -55,7 +55,8 @@ struct GeCallStackEntry {
 
 /// Resolve a 24-bit address field using the current BASE register.
 static inline uint32_t resolve_addr(uint32_t data) {
-    return g_ge_state.base_addr | (data & 0x00FFFFFF);
+    return ge_relative_address(g_ge_state.base_addr, g_ge_state.offset_addr,
+                               data);
 }
 
 /// Convert 24-bit GE float data to IEEE 754 float.
@@ -187,7 +188,7 @@ GeListResult ge_process_display_list(
         uint8_t cmd = static_cast<uint8_t>(word >> 24);
         uint32_t data = word & 0x00FFFFFF;
 
-        if (g_ge_trace) {
+        if (g_ge_trace || ge_draw_log_active()) {
             std::fprintf(stderr,
                 "[GE:0x%08X] cmd=0x%02X data=0x%06X\n",
                 pc, cmd, data);
@@ -392,7 +393,7 @@ GeListResult ge_process_display_list(
 
         // ---- Address / type ----
         case GE_CMD_BASE:
-            g_ge_state.base_addr = (data << 8) & 0xFF000000;
+            g_ge_state.base_addr = data;  // raw; see ge_relative_address
             break;
 
         case GE_CMD_OFFSETADDR:

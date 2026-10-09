@@ -437,6 +437,19 @@ static void test_decode_uses_aligned_stride() {
     std::free(ram);
 }
 
+// GE VADDR/IADDR/JUMP targets are relative (PPSSPP getRelativeAddress):
+// offsetAddr (OFFSETADDR / ORIGIN) + ((BASE & 0x0F0000) << 8 | data).
+static void test_relative_address_adds_offset() {
+    ASSERT_NEAR(ge_relative_address(0x00090000u, 0, 0x0042A0u), 0x090042A0u,
+                "base supplies bits 24-27");
+    ASSERT_NEAR(ge_relative_address(0, 0x094C5A00u, 0xA0u), 0x094C5AA0u,
+                "offset (ORIGIN) is added");
+    ASSERT_NEAR(ge_relative_address(0x00F90000u, 0, 0x1u), 0x09000001u,
+                "only BASE bits 16-19 extend the address");
+    ASSERT_NEAR(ge_relative_address(0x00080000u, 0x08000000u, 0x10u),
+                0x00000010u, "sum wraps to 28 bits");
+}
+
 int main() {
     test_through_textured_normalizes();
     test_through_untextured_unchanged();
@@ -452,6 +465,7 @@ int main() {
     test_colorless_vertex_uses_material_ambient();
     test_vertex_stride_alignment();
     test_decode_uses_aligned_stride();
+    test_relative_address_adds_offset();
 
     if (failures == 0) {
         std::printf("test_ge_vertex: %d/%d PASS\n", tests_run, tests_run);

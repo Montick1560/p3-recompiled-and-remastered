@@ -285,8 +285,14 @@ static void test_real_movie() {
     CHECK(pictures >= 850, "about 862 pictures");
     CHECK(ptsMonotonic, "pts increases");
     CHECK(audioFrames >= 500, "audio frames decoded");
-    CHECK_EQ(callHle("sceMpegAvcDecodeYCbCr", MPEG, AU_V, BUFP, INITP), (int32_t)0x80628002U,
-             "decode after the end is fatal");
+    // The ring reports empty once every byte is consumed and the audio is dry
+    // (PPSSPP), which can be before the decoder's delayed pictures are out:
+    // those drain first, then decoding is fatal.
+    int afterEnd = 0;
+    for (int i = 0; i < 8 && afterEnd != (int32_t)0x80628002U; i++) {
+        afterEnd = callHle("sceMpegAvcDecodeYCbCr", MPEG, AU_V, BUFP, INITP);
+    }
+    CHECK_EQ(afterEnd, (int32_t)0x80628002U, "decode after the end is fatal");
     if (PspVideoDecoder::available()) {
         CHECK(nonSilent > audioFrames / 2, "movie audio is not silent");
         // The last picture is in FRAME as 8888 rows 512 px apart.

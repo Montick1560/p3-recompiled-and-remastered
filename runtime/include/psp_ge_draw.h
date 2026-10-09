@@ -86,6 +86,9 @@ bool ge_draw_capture_screenshot(const char* path, int timeout_ms);
 /// next `lists` display lists ([DL] lines). Callable from any thread.
 void ge_draw_request_log(int lists);
 
+/// True while a `D` draw log is active (the GE also logs raw commands).
+bool ge_draw_log_active();
+
 /// Render-thread side of ge_draw_capture_screenshot: if a capture request
 /// is pending, read the FBO and write the TGA. MUST be called from the
 /// main (GL) thread -- wired into psp_event_loop next to

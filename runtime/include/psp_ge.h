@@ -11,9 +11,20 @@ static constexpr int GE_MAX_COMMANDS = 4 * 1024 * 1024;
 
 /// GE state machine -- tracks all state-setting commands for rendering.
 /// Updated by the command decoder; read by vertex, texture, and shader code.
+/// GE relative address (PPSSPP GPUStateCache::getRelativeAddress) used by
+/// VADDR, IADDR, JUMP, BJUMP and CALL: the 24-bit command data extended with
+/// BASE bits 16-19 as address bits 24-27, plus the OFFSETADDR / ORIGIN
+/// offset, wrapped to 28 bits. `base_data` is the raw BASE command data.
+inline uint32_t ge_relative_address(uint32_t base_data, uint32_t offset,
+                                    uint32_t data) {
+    uint32_t base_extended = ((base_data & 0x000F0000u) << 8) |
+                             (data & 0x00FFFFFFu);
+    return (offset + base_extended) & 0x0FFFFFFFu;
+}
+
 struct GeState {
     // -- Address state --
-    uint32_t base_addr;       // GE_CMD_BASE: bits [31:8] address base
+    uint32_t base_addr;       // GE_CMD_BASE raw data (bits 16-19 = address bits 24-27)
     uint32_t vertex_addr;     // GE_CMD_VADDR: vertex buffer address
     uint32_t index_addr;      // GE_CMD_IADDR: index buffer address
     uint32_t offset_addr;     // GE_CMD_OFFSETADDR / ORIGIN
