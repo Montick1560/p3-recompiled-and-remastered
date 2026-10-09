@@ -225,7 +225,8 @@ pub(crate) fn decode_vfpu1(
             vt: t,
             size: sz,
         }),
-        3 => Ok(MipsOp::VfpuHdp {
+        // 3 and 7 are invalid (PPSSPP tableVFPU1).
+        4 => Ok(MipsOp::VfpuHdp {
             vd: d,
             vs: s,
             vt: t,
@@ -265,6 +266,8 @@ pub(crate) fn decode_vfpu3(
     let t = vt(word);
     let sz = vec_size(word);
 
+    // PPSSPP tableVFPU3: 0 vcmp, 2 vmin, 3 vmax, 5 vscmp, 6 vsge, 7 vslt;
+    // 1 and 4 are invalid.
     match sub {
         0 => {
             let cond = (word & 0xF) as u8;
@@ -275,31 +278,31 @@ pub(crate) fn decode_vfpu3(
                 size: sz,
             })
         }
-        1 => Ok(MipsOp::VfpuVmin {
+        2 => Ok(MipsOp::VfpuVmin {
             vd: d,
             vs: s,
             vt: t,
             size: sz,
         }),
-        2 => Ok(MipsOp::VfpuVmax {
+        3 => Ok(MipsOp::VfpuVmax {
             vd: d,
             vs: s,
             vt: t,
             size: sz,
         }),
-        3 => Ok(MipsOp::VfpuScmp {
+        5 => Ok(MipsOp::VfpuScmp {
             vd: d,
             vs: s,
             vt: t,
             size: sz,
         }),
-        4 => Ok(MipsOp::VfpuSge {
+        6 => Ok(MipsOp::VfpuSge {
             vd: d,
             vs: s,
             vt: t,
             size: sz,
         }),
-        5 => Ok(MipsOp::VfpuSlt {
+        7 => Ok(MipsOp::VfpuSlt {
             vd: d,
             vs: s,
             vt: t,
@@ -885,6 +888,25 @@ mod tests {
             | ((vs as u32 & 0x7F) << 8)
             | (b7 << 7)
             | (vd as u32 & 0x7F)
+    }
+
+    /// VFPU1 (0x19) / VFPU3 (0x1B) sub-op = bits 25:23, per PPSSPP
+    /// MIPSTables.cpp tableVFPU1 {vmul,vdot,vscl,-,vhdp,vcrs,vdet,-} and
+    /// tableVFPU3 {vcmp,-,vmin,vmax,-,vscmp,vsge,vslt}.
+    #[test]
+    fn vfpu1_vfpu3_sub_ops_follow_ppsspp_tables() {
+        let w = |op: u32, sub: u32| (op << 26) | (sub << 23) | 0x8080; // quad, vd/vs/vt 0
+        assert!(matches!(decode_vfpu1(w(0x19, 3), 0).unwrap(), MipsOp::VfpuUnknown { .. }));
+        assert!(matches!(decode_vfpu1(w(0x19, 4), 0).unwrap(), MipsOp::VfpuHdp { .. }));
+        assert!(matches!(decode_vfpu1(w(0x19, 5), 0).unwrap(), MipsOp::VfpuCrs { .. }));
+        assert!(matches!(decode_vfpu3(w(0x1B, 0), 0).unwrap(), MipsOp::VfpuCmp { .. }));
+        assert!(matches!(decode_vfpu3(w(0x1B, 1), 0).unwrap(), MipsOp::VfpuUnknown { .. }));
+        assert!(matches!(decode_vfpu3(w(0x1B, 2), 0).unwrap(), MipsOp::VfpuVmin { .. }));
+        assert!(matches!(decode_vfpu3(w(0x1B, 3), 0).unwrap(), MipsOp::VfpuVmax { .. }));
+        assert!(matches!(decode_vfpu3(w(0x1B, 4), 0).unwrap(), MipsOp::VfpuUnknown { .. }));
+        assert!(matches!(decode_vfpu3(w(0x1B, 5), 0).unwrap(), MipsOp::VfpuScmp { .. }));
+        assert!(matches!(decode_vfpu3(w(0x1B, 6), 0).unwrap(), MipsOp::VfpuSge { .. }));
+        assert!(matches!(decode_vfpu3(w(0x1B, 7), 0).unwrap(), MipsOp::VfpuSlt { .. }));
     }
 
     /// Encode a VFPU5 instruction (opcode 0x37).
