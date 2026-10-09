@@ -806,6 +806,28 @@ void ge_draw_prim(
     if (state.texture_enable) {
         glActiveTexture(GL_TEXTURE0);
         ge_texture_bind(rdram, g_frame_counter);
+        // PSPRECOMP_TEX_WATCH companion: the watched texture's first vertex.
+        static const char* watch = std::getenv("PSPRECOMP_TEX_WATCH");
+        static int watch_logs = 0;
+        if (watch &&
+            (state.tex_addr[0] & 0x00FFFFFFu) ==
+                (static_cast<uint32_t>(std::strtoul(watch, nullptr, 16)) & 0x00FFFFFFu) &&
+            (++watch_logs % 60) == 1) {
+            const PackedVertex& pv = packed[0];
+            std::fprintf(stderr,
+                         "[TEX-WATCH] verts=%zu v0 pos=%.1f,%.1f,%.1f uv=%.3f,%.3f rgba=%u,%u,%u,%u\n",
+                         packed.size(), pv.pos[0], pv.pos[1], pv.pos[2], pv.uv[0], pv.uv[1],
+                         pv.color[0], pv.color[1], pv.color[2], pv.color[3]);
+            const uint8_t* rv = rdram + (state.vertex_addr & 0x07FFFFFFu);
+            std::fprintf(stderr,
+                         "[TEX-WATCH] texfunc_raw=0x%X vaddr=0x%08X raw v0: "
+                         "%02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X "
+                         "%02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X\n",
+                         state.tex_func_raw, state.vertex_addr, rv[0], rv[1], rv[2], rv[3],
+                         rv[4], rv[5], rv[6], rv[7], rv[8], rv[9], rv[10], rv[11], rv[12],
+                         rv[13], rv[14], rv[15], rv[16], rv[17], rv[18], rv[19], rv[20], rv[21],
+                         rv[22], rv[23]);
+        }
     }
 
     // Set GL state: alpha blend

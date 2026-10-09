@@ -9,6 +9,7 @@
 #include <array>
 #include <vector>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <algorithm>
 
@@ -146,6 +147,22 @@ GLuint ge_texture_bind(
     if (masked_addr + span > static_cast<uint32_t>(PSP_MEM_SIZE)) {
         glBindTexture(GL_TEXTURE_2D, 0);
         return 0;
+    }
+    // PSPRECOMP_TEX_WATCH=<hex addr>: log the draw state of the first binds of
+    // a texture at that address (diagnosing invisible textures).
+    static const uint32_t watch = [] {
+        const char* w = std::getenv("PSPRECOMP_TEX_WATCH");
+        return w ? static_cast<uint32_t>(std::strtoul(w, nullptr, 16)) & PSP_ADDR_MASK : 0u;
+    }();
+    static int watch_logs = 0;
+    if (watch != 0 && masked_addr == watch && (++watch_logs % 60) == 1) {
+        std::fprintf(stderr,
+                     "[TEX-WATCH] addr=0x%08X %dx%d fmt=%d bufw=%d texfunc=0x%X blend=%d mode=0x%X "
+                     "atest=%d 0x%X vtype=0x%X clear=%d\n",
+                     psp_addr, width, height, fmt, params.bufw, state.tex_func,
+                     state.alpha_blend_enable ? 1 : 0, state.blend_mode,
+                     state.alpha_test_enable ? 1 : 0, state.alpha_test, state.vertex_type,
+                     state.clear_mode ? 1 : 0);
     }
     uint32_t content_hash = fnv1a_hash(rdram + masked_addr, static_cast<int>(span));
     const uint32_t param_words[6] = {

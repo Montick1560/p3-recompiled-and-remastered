@@ -329,6 +329,8 @@ bool step_video(MpegCtx* c) {
                 return true;
             }
             c->videoEnd = true;
+            std::fprintf(stderr, "[HLE] sceMpeg: video end after %d pictures\n",
+                         c->videoFrameCount);
         }
         return false;
     }
@@ -747,9 +749,6 @@ void hle_sceMpegRingbufferPut(uint8_t* rdram, recomp_context* ctx) {
             break;
         }
         if (added <= 0) {
-            if (added == 0) {
-                c->inputEnded = true;
-            }
             if (added < 0 && total == 0) {
                 ret(ctx, added);
                 return;
@@ -1016,6 +1015,13 @@ void hle_sceMpegAvcCsc(uint8_t* rdram, recomp_context* ctx) {
     const uint64_t want = (uint64_t)frameWidth * (uint64_t)bpp * (uint64_t)h;
     const uint64_t room = PSP_MEM_SIZE - (destAddr & kAddrMask);
     uint8_t* dst = gptr(rdram, destAddr, 1);
+    static int csc_logs = 0;
+    if (csc_logs < 3 || (c->videoFrameCount % 200) == 0) {
+        csc_logs++;
+        std::fprintf(stderr,
+                     "[HLE] sceMpegAvcCsc dest=0x%08X fw=%d mode=%d range=%d,%d %dx%d frame=%d\n",
+                     destAddr, frameWidth, c->videoPixelMode, x, y, w, h, c->videoFrameCount);
+    }
     c->video.writeImage(dst, (size_t)std::min(want, room), frameWidth, c->videoPixelMode, x, y, w,
                         h);
     ret(ctx, 0);
