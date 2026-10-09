@@ -1146,6 +1146,7 @@ static constexpr uint32_t SCE_UTILITY_SAVEDATA_ERROR_DELETE_NO_DATA =
 #include "hle/psp_savedata.h"
 #include "hle/psp_hle_io.h"
 #include "psp_gamedata_install.h"
+#include "psp_osk.h"
 
 // pspUtilityDialogCommon.result offset within the param struct.
 static constexpr uint32_t UTILITY_COMMON_RESULT_OFFSET = 28;
@@ -1562,31 +1563,47 @@ static void hle_sceUtilityGamedataInstallAbort(
     ctx->r[2] = SCE_OK;
 }
 
+// ---- On-screen keyboard (sceUtilityOsk) ----
+// Same status machine as the savedata/msg dialogs. There is no keyboard UI:
+// the RUNNING poll completes field 0 with $PSPRECOMP_OSK_TEXT (default
+// "Hero"), like PPSSPP's native input-box path. Pure back end: psp_osk.
+static UtilityDialogState g_osk_dialog;
+
+static void osk_complete(UtilityDialogState& dlg, uint8_t* rdram) {
+    if (dlg.param_addr == 0) {
+        return;
+    }
+    std::string text =
+        psp_osk::resolve_text(std::getenv("PSPRECOMP_OSK_TEXT"));
+    std::string summary =
+        psp_osk::complete(rdram, PSP_MEM_SIZE, dlg.param_addr, text);
+    fprintf(stderr, "[HLE] sceUtilityOsk: %s\n", summary.c_str());
+}
+
 static void hle_sceUtilityOskInitStart(
     uint8_t* rdram, recomp_context* ctx
 ) {
-    ctx->r[2] = SCE_OK;
+    utility_dialog_init_start(g_osk_dialog, ctx);
     (void)rdram;
 }
 
 static void hle_sceUtilityOskGetStatus(
     uint8_t* rdram, recomp_context* ctx
 ) {
-    ctx->r[2] = PSP_UTILITY_STATUS_NONE;
-    (void)rdram;
+    utility_dialog_get_status(g_osk_dialog, rdram, ctx, osk_complete);
 }
 
 static void hle_sceUtilityOskShutdownStart(
     uint8_t* rdram, recomp_context* ctx
 ) {
-    ctx->r[2] = SCE_OK;
+    utility_dialog_shutdown_start(g_osk_dialog, ctx);
     (void)rdram;
 }
 
 static void hle_sceUtilityOskUpdate(
     uint8_t* rdram, recomp_context* ctx
 ) {
-    ctx->r[2] = SCE_OK;
+    utility_dialog_update(g_osk_dialog, ctx);
     (void)rdram;
 }
 

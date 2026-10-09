@@ -163,6 +163,7 @@ set(RUNTIME_SOURCES
     src/hle/psp_hle_psmf.cpp
     src/hle/psp_savedata.cpp
     src/hle/psp_gamedata_install.cpp
+    src/hle/psp_osk.cpp
     src/hle/psp_mpeg_demux.cpp
     src/hle/psp_hle_mpeg.cpp
     src/hle/psp_media_engine.cpp
@@ -600,6 +601,27 @@ target_compile_options(test_gamedata_install PRIVATE
 )
 
 add_test(NAME gamedata_install_tests COMMAND test_gamedata_install)
+# sceUtilityOsk back end unit test (pure: guest struct layout, UTF-8 ->
+# UTF-16 conversion, completion writes against a fake guest RAM, bad-pointer
+# safety) -- no SDL, no game files.
+add_executable(test_osk
+    tests/test_osk.cpp
+    src/hle/psp_osk.cpp
+)
+
+target_include_directories(test_osk PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/hle  # psp_osk.h
+)
+
+target_compile_options(test_osk PRIVATE
+    -O2
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+
+add_test(NAME osk_tests COMMAND test_osk)
 
 # PSMF header parser unit test (pure: parser + synthetic/malformed headers; the
 # real-data case reads the user's DATA_CMN.BND and is skipped when absent).
