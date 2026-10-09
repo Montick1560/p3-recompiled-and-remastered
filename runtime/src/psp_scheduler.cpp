@@ -575,8 +575,6 @@ int psp_scheduler_snapshot(PspDebugThreadInfo* out, int max) {
         std::strncpy(info.wait_reason, t.wait_reason,
                      sizeof(info.wait_reason) - 1);
         info.wait_reason[sizeof(info.wait_reason) - 1] = '\0';
-        info.ra = t.ctx.r[31];
-        info.sp = t.ctx.r[29];
     }
     return n;
 }
