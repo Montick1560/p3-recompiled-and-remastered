@@ -405,27 +405,77 @@ void vfpu_vmone(recomp_context* ctx, uint8_t*,
 void vfpu_vrot(recomp_context* ctx, uint8_t*,
                uint8_t vd, uint8_t vs, uint16_t imm5,
                uint8_t size) {
-    float s;
-    vfpu_read_vector(&s, 1, vs, ctx->vfpu);
-    float sin_val = vfpu_sin_single(s);
-    float cos_val = vfpu_cos_single(s);
+    // PPSSPP Int_Vrot. imm: bit 4 negates the sine, bits 3:2 pick the sine
+    // lane, bits 1:0 the cosine lane. When both name the same lane every lane
+    // gets the sine first and the cosine then overwrites the cosine lane.
+    float d[4] = {};
+    const int imm = imm5 & 0x1F;
+    const bool neg_sin = (imm & 0x10) != 0;
+    const int sine_lane = (imm >> 2) & 3;
+    const int cosine_lane = imm & 3;
 
-    // imm5 encodes rotation pattern
-    int sinidx = (imm5 >> 2) & 3;
-    int cosidx = imm5 & 3;
-    bool neg_sin = (imm5 >> 4) & 1;
-
-    float d[4];
-    for (int i = 0; i < size; i++) {
-        if (i == sinidx) {
-            d[i] = neg_sin ? -sin_val : sin_val;
-        } else if (i == cosidx) {
-            d[i] = cos_val;
-        } else {
-            d[i] = 0.0f;
-        }
+    float src;
+    vfpu_read_vector(&src, 1, vs, ctx->vfpu);
+    float sine, cosine;
+    const uint32_t sprefix = ctx->vfpu_ctrl[VFPU_CTRL_SPREFIX];
+    if (sprefix == 0xE4u) {
+        sine = vfpu_sin_single(src);
+        cosine = vfpu_cos_single(src);
+        if (neg_sin) sine = -sine;
+    } else {
+        // The S prefix only reaches the sine (its negate is replaced by
+        // neg_sin below); the cosine ignores all prefixes.
+        float s0 = src;
+        vfpu_apply_prefix_st(&s0, vfpu_rewrite_prefix(
+            sprefix, vfpu_pfx_negate(1, 0, 0, 0), 0), 1);
+        cosine = vfpu_cos_single(src);
+        sine = vfpu_sin_single(s0);
+        if (neg_sin) sine = -sine;
+        vfpu_retain_invalid_swizzle(&sine, sprefix,
+                                    ctx->vfpu_ctrl[VFPU_CTRL_TPREFIX], 1);
     }
 
-    vfpu_write_vector(d, size, vd, ctx->vfpu, 0);
+    if (sine_lane == cosine_lane) {
+        for (int i = 0; i < 4; i++) d[i] = sine;
+    } else {
+        d[sine_lane] = sine;
+    }
+
+    if (((vd >> 2) & 7) == ((vs >> 2) & 7)) {
+        // Destination overlaps the source matrix: if the source register is
+        // one of the destination lanes, the cosine is taken from what was
+        // just computed for that lane (PPSSPP GetVectorRegs compare).
+        const int mtx = vd & 0x1C;
+        const int col = vd & 3;
+        const int transpose = (vd >> 5) & 1;
+        int row = 0;
+        switch (size) {
+        case 2: row = (vd >> 5) & 2; break;
+        case 3: row = (vd >> 6) & 1; break;
+        case 4: row = (vd >> 5) & 2; break;
+        default: break;
+        }
+        bool written = false;
+        for (int i = 0; i < size; i++) {
+            int reg = mtx;
+            if (transpose) reg += ((row + i) & 3) + col * 32;
+            else           reg += col + ((row + i) & 3) * 32;
+            if (vs == reg) {
+                d[cosine_lane] = vfpu_cos_single(d[i]);
+                written = true;
+                break;
+            }
+        }
+        if (!written) d[cosine_lane] = cosine;
+    } else {
+        d[cosine_lane] = cosine;
+    }
+
+    // D prefix works, just not for the cosine lane.
+    const uint32_t remove = (3u << (cosine_lane * 2)) | (1u << (8 + cosine_lane));
+    ctx->vfpu_ctrl[VFPU_CTRL_DPREFIX] &= (0xFFFFFu ^ remove);
+    vfpu_apply_prefix_d(d, ctx->vfpu_ctrl[VFPU_CTRL_DPREFIX], size);
+    vfpu_write_vector(d, size, vd, ctx->vfpu,
+                      ctx->vfpu_ctrl[VFPU_CTRL_DPREFIX]);
     vfpu_eat_prefixes(ctx);
 }

@@ -69,23 +69,70 @@ void name(recomp_context* ctx, uint8_t*, \
 }
 
 VFPU_UNARY_OP(vfpu_vmov,   d[i] = s[i];)
-VFPU_UNARY_OP(vfpu_vabs,   d[i] = std::fabsf(s[i]);)
-VFPU_UNARY_OP(vfpu_vneg,   d[i] = -s[i];)
-VFPU_UNARY_OP(vfpu_vrcp,   d[i] = 1.0f / s[i];)
-VFPU_UNARY_OP(vfpu_vrsq,   d[i] = 1.0f / std::sqrtf(s[i]);)
-VFPU_UNARY_OP(vfpu_vsin,   d[i] = vfpu_sin_single(s[i]);)
-VFPU_UNARY_OP(vfpu_vcos,   d[i] = vfpu_cos_single(s[i]);)
-VFPU_UNARY_OP(vfpu_vexp2,  d[i] = std::exp2f(s[i]);)
-VFPU_UNARY_OP(vfpu_vlog2,  d[i] = std::log2f(s[i]);)
-VFPU_UNARY_OP(vfpu_vsqrt,  d[i] = std::sqrtf(s[i]);)
-VFPU_UNARY_OP(vfpu_vasin,
-    d[i] = std::asinf(s[i])
-         / static_cast<float>(M_PI_2);)
-VFPU_UNARY_OP(vfpu_vnrcp,  d[i] = -(1.0f / s[i]);)
-VFPU_UNARY_OP(vfpu_vnsin,
-    d[i] = -vfpu_sin_single(s[i]);)
-VFPU_UNARY_OP(vfpu_vrexp2,
-    d[i] = 1.0f / std::exp2f(s[i]);)
+
+/// PPSSPP Int_VV2Op "last lane" ops (vrcp, vrsq, vsin, vcos, vexp2, vlog2,
+/// vsqrt, vasin, vnrcp, vnsin, vrexp2): lanes before the last are computed
+/// from the raw source, the S prefix applies to the last lane only (as lane
+/// 0 of the prefix; negate is ignored by vnrcp/vnsin/vrexp2), an out of range
+/// swizzle there zeroes the result, and D keeps only lane 0's mask and
+/// saturation, applied to the last lane.
+#define VFPU_LASTLANE_OP(name, ignore_neg, body) \
+void name(recomp_context* ctx, uint8_t*, \
+          uint8_t vd, uint8_t vs, uint8_t size) { \
+    float s[4], d[4]; \
+    vfpu_read_vector(s, size, vs, ctx->vfpu); \
+    const uint32_t sp = ctx->vfpu_ctrl[VFPU_CTRL_SPREFIX]; \
+    vfpu_apply_prefix_st(&s[size - 1], (ignore_neg) ? \
+        vfpu_rewrite_prefix(sp, vfpu_pfx_negate(1, 0, 0, 0), 0) : sp, 1); \
+    for (int i = 0; i < size; i++) { body } \
+    if (vfpu_last_lane_swizzle_invalid(sp)) d[size - 1] = 0.0f; \
+    const uint32_t dp = vfpu_last_lane_dprefix( \
+        ctx->vfpu_ctrl[VFPU_CTRL_DPREFIX], size); \
+    vfpu_apply_prefix_d(d, dp, size); \
+    vfpu_write_vector(d, size, vd, ctx->vfpu, dp); \
+    vfpu_eat_prefixes(ctx); \
+}
+
+VFPU_LASTLANE_OP(vfpu_vrcp,  false, d[i] = 1.0f / s[i];)
+VFPU_LASTLANE_OP(vfpu_vrsq,  false, d[i] = 1.0f / std::sqrtf(s[i]);)
+VFPU_LASTLANE_OP(vfpu_vsin,  false, d[i] = vfpu_sin_single(s[i]);)
+VFPU_LASTLANE_OP(vfpu_vcos,  false, d[i] = vfpu_cos_single(s[i]);)
+VFPU_LASTLANE_OP(vfpu_vexp2, false, d[i] = std::exp2f(s[i]);)
+VFPU_LASTLANE_OP(vfpu_vlog2, false, d[i] = std::log2f(s[i]);)
+VFPU_LASTLANE_OP(vfpu_vsqrt, false, d[i] = std::sqrtf(s[i]);)
+VFPU_LASTLANE_OP(vfpu_vasin, false,
+    d[i] = std::asinf(s[i]) / static_cast<float>(M_PI_2);)
+VFPU_LASTLANE_OP(vfpu_vnrcp, true,  d[i] = -(1.0f / s[i]);)
+VFPU_LASTLANE_OP(vfpu_vnsin, true,  d[i] = -vfpu_sin_single(s[i]);)
+VFPU_LASTLANE_OP(vfpu_vrexp2, true, d[i] = 1.0f / std::exp2f(s[i]);)
+
+#undef VFPU_LASTLANE_OP
+
+/// vabs / vneg are prefix hacks in PPSSPP: the S prefix gets abs (or negate)
+/// forced on every lane and then applies normally, so a user negate/abs still
+/// combines (abs then negate order), and constants are affected.
+static void vfpu_forced_prefix_move(recomp_context* ctx, uint8_t vd,
+                                    uint8_t vs, uint8_t size,
+                                    uint32_t add) {
+    float s[4];
+    vfpu_read_vector(s, size, vs, ctx->vfpu);
+    vfpu_apply_prefix_st(s, vfpu_rewrite_prefix(
+        ctx->vfpu_ctrl[VFPU_CTRL_SPREFIX], 0, add), size);
+    vfpu_apply_prefix_d(s, ctx->vfpu_ctrl[VFPU_CTRL_DPREFIX], size);
+    vfpu_write_vector(s, size, vd, ctx->vfpu,
+                      ctx->vfpu_ctrl[VFPU_CTRL_DPREFIX]);
+    vfpu_eat_prefixes(ctx);
+}
+
+void vfpu_vabs(recomp_context* ctx, uint8_t*,
+               uint8_t vd, uint8_t vs, uint8_t size) {
+    vfpu_forced_prefix_move(ctx, vd, vs, size, vfpu_pfx_abs(1, 1, 1, 1));
+}
+
+void vfpu_vneg(recomp_context* ctx, uint8_t*,
+               uint8_t vd, uint8_t vs, uint8_t size) {
+    vfpu_forced_prefix_move(ctx, vd, vs, size, vfpu_pfx_negate(1, 1, 1, 1));
+}
 
 #undef VFPU_UNARY_OP
 
@@ -118,8 +165,8 @@ void vfpu_vsat1(recomp_context* ctx, uint8_t*,
     for (int i = 0; i < size; i++) {
         d[i] = nanclamp_local(s[i], -1.0f, 1.0f);
     }
-    vfpu_apply_prefix_d(d, ctx->vfpu_ctrl[VFPU_CTRL_DPREFIX],
-                        size);
+    // vsat1 is itself a prefix hack: the D saturation does not apply, only
+    // the write mask does (PPSSPP Int_VV2Op optype 5).
     vfpu_write_vector(d, size, vd, ctx->vfpu,
                       ctx->vfpu_ctrl[VFPU_CTRL_DPREFIX]);
     vfpu_eat_prefixes(ctx);
@@ -131,12 +178,18 @@ void vfpu_vsat1(recomp_context* ctx, uint8_t*,
 
 void vfpu_vidt(recomp_context* ctx, uint8_t*,
                uint8_t vd, uint8_t size) {
-    float d[4];
-    // Identity: 1.0 at the position matching vd's column index
-    int col = vd & 3;
-    for (int i = 0; i < size; i++) {
-        d[i] = (i == col) ? 1.0f : 0.0f;
-    }
+    // PPSSPP Int_Vidt: the S prefix is replaced by constants (1 at the lane
+    // matching vd's position, 0 elsewhere) with user abs/neg still applying.
+    // The position is vd & 3 for triple/quad but vd & 1 for pair.
+    float d[4] = {};
+    const int offmask = (size == 4 || size == 3) ? 3 : 1;
+    const int off = vd & offmask;
+    auto k = [&](int lane) {
+        return (off == (lane & offmask)) ? VFPU_CONST_ONE : VFPU_CONST_ZERO;
+    };
+    vfpu_apply_prefix_st(d, vfpu_rewrite_prefix(
+        ctx->vfpu_ctrl[VFPU_CTRL_SPREFIX], VFPU_PFX_ANY_SWIZZLE,
+        vfpu_pfx_constants(k(0), k(1), k(2), k(3))), size);
     vfpu_apply_prefix_d(d, ctx->vfpu_ctrl[VFPU_CTRL_DPREFIX],
                         size);
     vfpu_write_vector(d, size, vd, ctx->vfpu,
