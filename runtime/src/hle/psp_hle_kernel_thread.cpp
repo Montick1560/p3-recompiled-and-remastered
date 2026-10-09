@@ -4,6 +4,7 @@
 #include "psp_scheduler.h"
 #include "psp_memory.h"
 #include "psp_game_module.h"
+#include "psp_sysclock.h"
 #include "recomp.h"
 
 #include <cstdio>
@@ -493,6 +494,29 @@ static void hle_sceKernelGetSystemTimeWide(
     (void)rdram;
 }
 
+// sceKernelSysClock2USec(clock*, high*, low*) (PPSSPP sceKernelTime.cpp):
+// splits a 64-bit SysClock into seconds and microseconds. A no-op left both
+// out-params unwritten (garbage time deltas for its callers).
+static void hle_sceKernelSysClock2USec(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    const uint32_t clock_ptr = static_cast<uint32_t>(ctx->r[4]);
+    const uint32_t high_ptr = static_cast<uint32_t>(ctx->r[5]);
+    const uint32_t low_ptr = static_cast<uint32_t>(ctx->r[6]);
+    if (clock_ptr == 0) {
+        ctx->r[2] = -1;
+        return;
+    }
+    const uint64_t clock =
+        static_cast<uint64_t>(psp_mem_read<uint32_t>(rdram, clock_ptr)) |
+        (static_cast<uint64_t>(psp_mem_read<uint32_t>(rdram, clock_ptr + 4)) << 32);
+    uint32_t high = 0, low = 0;
+    psp_sysclock_split(clock, high, low);
+    if (high_ptr != 0 && (high_ptr & 3) == 0) psp_mem_write<uint32_t>(rdram, high_ptr, high);
+    if (low_ptr != 0 && (low_ptr & 3) == 0) psp_mem_write<uint32_t>(rdram, low_ptr, low);
+    ctx->r[2] = SCE_OK;
+}
+
 static void hle_sceKernelWaitThreadEnd(
     uint8_t* rdram, recomp_context* ctx
 ) {
@@ -771,6 +795,8 @@ void psp_hle_register_kernel_thread() {
                       hle_sceKernelGetSystemTimeLow);
     psp_hle_register("sceKernelGetSystemTimeWide",
                       hle_sceKernelGetSystemTimeWide);
+    psp_hle_register("sceKernelSysClock2USec",
+                      hle_sceKernelSysClock2USec);
     psp_hle_register("sceKernelWaitThreadEnd",
                       hle_sceKernelWaitThreadEnd);
     psp_hle_register("sceKernelWaitThreadEndCB",

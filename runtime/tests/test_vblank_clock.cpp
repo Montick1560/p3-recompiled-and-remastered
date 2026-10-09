@@ -1,6 +1,8 @@
 // Unit tests for the 59.94 Hz vblank clock (psp_vblank_clock.h): frame
-// index from elapsed time and the wait until the next vblank boundary.
+// index from elapsed time and the wait until the next vblank boundary; and
+// the SysClock -> seconds/microseconds split (psp_sysclock.h).
 
+#include "psp_sysclock.h"
 #include "psp_vblank_clock.h"
 
 #include <cstdio>
@@ -19,6 +21,17 @@ static int tests_run = 0;
     } while (0)
 
 int main() {
+    // sceKernelSysClock2USec (PPSSPP sceKernelTime.cpp): first out = clock /
+    // 1e6, second out = clock % 1e6, from the 64-bit microsecond clock.
+    {
+        uint32_t hi = 0, lo = 0;
+        psp_sysclock_split(0x00000002540BE3FFULL, hi, lo);  // 9999999999 us
+        ASSERT_EQ(hi, 9999, "sysclock seconds");
+        ASSERT_EQ(lo, 999999, "sysclock remainder us");
+        psp_sysclock_split(1000000ULL << 32, hi, lo);  // high word in use
+        ASSERT_EQ(hi, 4294967296ULL % (1ULL << 32), "seconds keep the low 32 bits");
+        ASSERT_EQ(lo, 0, "exact multiple of 1e6");
+    }
     ASSERT_EQ(psp_vblank_index(0), 0, "start is frame 0");
     ASSERT_EQ(psp_vblank_index(16683), 0, "just before the first boundary");
     ASSERT_EQ(psp_vblank_index(16684), 1, "just after the first boundary");
