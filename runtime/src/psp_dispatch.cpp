@@ -343,6 +343,12 @@ static void func_watch_parse() {
     }
 }
 
+static std::atomic<int> g_bt_request{-1};  // debug socket K <tid>
+
+void psp_dispatch_request_backtrace(int tid) {
+    g_bt_request.store(tid, std::memory_order_relaxed);
+}
+
 void psp_trace_checkpoint(uint32_t addr) {
     if (!g_pc_trace_checked) {
         const char* env = std::getenv("PSPRECOMP_PC_TRACE");
@@ -371,6 +377,13 @@ void psp_trace_checkpoint(uint32_t addr) {
     // below interleaves every thread).
     static thread_local PspThread* const self = psp_get_current_thread();
     if (self) self->last_func.store(addr, std::memory_order_relaxed);
+    // Debug socket K <tid>: the thread dumps its guest call stack here.
+    if (self && g_bt_request.load(std::memory_order_relaxed) == self->id) {
+        g_bt_request.store(-1, std::memory_order_relaxed);
+        char tag[32];
+        std::snprintf(tag, sizeof(tag), "thread %d at %08X", self->id, addr);
+        psp_print_host_backtrace(tag);
+    }
     g_func_ring[(g_func_ring_pos++) & 31u] = addr;
     // [#35] shared (cross-thread) ring for the debug socket I command.
     // One relaxed fetch_add + store per function entry; measured noise is

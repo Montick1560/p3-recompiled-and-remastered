@@ -34,6 +34,8 @@ void psp_dispatch_get_miss_stats(uint32_t* unique_addrs,
 /// [#35] Recent dispatched-function ring (cross-thread copy of the
 /// PC-TRACE ring in psp_dispatch.cpp), oldest first. Returns count.
 int psp_dispatch_get_recent_funcs(uint32_t* out, int max);
+/// Debug socket K: PSP thread <tid> prints its guest call stack at its next function entry.
+void psp_dispatch_request_backtrace(int tid);
 
 /// Debug-only GL thread safety check.
 /// In debug builds: aborts if current thread is not the main thread.

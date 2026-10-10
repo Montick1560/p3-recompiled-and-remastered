@@ -344,6 +344,13 @@ PspDebugReply psp_debug_handle_line(const char* line,
         g_hooks.hle_trace(std::atoi(line + 2) != 0);
         return make_ok_empty();
     }
+    if (line[0] == 'K' && line[1] == ' ') {
+        // The PSP thread <tid> prints its guest call stack ([BT] line, see
+        // build/tools/bt.py) at its next guest function entry.
+        if (!g_hooks.thread_backtrace) return make_err("unsupported");
+        g_hooks.thread_backtrace(std::atoi(line + 2));
+        return make_ok_empty();
+    }
     if (line[0] == 'D' && line[1] == ' ') {
         if (!g_hooks.draw_log) return make_err("unsupported");
         g_hooks.draw_log(std::atoi(line + 2));

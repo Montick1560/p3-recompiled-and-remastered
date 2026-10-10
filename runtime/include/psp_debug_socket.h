@@ -60,6 +60,9 @@ struct PspDebugHooks {
     void (*draw_log)(int lists) = nullptr;
     /// T command: switch the HLE trace on/off (PSPRECOMP_HLE_TRACE=1|2).
     void (*hle_trace)(bool on) = nullptr;
+    /// K command: PSP thread <tid> prints its guest call stack ([BT]) at its
+    /// next guest function entry.
+    void (*thread_backtrace)(int tid) = nullptr;
 };
 
 /// Install the providers used by the I and S commands.
