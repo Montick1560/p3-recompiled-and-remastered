@@ -1386,7 +1386,10 @@ fn static_targets_needing_mid_entries(
         .collect();
 
     let mut found: Vec<(u32, u32)> = Vec::new();
-    for f in functions {
+    // Callers: Ghidra-identified code only. Heuristic "functions" may be data
+    // decoded as code whose jal targets are junk; a junk mid-entry inside a real
+    // function changes its emission (48647f5).
+    for f in functions.iter().filter(|f| f.source == "ghidra") {
         let Some(fstart) = parse_hex_u32(&f.address) else { continue };
         let fsize = f.size as u32;
         let Some(fend) = fstart.checked_add(fsize) else { continue };
