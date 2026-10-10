@@ -1077,6 +1077,69 @@ pub fn scan_data_gap_code_pointers(
     found
 }
 
+/// Code addresses materialized by `lui rs, hi` followed (within 8 instructions) by `addiu rt, rs, lo` or
+/// `ori rt, rs, lo`, with no other `lui` into `rs` in between: function pointers passed in registers
+/// (comparators, callbacks). Kept only when the address is 4-aligned, lies inside `[text_lo, text_hi)`,
+/// and `follows_terminator` holds (not reachable by fall-through, so it starts a function). Sorted, deduped.
+pub fn scan_lui_code_pointers(
+    segment_bytes: &[(u32, Vec<u8>)],
+    text_lo: u32,
+    text_hi: u32,
+) -> Vec<u32> {
+    let mut found = Vec::new();
+    for &(seg_va, ref bytes) in segment_bytes {
+        let n = bytes.len() / 4;
+        for i in 0..n {
+            let va = seg_va.wrapping_add((i as u32).wrapping_mul(4));
+            if va % 4 != 0 || va < text_lo || va >= text_hi {
+                continue;
+            }
+            let w = u32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap());
+            let opcode = (w >> 26) & 0x3F;
+            if opcode != OP_ADDIU && opcode != OP_ORI {
+                continue;
+            }
+            let rs = (w >> 21) & 31;
+            if rs == 0 {
+                continue;
+            }
+            let lo = w & 0xFFFF;
+            let mut lui_word = None;
+            for k in 1..=8 {
+                if i < k {
+                    break;
+                }
+                let prev = u32::from_le_bytes(
+                    bytes[(i - k) * 4..(i - k) * 4 + 4].try_into().unwrap(),
+                );
+                if (prev >> 26) & 0x3F == OP_LUI && ((prev >> 16) & 31) == rs {
+                    lui_word = Some(prev);
+                    break;
+                }
+            }
+            let Some(lui_word) = lui_word else {
+                continue;
+            };
+            let hi = lui_word & 0xFFFF;
+            let a = if opcode == OP_ADDIU {
+                (hi << 16).wrapping_add(lo as i16 as i32 as u32)
+            } else {
+                (hi << 16) | lo
+            };
+            if a % 4 == 0
+                && a >= text_lo
+                && a < text_hi
+                && follows_terminator(a, segment_bytes)
+            {
+                found.push(a);
+            }
+        }
+    }
+    found.sort_unstable();
+    found.dedup();
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1487,5 +1550,29 @@ mod tests {
         let mut segs = seg(0x1000, &code);
         segs.extend(seg(0x2000, &[0x00001008]));
         assert_eq!(scan_data_gap_code_pointers(&segs, &intervals), vec![0x1008]);
+    }
+
+    #[test]
+    fn test_scan_lui_code_pointers() {
+        let segs = seg(
+            0x1000,
+            &[
+                0x3C040000, // lui a0, 0x0000
+                0x00000000, // nop
+                0x24851020, // addiu a1, a0, 0x1020 -> 0x1020
+                0x34861024, // ori a2, a0, 0x1024 -> 0x1024
+                0x24871000, // addiu a3, a0, 0x1000 -> 0x1000
+                0x24882000, // addiu t0, a0, 0x2000 -> 0x2000
+                0x03E00008, // jr ra
+                0x00000000, // nop
+                0x8CA80008, // lw t0, 8(a1)
+                0x03E00008, // jr ra
+                0x00000000, // nop
+            ],
+        );
+        assert_eq!(scan_lui_code_pointers(&segs, 0x1000, 0x102C), vec![0x1020]);
+
+        let segs = seg(0x3000, &[0x3C050000, 0x24861020]);
+        assert_eq!(scan_lui_code_pointers(&segs, 0x3000, 0x3008), Vec::<u32>::new());
     }
 }

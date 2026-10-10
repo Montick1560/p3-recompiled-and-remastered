@@ -167,6 +167,7 @@ pub(crate) fn prepare_emission_with(
     let mut force_mid_entries = config.force_mid_entries(bank)?;
     force_mid_entries.extend(extra_mid);
 
+    let mut lui_text: Option<(u32, u32)> = None;
     if std::env::var("PSPRECOMP_NO_DATA_PTR_SCAN").as_deref() != Ok("1") {
         let intervals = sorted_function_intervals(&analysis);
         let gaps = crate::hle_entry_scanner::scan_data_gap_code_pointers(&segment_bytes, &intervals);
@@ -177,6 +178,39 @@ pub(crate) fn prepare_emission_with(
             }
         }
         tracing::info!("Data code-pointer scan: {} gap functions", n);
+
+        let mut text_lo = u32::MAX;
+        let mut text_hi = 0u32;
+        let mut any_ghidra = false;
+        for f in analysis.functions.iter().filter(|f| f.source == "ghidra") {
+            let Some(start) = parse_hex_u32(&f.address) else { continue };
+            let Some(end) = start.checked_add(f.size as u32) else { continue };
+            any_ghidra = true;
+            text_lo = text_lo.min(start);
+            text_hi = text_hi.max(end);
+        }
+        if any_ghidra {
+            lui_text = Some((text_lo, text_hi));
+            let ptrs = crate::hle_entry_scanner::scan_lui_code_pointers(
+                &segment_bytes, text_lo, text_hi,
+            );
+            let mut n = 0usize;
+            for a in ptrs {
+                let idx = intervals.partition_point(|&(s, _)| s <= a);
+                let covered = idx > 0 && {
+                    let (s, e) = intervals[idx - 1];
+                    a == s || a < e
+                };
+                if covered {
+                    continue;
+                }
+                n += 1;
+                if !force_entries.contains(&a) {
+                    force_entries.push(a);
+                }
+            }
+            tracing::info!("lui/addiu code-pointer scan: {} gap functions", n);
+        }
     }
 
     // Enhanced function discovery: three-pass scan replaces vtable_miss_addresses.txt sidecar
@@ -198,6 +232,20 @@ pub(crate) fn prepare_emission_with(
             }
         }
         tracing::info!("Data code-pointer scan: {} mid-entries", n);
+
+        if let Some((text_lo, text_hi)) = lui_text {
+            let ptrs = crate::hle_entry_scanner::scan_lui_code_pointers(
+                &segment_bytes, text_lo, text_hi,
+            );
+            let mut n = 0usize;
+            for a in ptrs {
+                if let Some(owner) = owning_function_start(&intervals, a) {
+                    force_mid_entries.push((a, owner));
+                    n += 1;
+                }
+            }
+            tracing::info!("lui/addiu code-pointer scan: {} mid-entries", n);
+        }
     }
 
     if std::env::var("PSPRECOMP_NO_FALLTHRU_ENTRIES").as_deref() != Ok("1") {
