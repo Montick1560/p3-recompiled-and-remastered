@@ -229,7 +229,9 @@ labels mark scope and priority.
 
 The runtime window is resizable (starts at 960x544, `PSPRECOMP_WINDOW_SCALE`); F11 or
 Alt+Enter toggles fullscreen. The image keeps the PSP aspect ratio and is scaled linearly
-(`PSPRECOMP_PRESENT_FILTER=nearest` for sharp pixels).
+(`PSPRECOMP_PRESENT_FILTER=nearest` for sharp pixels). `PSPRECOMP_RENDER_SCALE=N` (1–8,
+default 1) renders internally at N× 480x272 (4 = 1920x1088) for a sharper image in large
+windows and fullscreen.
 
 ### Prerequisites
 

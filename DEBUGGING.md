@@ -221,7 +221,7 @@ silently dropped. Full protocol details in the issue #35 section below.
 | `RAW <hexaddr> <decsize>` | Legacy v1 read — unframed | raw bytes only |
 | `W <hexaddr> <hexbytes>` | Write bytes into rdram (masked; whole range must be in bounds) | `OK 0` |
 | `B <hexmask> <decms>` | Inject button mask for duration (UP=10, CROSS=4000, START=8; clamped 60 s) | `OK 0` |
-| `S <path>` | Screenshot: render thread writes 480x272 TGA to `<path>` | `OK 0` (≤10 s) or `ERR timeout` |
+| `S <path>` | Screenshot: render thread writes a TGA of the FBO (480x272 × `PSPRECOMP_RENDER_SCALE`) to `<path>` | `OK 0` (≤10 s) or `ERR timeout` |
 | `D <lists>` | Draw log: every PRIM of the next `<lists>` display lists prints a `[DL]` line to the log (full draw state, world/view/proj matrices, first two packed vertices) | `OK 0` |
 | `A` | Re-arm the per-function log budgets of `PSPRECOMP_FUNC_WATCH` / `_FUNC_ARGS` / `_OVL_ARGS` (send it right before the action you want traced) | `OK 0` |
 | `X <lo> <hi>` | Draw skip: PRIMs whose index inside their display list (`i=` in `[DL]` lines) is in `[lo, hi]` are not drawn (clears still run); bare `X` or `lo > hi` draws everything again. Bisects which draw paints a region | `OK 0` |
@@ -245,6 +245,9 @@ the socket for scripted/agent input.
 - `PSPRECOMP_FUNC_ARGS=<hex>[,<hex>...]` (max 8): wrap those functions in the dispatch table and log
   a0-a3 and v0 per call (first 400, `PSPRECOMP_FUNC_ARGS_MAX` overrides). Only calls that go through RECOMP_LOOKUP are seen.
 - `PSPRECOMP_FUNC_ARGS_MAX=<n>`: per-function log budget of `PSPRECOMP_FUNC_ARGS` (default 400).
+- `PSPRECOMP_RENDER_SCALE=<1..8>`: internal resolution (default 1). Oracle comparisons with
+  PPSSPP, `tools/gelist.py` diffs and `tools/tgadiff.py` baselines must run at 1. `S`
+  screenshots are written at the FBO size.
 - `PSPRECOMP_FUNC_ARGS_DUMP=<bytes>`: with `PSPRECOMP_FUNC_ARGS`, also hex-dump that many bytes of
   guest memory at v0 after each logged call (catches a returned block before it is reused).
 

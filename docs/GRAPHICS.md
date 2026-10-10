@@ -21,7 +21,8 @@ The PSP's GE is a command-stream GPU: the game writes a *display list* (a sequen
 command words) into PSP RAM and submits it with `sceGeListEnQueue`. The runtime replaces the
 hardware with a software interpreter (`runtime/src/psp_ge.cpp`) that walks the list on the main
 thread, tracks GE register state, and turns `PRIM` commands into `glDrawArrays` calls into a small
-pool of 480x272 offscreen FBOs. Vertex transform and per-vertex lighting happen entirely on the
+pool of offscreen FBOs sized 480x272 × render scale (`PSPRECOMP_RENDER_SCALE`, default 1;
+see [Internal render scale](#internal-render-scale)). Vertex transform and per-vertex lighting happen entirely on the
 CPU; the GL shader is a fixed pass-through "uber-shader". There is one FBO per distinct guest
 framebuffer address the GE renders into (up to `GE_MAX_TARGETS`), keyed by that address (see
 [Render targets and render-to-texture](#render-targets-and-render-to-texture)). Presenting a frame
@@ -370,7 +371,8 @@ with a single `glDrawArrays` per PRIM command. There is no batching across PRIMs
 shader is a pure pass-through (`gl_Position = a_position`) because all transformation already
 happened on the CPU.
 
-The render target is a 480x272 RGBA8 FBO with a 24-bit depth renderbuffer. It is not created at
+The render target is a 480x272 × render scale RGBA8 FBO (`PSPRECOMP_RENDER_SCALE`, default 1)
+with a 24-bit depth renderbuffer. It is not created at
 startup: `ge_draw_begin_list` (and a mid-list `FRAMEBUFPTR`) call `ge_draw_select_target` to bind
 (or lazily create) the FBO for the current guest framebuffer address, and set a full-buffer
 default viewport. The precise per-draw viewport and depth range are applied in `ge_draw_prim`
@@ -386,7 +388,8 @@ the thread that owns the context. The render queue (`psp_render_queue.cpp`) is t
 *only* path by which graphics work reaches GL — this is invariant #3 in ARCHITECTURE.md. The
 SDL window and GL 3.3 core context are created on the main thread at boot
 (`psp_runtime_init_sdl` in `psp_event_loop.cpp`: SDL video init, context attributes 3.3 core +
-double buffer, 480x272 window, `SDL_GL_CreateContext`, then
+double buffer, resizable window of 480x272 × `PSPRECOMP_WINDOW_SCALE` (default 2),
+`SDL_GL_CreateContext`, then
 `gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress)`), followed by `ge_init`, `ge_draw_init`, and
 `ge_texture_init` (`main.cpp`).
 
@@ -424,8 +427,9 @@ buffer when lists were processed but no flip arrived within `PSPRECOMP_PRESENT_S
 (default 100 ms).
 
 `ge_present_frame` normalizes the displayed address with `ge_fb_key` to find the FBO the guest is
-scanning out, then `present_blit` blits that 480x272 FBO to the default framebuffer
-(`glBlitFramebuffer`, scaled to the current window size, `GL_NEAREST`) and calls
+scanning out, then `present_blit` blits that FBO (480x272 × render scale) to the default
+framebuffer (`glBlitFramebuffer`, letterboxed to the current window size, `GL_LINEAR` unless
+`PSPRECOMP_PRESENT_FILTER=nearest`) and calls
 `SDL_GL_SwapWindow`. On a key miss for a real (non-zero) address it materializes that address's own
 cleared FBO (`acquire_target`) and presents it, so a fresh flip shows a clean buffer rather than an
 unrelated sibling's contents; `fb_addr == 0` falls back to the most-recently-rendered target so
@@ -442,6 +446,25 @@ Two consequences of how this is implemented:
   until the next 59.94 Hz display-clock vblank boundary (not a fixed sleep). No
   `SDL_GL_SetSwapInterval` is called, so vsync is whatever the platform defaults to.
 
+### Internal render scale
+
+`PSPRECOMP_RENDER_SCALE=N` (1–8; anything else is 1, parsed by `present_render_scale`) renders
+every target at N× the PSP resolution; `ge_draw_init` logs `[DRAW] render scale N (WxH)`. What
+scales: the FBO size, the transform-mode viewport (`ge_compute_viewport_depth(..., scale)`, which
+multiplies before rounding so 1/16-pixel `OFFSETX/Y` survive), the scissor
+(`ge_compute_scissor`), the full-buffer viewport, the present blit source rectangle and every
+readback (`S`, `PSPRECOMP_SCREENSHOT`, the shutdown capture are written at the FBO size). What
+does not: through-mode NDC (already resolution-independent), textures, guest VRAM. Scale 1 is
+pixel-identical to the pre-scale renderer; every PPSSPP comparison runs at 1.
+
+Two adjustments apply only at scale > 1. Through-mode fills (triangles, strips, fans,
+rectangles) are snapped to the PSP pixel grid with `ge_snap_through_positions` (edge
+`x -> ceil(x - 0.5)`, the 1x pixel-centre coverage): 2D pieces that touch at 1x, such as a
+menu body ending at x = 328 and its corner sprite starting at x = 328.196, would otherwise
+leave a one-pixel gap. Lines and points get `glLineWidth`/`glPointSize` = scale in
+`ge_draw_init` so they keep their one-PSP-pixel apparent width (logged as
+`[DRAW] line/point width`; a driver that rejects wide lines leaves them at 1 px).
+
 ### Render targets and render-to-texture
 
 - **How many FBOs exist and how they are keyed.** One GL FBO per distinct guest framebuffer
@@ -449,7 +472,8 @@ Two consequences of how this is implemented:
   target is keyed by `ge_fb_key(addr) = (addr & 0x07FFFFFF) & 0x001FFFF0` — the 16-byte-aligned
   eDRAM offset. `ge_draw_select_target` / `acquire_target` reuse a matching slot, else allocate a
   free one, else LRU-evict the least-recently-used target (deleting its GL objects). Each target
-  is a 480x272 RGBA8 color texture plus a Depth24 renderbuffer, created lazily on first use.
+  is a 480x272 × render scale RGBA8 color texture plus a Depth24 renderbuffer (render scale
+  `PSPRECOMP_RENDER_SCALE`, default 1), created lazily on first use.
 - **What `FRAMEBUFPTR` does.** The `FRAMEBUFPTR` case in `psp_ge.cpp` stores the raw value in
   `framebuf_ptr` and calls `ge_draw_select_target`, binding that address's FBO for subsequent
   draws, so a list that switches its render target mid-stream (clear buffer A, draw buffer B)

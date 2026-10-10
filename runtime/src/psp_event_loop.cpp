@@ -109,7 +109,7 @@ int psp_runtime_init_sdl() {
 
     // 3. Create a resizable window at an integer multiple of the PSP
     //    resolution (PSPRECOMP_WINDOW_SCALE, default 2); present_blit()
-    //    letterboxes the 480x272 image into whatever size it gets.
+    //    letterboxes the rendered image into whatever size it gets.
     const int win_scale = present_window_scale(std::getenv("PSPRECOMP_WINDOW_SCALE"));
     g_window = SDL_CreateWindow(
         "PSPrecomp Runtime",
