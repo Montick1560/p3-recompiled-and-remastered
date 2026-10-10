@@ -482,7 +482,7 @@ consequence of each. "Tracked" means the register value is stored in `GeState`.
 | Bezier/spline patches (`BEZIER`, `SPLINE`, `PATCH*`) | ignored | curved-surface geometry never drawn |
 | `BJUMP` (bounding-box conditional jump) | treated as a no-op — never jumps | conservative: everything is processed, minor overdraw |
 | DXT1/3/5 textures | `ge_decode_texture` returns false → opaque magenta | compressed textures are visually loud |
-| Mipmaps (levels 1–7) | only `TEXADDR0`/`TEXSIZE0` used (`TEXLEVEL` ignored) | no minification chain; just level 0 with NEAREST |
+| Mipmaps (levels 1–7) | only `TEXADDR0`/`TEXSIZE0` used (`TEXLEVEL` ignored) | no minification chain; level 0 only, filtered per `TEXFILTER` bit 0 |
 | Stencil (`STENCILTEST`/`STENCILOP`) | tracked, no GL stencil calls; the clear's stencil bit is a no-op | stencil-masked effects missing; the FBO has no stencil attachment |
 | Region (`REGION1`/`REGION2`) | tracked, never applied | region clipping missing (scissor *is* applied) |
 | Color test, logic op, dither | ignored | corresponding per-fragment effects missing |
