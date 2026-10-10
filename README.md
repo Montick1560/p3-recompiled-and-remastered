@@ -227,6 +227,10 @@ labels mark scope and priority.
 
 ## Building and Running
 
+The runtime window is resizable (starts at 960x544, `PSPRECOMP_WINDOW_SCALE`); F11 or
+Alt+Enter toggles fullscreen. The image keeps the PSP aspect ratio and is scaled linearly
+(`PSPRECOMP_PRESENT_FILTER=nearest` for sharp pixels).
+
 ### Prerequisites
 
 Build toolchain (macOS / Homebrew):

@@ -161,6 +161,31 @@ Read by the runtime binary at start-up or during execution.
 - **Set it when:** comparing against old nearest-only screenshots or PPSSPP's
   forced filter modes.
 
+### `PSPRECOMP_WINDOW_SCALE`
+- **Read in:** `runtime/src/psp_event_loop.cpp` (`psp_runtime_init_sdl`).
+- **Type:** env (integer 1..8).
+- **Default:** `2` (960x544 window).
+- **Effect:** initial window size = 480x272 times this value. The window is
+  resizable (minimum 480x272); out-of-range values fall back to 2.
+- **Set it when:** you want a different starting window size.
+
+### `PSPRECOMP_FULLSCREEN`
+- **Read in:** `runtime/src/psp_event_loop.cpp` (`psp_runtime_init_sdl`).
+- **Type:** env (`1` = on).
+- **Default:** off.
+- **Effect:** starts in borderless desktop fullscreen. F11 or Alt+Enter toggles
+  fullscreen at any time.
+- **Set it when:** you always play fullscreen.
+
+### `PSPRECOMP_PRESENT_FILTER`
+- **Read in:** `runtime/src/psp_ge_draw.cpp` (`present_filter`).
+- **Type:** env (`nearest`; anything else = linear).
+- **Default:** linear.
+- **Effect:** filter of the window blit that scales the 480x272 image
+  (letterboxed to the PSP aspect ratio). `nearest` keeps hard pixel edges.
+  Screenshots (`S`, `PSPRECOMP_SCREENSHOT`) are always the unscaled 480x272 FBO.
+- **Set it when:** you prefer sharp pixels or compare against nearest captures.
+
 ### `PSPRECOMP_SAVEDATA`
 - **Read in:** `runtime/src/hle/psp_savedata.cpp` (`default_root()`; used by the
   `sceUtilitySavedata*` handlers in `runtime/src/hle/psp_hle_utility.cpp`)

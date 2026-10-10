@@ -137,6 +137,7 @@ set(RUNTIME_SOURCES
     src/psp_event_loop.cpp
     src/psp_ge.cpp
     src/psp_ge_transfer.cpp
+    src/psp_present.cpp
     src/psp_ge_sampler.cpp
     src/psp_ge_vertex.cpp
     src/psp_ge_lighting.cpp
@@ -518,6 +519,12 @@ add_executable(test_ge_transfer tests/test_ge_transfer.cpp src/psp_ge_transfer.c
 target_include_directories(test_ge_transfer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_ge_transfer PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME ge_transfer_tests COMMAND test_ge_transfer)
+
+# Present rectangle (aspect fit) and window scale parsing.
+add_executable(test_present tests/test_present.cpp src/psp_present.cpp)
+target_include_directories(test_present PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_present PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME present_tests COMMAND test_present)
 
 # GE sampler choice (TEXFILTER / TEXWRAP -> GL filter and wrap).
 add_executable(test_ge_sampler tests/test_ge_sampler.cpp src/psp_ge_sampler.cpp)

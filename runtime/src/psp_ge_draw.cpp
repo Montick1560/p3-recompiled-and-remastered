@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include "psp_present.h"
 
 // ---- Generic FBO pool (issue #59 — honor fb_addr / double buffer) ----
 // One GL FBO per distinct guest VRAM framebuffer address. The GE binds the
@@ -939,6 +940,16 @@ static void present_service_screenshot(GLuint fbo) {
     g_screenshot_done = true;
 }
 
+// GL filter for the window blit: PSPRECOMP_PRESENT_FILTER=nearest keeps sharp
+// pixels, anything else scales linearly.
+static GLenum present_filter() {
+    static const GLenum f = [] {
+        const char* e = std::getenv("PSPRECOMP_PRESENT_FILTER");
+        return (e && std::strcmp(e, "nearest") == 0) ? GLenum(GL_NEAREST) : GLenum(GL_LINEAR);
+    }();
+    return f;
+}
+
 // Blit the given front FBO to the window and swap. Common to the routine
 // (page-flip) present and the liveness net.
 static void present_blit(GLuint fbo) {
@@ -946,12 +957,20 @@ static void present_blit(GLuint fbo) {
     if (!window) return;
     glDisable(GL_SCISSOR_TEST);  // the GE scissor must not crop the blit
     present_service_screenshot(fbo);
+    // Letterbox the 480x272 image into the drawable, keeping the PSP aspect
+    // ratio; linear scaling unless PSPRECOMP_PRESENT_FILTER=nearest. The GE
+    // path re-sets viewport, colour mask and clear colour before its draws.
     int win_w = 480, win_h = 272;
-    SDL_GetWindowSize(window, &win_w, &win_h);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    SDL_GL_GetDrawableSize(window, &win_w, &win_h);
+    const PresentRect r = present_fit_rect(win_w, win_h);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    glBlitFramebuffer(0, 0, 480, 272, 0, 0, win_w, win_h,
-                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glViewport(0, 0, win_w, win_h);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    glBlitFramebuffer(0, 0, 480, 272, r.x, r.y, r.x + r.w, r.y + r.h,
+                      GL_COLOR_BUFFER_BIT, present_filter());
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     SDL_GL_SwapWindow(window);
     g_present_dirty = false;

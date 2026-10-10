@@ -25,7 +25,8 @@ pool of 480x272 offscreen FBOs. Vertex transform and per-vertex lighting happen 
 CPU; the GL shader is a fixed pass-through "uber-shader". There is one FBO per distinct guest
 framebuffer address the GE renders into (up to `GE_MAX_TARGETS`), keyed by that address (see
 [Render targets and render-to-texture](#render-targets-and-render-to-texture)). Presenting a frame
-blits the FBO for the address the game is scanning out to the window and swaps.
+blits the FBO for the address the game is scanning out to the window (letterboxed to the
+480:272 aspect ratio, `GL_LINEAR` unless `PSPRECOMP_PRESENT_FILTER=nearest`) and swaps.
 
 ```mermaid
 flowchart LR

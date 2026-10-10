@@ -3,11 +3,14 @@
 #include "psp_render_queue.h"
 #include "psp_scheduler.h"
 #include "psp_ge_draw.h"
+#include "psp_present.h"
 
 #include <SDL.h>
 #include <glad/glad.h>
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <atomic>
 #include <chrono>
 #include <thread>
@@ -43,12 +46,29 @@ static uint32_t key_to_psp_button(SDL_Keycode key) {
     }
 }
 
+// --- Static state (SDL window + GL context, module-private) ---
+static SDL_Window*  g_window     = nullptr;
+static SDL_GLContext g_gl_context = nullptr;
+
+// F11 / Alt+Enter: toggle borderless desktop fullscreen.
+static void toggle_fullscreen() {
+    if (!g_window) return;
+    const bool full = (SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+    SDL_SetWindowFullscreen(g_window, full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+}
+
 // Handle one SDL event: window close + keyboard button state.
 static void handle_sdl_event(const SDL_Event& ev) {
     if (ev.type == SDL_QUIT) {
         g_should_exit.store(true);
     } else if (ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP) {
         if (ev.key.repeat) return;  // ignore OS key repeat
+        if (ev.type == SDL_KEYDOWN &&
+            (ev.key.keysym.sym == SDLK_F11 ||
+             (ev.key.keysym.sym == SDLK_RETURN && (ev.key.keysym.mod & KMOD_ALT)))) {
+            toggle_fullscreen();  // Alt+Enter must not also press CROSS
+            return;
+        }
         uint32_t bit = key_to_psp_button(ev.key.keysym.sym);
         if (bit == 0) return;
         if (ev.type == SDL_KEYDOWN) {
@@ -64,9 +84,6 @@ static void handle_sdl_event(const SDL_Event& ev) {
     }
 }
 
-// --- Static state (SDL window + GL context, module-private) ---
-static SDL_Window*  g_window     = nullptr;
-static SDL_GLContext g_gl_context = nullptr;
 
 // ---------------------------------------------------------------------------
 // psp_runtime_init_sdl — create SDL window + GL 3.3 core context + GLAD
@@ -90,13 +107,16 @@ int psp_runtime_init_sdl() {
         SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
-    // 3. Create window at PSP native resolution (480x272)
+    // 3. Create a resizable window at an integer multiple of the PSP
+    //    resolution (PSPRECOMP_WINDOW_SCALE, default 2); present_blit()
+    //    letterboxes the 480x272 image into whatever size it gets.
+    const int win_scale = present_window_scale(std::getenv("PSPRECOMP_WINDOW_SCALE"));
     g_window = SDL_CreateWindow(
         "PSPrecomp Runtime",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
-        480, 272,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN);
+        480 * win_scale, 272 * win_scale,
+        SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
     if (!g_window) {
         std::fprintf(stderr,
             "[RT] SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -125,6 +145,14 @@ int psp_runtime_init_sdl() {
         return 1;
     }
 
+    SDL_SetWindowMinimumSize(g_window, 480, 272);
+    {
+        const char* fs = std::getenv("PSPRECOMP_FULLSCREEN");
+        if (fs && std::strcmp(fs, "1") == 0) {
+            SDL_SetWindowFullscreen(g_window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+        }
+    }
+
     // 6. Print GL info for diagnostics
     std::fprintf(stderr, "[RT] GL: %s\n",
         glGetString(GL_VERSION));
@@ -134,7 +162,8 @@ int psp_runtime_init_sdl() {
     glClear(GL_COLOR_BUFFER_BIT);
     SDL_GL_SwapWindow(g_window);
 
-    std::fprintf(stderr, "[RT] SDL/GL initialized (480x272)\n");
+    std::fprintf(stderr, "[RT] SDL/GL initialized (%dx%d)\n",
+        480 * win_scale, 272 * win_scale);
     return 0;
 }
 
