@@ -37,9 +37,19 @@ struct GeTexrepImage {
     TexrepFilter filter = TexrepFilter::None;
 };
 
-/// On a texture-cache miss: if the pack replaces the live texture, fill `out`
-/// (pointer valid until the next call) and return true. PNGs are decoded once
-/// and kept in a CPU cache (256 MiB, least recently used evicted); a file that
-/// fails to load is logged once and the original texture is used.
-bool ge_texrep_replacement(const uint8_t* rdram, const GeState& s, uint16_t draw_max_v,
-                           GeTexrepImage* out);
+enum class GeTexrepResult {
+    None,     // no replacement (not in the pack, ignored, or the file failed)
+    Pending,  // in the pack, decoding on the worker thread: draw the original
+    Ready,    // `out` filled (pointer valid until the next call)
+};
+
+/// On a texture-cache miss (or a pending entry's retry): look the live texture
+/// up in the pack. PNGs decode on a worker thread and stay in a CPU cache
+/// (256 MiB, least recently used evicted); a file that fails to load is logged
+/// once and the original texture is used.
+GeTexrepResult ge_texrep_replacement(const uint8_t* rdram, const GeState& s, uint16_t draw_max_v,
+                                     GeTexrepImage* out);
+
+/// Changes whenever a pack image finishes decoding: pending cache entries
+/// retry only then.
+uint64_t ge_texrep_epoch();

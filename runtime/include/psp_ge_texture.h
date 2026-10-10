@@ -14,6 +14,8 @@ struct TexCacheEntry {
     int format = 0;
     uint32_t last_frame = 0;
     int forced_filter = 0;  // texture pack [filtering]: 0 none, 1 nearest, 2 linear
+    bool replace_pending = false;   // pack image still decoding: original drawn
+    uint64_t replace_epoch = 0;     // ge_texrep_epoch() at the last attempt
     bool valid = false;
 };
 

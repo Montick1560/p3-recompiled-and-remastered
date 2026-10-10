@@ -219,6 +219,18 @@ GLuint ge_texture_bind(
         // Cache hit
         entry.last_frame = frame_num;
         glBindTexture(GL_TEXTURE_2D, entry.gl_tex);
+        if (entry.replace_pending && ge_texrep_epoch() != entry.replace_epoch) {
+            // A pack image finished decoding since the last try: retry.
+            entry.replace_epoch = ge_texrep_epoch();
+            GeTexrepImage rep;
+            const GeTexrepResult r = ge_texrep_replacement(rdram, state, draw_max_v, &rep);
+            if (r == GeTexrepResult::Ready) {
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, rep.w, rep.h, 0,
+                             GL_RGBA, GL_UNSIGNED_BYTE, rep.rgba);
+                entry.forced_filter = static_cast<int>(rep.filter);
+            }
+            entry.replace_pending = r == GeTexrepResult::Pending;
+        }
         apply_sampler(state, entry.forced_filter);
         return entry.gl_tex;
     }
@@ -229,8 +241,12 @@ GLuint ge_texture_bind(
     // and CLUT transform in psp_ge_texdecode.cpp; unsupported formats:
     // magenta placeholder).
     GeTexrepImage rep;
-    const bool replaced =
-        ge_texrep_enabled() && ge_texrep_replacement(rdram, state, draw_max_v, &rep);
+    const uint64_t epoch = ge_texrep_epoch();
+    const GeTexrepResult r = ge_texrep_enabled()
+        ? ge_texrep_replacement(rdram, state, draw_max_v, &rep) : GeTexrepResult::None;
+    const bool replaced = r == GeTexrepResult::Ready;
+    entry.replace_pending = r == GeTexrepResult::Pending;
+    entry.replace_epoch = epoch;
     if (entry.gl_tex == 0) {
         glGenTextures(1, &entry.gl_tex);
     }
