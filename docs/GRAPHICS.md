@@ -292,9 +292,10 @@ palette was being read from zeroed RAM.
 `CLUTFORMAT` selects the palette entry format (5650/5551/4444/8888, all expanded to RGBA8), and
 its shift/mask/start fields **are applied**: `palette_entry` in `psp_ge_texdecode.cpp` transforms
 each index as `((raw >> shift) & mask) | ((start << 4) & wrap)` (wrap = `0x1FF` for 16-bit
-palettes, `0xFF` for 32-bit), mirroring PPSSPP's `transformClutIndex`. `LOADCLUT` is a no-op; the
-palette is re-read from guest memory at every texture decode, so "load" timing is subsumed by the
-content-hash cache check below.
+palettes, `0xFF` for 32-bit), mirroring PPSSPP's `transformClutIndex`. Decoding re-reads the
+palette from guest memory at every texture decode, so "load" timing is subsumed by the
+content-hash cache check below. `LOADCLUT` only snapshots the loaded bytes for texture-replacement
+keys (see [Texture replacement](#texture-replacement)).
 
 ### Swizzle
 
@@ -324,6 +325,30 @@ else repeat), like PPSSPP's default; `PSPRECOMP_TEX_FILTER=nearest|linear` overr
 the filters. The palette contents
 *are* part of the cache key for CLUT formats, so a palette swap over identical texel data forces
 a re-decode.
+
+### Texture replacement
+
+`PSPRECOMP_TEXTURES=<dir>` loads a PPSSPP-format pack (`textures.ini` plus PNGs, e.g. the
+Patapon 3 HD pack). The key must match PPSSPP bit for bit; the contract is in
+`docs/superpowers/specs/2026-10-10-m3c-hd-textures-design.md`. Three units:
+
+- `psp_texrep_hash` (pure): XXH64/XXH32 data hash with seed `0xBACD7814` over the level-0
+  texture (row-wise when `bufw > w`, `reduceHash` factor, the 512-tall `maxSeenV` rule), the CLUT
+  hash `XXH32(snapshot, min(total + base, max), 0xC0108888) ^ (0xC5 << 24 | CLUTFORMAT)` (PPSSPP
+  xors the whole command word), the `cachekey` and the `%016llx%08x` name.
+- `psp_texrep_pack` (pure): `[options]`, `[hashes]` (paths with `..` rejected; an empty value or a
+  level-1-only entry means "keep the original"), hash-named PNGs in the pack root, `[filtering]`,
+  `[hashranges]`, `[reducehashranges]`, and PPSSPP's `LookupWildcard` order (`ignoreAddress`
+  zeroes the address half first).
+- `psp_texrep` (render thread): env, pack loading, the CLUT snapshot taken at `LOADCLUT`, and a
+  `TexrepImageQueue` that decodes PNGs (stb_image) on one worker thread into a 256 MiB LRU cache.
+
+`ge_texture_bind` asks for a replacement only on a texture-cache miss (`draw_max_v`, the largest V
+of the current through-mode draw, feeds `maxSeenV`). A ready image is uploaded at its own size
+(UVs are normalised, so nothing else changes) and `[filtering]` can force nearest/linear. While
+the PNG is decoding the original texture is drawn and the entry is marked `replace_pending`; it
+retries on a later bind once `ge_texrep_epoch()` changes. Video frames and render targets are
+never replaced. Without `PSPRECOMP_TEXTURES` no thread starts and every frame is unchanged.
 
 ## Raster State Mapping
 

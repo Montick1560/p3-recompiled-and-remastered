@@ -231,7 +231,9 @@ The runtime window is resizable (starts at 960x544, `PSPRECOMP_WINDOW_SCALE`); F
 Alt+Enter toggles fullscreen. The image keeps the PSP aspect ratio and is scaled linearly
 (`PSPRECOMP_PRESENT_FILTER=nearest` for sharp pixels). `PSPRECOMP_RENDER_SCALE=N` (1–8,
 default 1) renders internally at N× 480x272 (4 = 1920x1088) for a sharper image in large
-windows and fullscreen.
+windows and fullscreen. `PSPRECOMP_TEXTURES=<dir>` loads a PPSSPP-format texture-replacement
+pack (`textures.ini` + PNGs, `xxh64`/`xxh32` hashes) from that folder; packs are not part of
+this repository.
 
 ### Prerequisites
 
@@ -440,6 +442,12 @@ This port stands on the work of the PSP and Patapon communities:
 - WondaOxigen: GXXTool3 (Patapon texture formats).
 - Nemoumbra: PataponAllocators and PacEngine (the game's memory allocators and script engine).
 - Madwig: author of the Patapon 3 "Depths of Infinity" (DxD) edition this port targets.
+- [Patapon 3 HD Texture Pack](https://github.com/Lin-zl522/Patapon-3-HD-Texture-Pack)
+  (downloaded separately; `PSPRECOMP_TEXTURES`): WallSoGB (Patapon3Textures lead),
+  Shockturtle, owocek, efonte (AI upscaling), Keamble, Hozzzd, KnotSora, Lin, Olimp666,
+  wondaoxigen, Rin Casi.
+- Vendored libraries: xxHash (Yann Collet, BSD-2) and stb_image (Sean Barrett, public
+  domain / MIT), both under `runtime/third_party/`.
 
 ## License
 

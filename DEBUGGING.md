@@ -248,6 +248,11 @@ the socket for scripted/agent input.
 - `PSPRECOMP_RENDER_SCALE=<1..8>`: internal resolution (default 1). Oracle comparisons with
   PPSSPP, `tools/gelist.py` diffs and `tools/tgadiff.py` baselines must run at 1. `S`
   screenshots are written at the FBO size.
+- `PSPRECOMP_TEXTURES=<dir>`: PPSSPP texture pack folder (logs `[TEXREP] pack ...` or
+  `[TEXREP] disabled: ...`). `PSPRECOMP_TEXTURES_DUMP=1`: one
+  `[TEXREP] key=<24 hex> WxH fmt=N hit|miss|ignored` line per distinct key, plus
+  `[TEXREP] loaded <png> WxH in N ms`. A miss on a texture the pack has means our key differs:
+  compare with PPSSPP's own dump (`SaveNewTextures = True` in its `ppsspp.ini`; restore it after).
 - `PSPRECOMP_FUNC_ARGS_DUMP=<bytes>`: with `PSPRECOMP_FUNC_ARGS`, also hex-dump that many bytes of
   guest memory at v0 after each logged call (catches a returned block before it is reused).
 
