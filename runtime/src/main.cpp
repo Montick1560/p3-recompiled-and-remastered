@@ -1,3 +1,4 @@
+#include "psp_cpu.h"
 #include "recomp.h"
 #include "funcs.h"
 #include "psp_memory.h"
@@ -492,7 +493,10 @@ int main(int argc, char* argv[]) {
     std::fprintf(stderr,
         "[RT] Calling module_start (0x%08X)...\n",
         RECOMP_MODULE_ENTRY);
-    entry(rdram, &ctx);
+    {
+        PspCpuAcquireScope cpu;  // module_start is guest code
+        entry(rdram, &ctx);
+    }
     std::fprintf(stderr, "[RT] module_start returned\n");
 
     // 11. RUNTIME-08: Enter event loop — blocks until shutdown

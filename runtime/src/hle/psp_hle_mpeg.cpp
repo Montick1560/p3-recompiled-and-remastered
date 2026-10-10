@@ -1,3 +1,4 @@
+#include "psp_cpu.h"
 #include "hle/psp_hle_mpeg.h"
 
 #include "hle/psp_hle.h"
@@ -374,7 +375,7 @@ int32_t call_guest(uint8_t* rdram, recomp_context* ctx, uint32_t fn, uint32_t a0
     ctx->r[6] = (int32_t)a2;
     ctx->r[29] = (int32_t)(((uint32_t)saved.r[29] - 0x40u) & ~0xFu);
     ctx->r[31] = 0;
-    f(rdram, ctx);
+    { PspCpuAcquireScope cpu; f(rdram, ctx); }  // guest code needs the CPU
     int32_t v0 = ctx->r[2];
     *ctx = saved;
     return v0;

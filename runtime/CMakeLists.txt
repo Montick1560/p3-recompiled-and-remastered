@@ -130,6 +130,7 @@ set(RUNTIME_SOURCES
     src/psp_audio_mixer.cpp
     src/psp_audio_out.cpp
     src/psp_subintr.cpp
+    src/psp_cpu.cpp
     src/psp_scheduler.cpp
     src/psp_render_queue.cpp
     src/psp_event_loop.cpp
@@ -742,6 +743,7 @@ add_test(NAME media_engine_tests COMMAND test_media_engine)
 add_executable(test_hle_mpeg
     tests/test_hle_mpeg.cpp
     src/hle/psp_hle_mpeg.cpp
+    src/psp_cpu.cpp
     src/hle/psp_media_engine.cpp
     src/hle/psp_mpeg_demux.cpp
     src/hle/psp_psmf.cpp

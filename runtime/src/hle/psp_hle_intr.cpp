@@ -1,3 +1,4 @@
+#include "psp_cpu.h"
 #include "hle/psp_hle_intr.h"
 #include "psp_vblank_clock.h"
 
@@ -46,7 +47,7 @@ void psp_intr_dispatch_vblank(uint8_t* rdram, recomp_context* ctx) {
         ctx->r[29] = static_cast<int32_t>(
             (static_cast<uint32_t>(saved.r[29]) - 0x40u) & ~0xFu);
         ctx->r[31] = 0;
-        fn(rdram, ctx);
+        { PspCpuAcquireScope cpu; fn(rdram, ctx); }  // guest code needs the CPU
         *ctx = saved;
     }
 }

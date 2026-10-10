@@ -1,3 +1,4 @@
+#include "psp_cpu.h"
 #include "psp_scheduler.h"
 #include "psp_debug_socket.h"  // PspDebugThreadInfo ([#35] I command)
 #include "psp_vfpu.h"  // vfpu_init_context — VFPU prefix reset default
@@ -19,7 +20,11 @@ static thread_local PspThread* g_current = nullptr;
 // ---------------------------------------------------------------------------
 // psp_scheduler_init — zero all 64 slots
 // ---------------------------------------------------------------------------
+int psp_current_thread_priority();
+int psp_current_thread_id();
+
 void psp_scheduler_init() {
+    psp_cpu_set_thread_info(psp_current_thread_priority, psp_current_thread_id);
     std::unique_lock<std::mutex> lock(g_sched_mutex);
     for (int i = 0; i < MAX_THREADS; i++) {
         g_threads[i].id = i;
@@ -137,6 +142,8 @@ static void thread_entry_wrapper(PspThread* t) {
     // ExitThread terminates the thread immediately; we use C++
     // exception unwinding to achieve the same effect.
     try {
+        // Guest code runs only while holding the CPU (one PSP thread at a time).
+        PspCpuAcquireScope cpu;
         FuncPtr entry = RECOMP_LOOKUP(t->entry_addr);
         if (entry) {
             entry(t->rdram, &t->ctx);
@@ -242,6 +249,8 @@ void sched_preempt(recomp_context* ctx) {
     if (ctx) {
         ctx->preempt_budget = SCHED_PREEMPT_BUDGET;
     }
+    // A guest busy-wait must let the thread it waits for take the CPU.
+    psp_cpu_yield_if_contended();
     if (!sched_preempt_enabled()) {
         return;  // DEFAULT-OFF: dead-effect counter, no yield.
     }
@@ -581,4 +590,12 @@ int psp_scheduler_snapshot(PspDebugThreadInfo* out, int max) {
         }
     }
     return n;
+}
+
+int psp_current_thread_priority() {
+    return g_current ? g_current->priority : 0;
+}
+
+int psp_current_thread_id() {
+    return g_current ? g_current->id : -1;
 }

@@ -1,3 +1,4 @@
+#include "psp_cpu.h"
 #include "psp_ge.h"
 #include "psp_ge_vertex.h"
 #include "psp_ge_constants.h"
@@ -241,7 +242,7 @@ GeListResult ge_process_display_list(
                     fin_ctx.r[5] = static_cast<int64_t>(g_finish_arg);
                     fin_ctx.r[29] = static_cast<int32_t>(
                         ge_cb_stack(rdram));
-                    fn(rdram, &fin_ctx);
+                    { PspCpuAcquireScope cpu; fn(rdram, &fin_ctx); }  // guest code needs the CPU
                 } else {
                     static bool finish_miss_logged = false;
                     if (!finish_miss_logged) {
@@ -342,7 +343,7 @@ GeListResult ge_process_display_list(
                     sig_ctx.r[5] = static_cast<int64_t>(g_signal_arg);
                     sig_ctx.r[29] = static_cast<int32_t>(
                         ge_cb_stack(rdram));
-                    fn(g_signal_rdram ? g_signal_rdram : rdram, &sig_ctx);
+                    { PspCpuAcquireScope cpu; fn(g_signal_rdram ? g_signal_rdram : rdram, &sig_ctx); }  // guest code needs the CPU
                 } else {
                     std::fprintf(stderr,
                         "[GE] SIGNAL: RECOMP_LOOKUP(0x%08X) MISS\n",

@@ -1,5 +1,6 @@
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_imports.h"
+#include "psp_cpu.h"
 #include "psp_scheduler.h"
 #include "recomp.h"
 
@@ -420,6 +421,38 @@ static void check_strict_mode() {
     }
 }
 
+// ---- Guest CPU release around HLE calls ----
+// HLE code runs without the guest CPU (psp_cpu.h): it may block (waits,
+// delays, audio, IO) and other guest threads must be able to run meanwhile,
+// exactly as a PSP thread blocked in a syscall lets the next one run.
+static constexpr int HLE_CPU_MAX_SLOTS = 512;
+static HleFunc g_cpu_real[HLE_CPU_MAX_SLOTS];
+static int g_cpu_slot_count = 0;
+
+template <int N>
+static void hle_cpu_wrapper(uint8_t* rdram, recomp_context* ctx) {
+    PspCpuReleaseScope cpu;
+    g_cpu_real[N](rdram, ctx);
+}
+
+template <int... I>
+static constexpr std::array<HleFunc, sizeof...(I)> make_cpu_wrappers(
+        std::integer_sequence<int, I...>) {
+    return {{ &hle_cpu_wrapper<I>... }};
+}
+
+static HleFunc alloc_cpu_wrapper(HleFunc fn) {
+    static const auto wrappers =
+        make_cpu_wrappers(std::make_integer_sequence<int, HLE_CPU_MAX_SLOTS>{});
+    if (g_cpu_slot_count >= HLE_CPU_MAX_SLOTS) {
+        std::fprintf(stderr, "[HLE] out of CPU wrapper slots: call keeps the CPU\n");
+        return fn;
+    }
+    const int slot = g_cpu_slot_count++;
+    g_cpu_real[slot] = fn;
+    return wrappers[static_cast<size_t>(slot)];
+}
+
 // ---- Registration ----
 
 void psp_hle_register(const char* nid_name, HleFunc fn) {
@@ -470,6 +503,7 @@ void psp_hle_init() {
             if (g_hle_trace_enabled) {
                 fn = alloc_trace_wrapper(fn, it->second.name);
             }
+            fn = alloc_cpu_wrapper(fn);
             // Register the (possibly wrapped) HLE function
             psp_dispatch_register(stub.stub_addr, fn);
             implemented++;

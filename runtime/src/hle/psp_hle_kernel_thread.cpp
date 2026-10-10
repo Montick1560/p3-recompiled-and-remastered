@@ -1,3 +1,4 @@
+#include "psp_cpu.h"
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_kernel.h"
 #include "hle/psp_hle_refer_info.h"
@@ -641,7 +642,7 @@ static void hle_sceKernelCheckCallback(
                 rdram, cb.func_addr, cb.notify_arg);
         }
 
-        fn(rdram, ctx);
+        { PspCpuAcquireScope cpu; fn(rdram, ctx); }  // guest code needs the CPU
 
         std::fprintf(stderr,
             "[HLE] CheckCallback: RETURNED from cb uid=%d "

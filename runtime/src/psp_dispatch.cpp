@@ -168,6 +168,66 @@ FuncPtr psp_dispatch_probe_lookup(uint32_t vaddr) {
     return fn;
 }
 
+// PSPRECOMP_OVL_ARGS=hex[,hex...]: like PSPRECOMP_FUNC_ARGS, for code in an
+// overlay bank (resolved per call, so it cannot be wrapped at boot). Logs
+// a0-a3, the calling thread's last functions and v0 for the first 200 calls.
+static constexpr int OVL_ARGS_MAX = 8;
+static uint32_t g_ovl_args_addr[OVL_ARGS_MAX];
+static FuncPtr g_ovl_args_real[OVL_ARGS_MAX];
+static std::atomic<int> g_ovl_args_calls[OVL_ARGS_MAX];
+static int g_ovl_args_count = -1;
+
+static void ovl_args_call(int slot, uint8_t* rdram, recomp_context* ctx) {
+    const bool log = g_ovl_args_calls[slot].fetch_add(1, std::memory_order_relaxed) < 200;
+    const uint32_t addr = g_ovl_args_addr[slot];
+    if (log) {
+        std::fprintf(stderr, "[OVL-ARGS-IN] 0x%08X(a0=0x%08X a1=0x%08X a2=0x%08X a3=0x%08X) path:",
+                     addr, (uint32_t)ctx->r[4], (uint32_t)ctx->r[5], (uint32_t)ctx->r[6],
+                     (uint32_t)ctx->r[7]);
+        for (uint32_t k = 12; k >= 1; k--) {
+            const uint32_t f = g_func_ring[(g_func_ring_pos - k) & 31u];
+            if (f) std::fprintf(stderr, " %08X", f);
+        }
+        std::fprintf(stderr, "\n");
+    }
+    g_ovl_args_real[slot](rdram, ctx);
+    if (log) {
+        std::fprintf(stderr, "[OVL-ARGS-OUT] 0x%08X -> v0=0x%08X\n", addr, (uint32_t)ctx->r[2]);
+    }
+}
+
+#define OVL_ARGS_WRAPPER(N) \
+    static void ovl_args_wrapper_##N(uint8_t* rdram, recomp_context* ctx) { \
+        ovl_args_call(N, rdram, ctx); \
+    }
+OVL_ARGS_WRAPPER(0) OVL_ARGS_WRAPPER(1) OVL_ARGS_WRAPPER(2) OVL_ARGS_WRAPPER(3)
+OVL_ARGS_WRAPPER(4) OVL_ARGS_WRAPPER(5) OVL_ARGS_WRAPPER(6) OVL_ARGS_WRAPPER(7)
+#undef OVL_ARGS_WRAPPER
+
+static FuncPtr ovl_args_intercept(uint32_t vaddr, FuncPtr fn) {
+    static const FuncPtr wrappers[OVL_ARGS_MAX] = {
+        ovl_args_wrapper_0, ovl_args_wrapper_1, ovl_args_wrapper_2, ovl_args_wrapper_3,
+        ovl_args_wrapper_4, ovl_args_wrapper_5, ovl_args_wrapper_6, ovl_args_wrapper_7};
+    if (g_ovl_args_count < 0) {
+        g_ovl_args_count = 0;
+        const char* env = std::getenv("PSPRECOMP_OVL_ARGS");
+        while (env && *env && g_ovl_args_count < OVL_ARGS_MAX) {
+            char* end = nullptr;
+            const uint32_t a = static_cast<uint32_t>(std::strtoul(env, &end, 16));
+            if (end == env) break;
+            g_ovl_args_addr[g_ovl_args_count++] = a;
+            env = (*end == ',') ? end + 1 : end;
+        }
+    }
+    for (int i = 0; i < g_ovl_args_count; i++) {
+        if (g_ovl_args_addr[i] == vaddr) {
+            g_ovl_args_real[i] = fn;  // the bank loaded now (overlays share the window)
+            return wrappers[i];
+        }
+    }
+    return fn;
+}
+
 /// Called by RECOMP_LOOKUP (in dispatch.cpp) when an address is not in the
 /// dispatch table. Logs each unique miss on first hit and returns a noop
 /// stub or aborts if PSPRECOMP_STRICT=1.
@@ -196,7 +256,7 @@ FuncPtr psp_on_lookup_miss(uint32_t vaddr) {
         }
         switch (st) {
         case PspOverlayStatus::Found:
-            return fn;
+            return ovl_args_intercept(vaddr, fn);
         case PspOverlayStatus::HashMismatch:
             std::fprintf(stderr,
                 "[OVERLAY] FATAL: the overlay loaded at the window of 0x%08X does "
@@ -293,8 +353,13 @@ void psp_trace_checkpoint(uint32_t addr) {
     for (int i = 0; i < g_func_watch_count; i++) {
         if (g_func_watch[i] == addr &&
             g_func_watch_hits[i].fetch_add(1, std::memory_order_relaxed) < 200) {
-            std::fprintf(stderr, "[FUNC-WATCH] 0x%08X from 0x%08X\n",
+            std::fprintf(stderr, "[FUNC-WATCH] 0x%08X from 0x%08X; this thread's path:",
                          addr, g_last_func_addr);
+            for (uint32_t k = 16; k >= 1; k--) {
+                const uint32_t f = g_func_ring[(g_func_ring_pos - k) & 31u];
+                if (f) std::fprintf(stderr, " %08X", f);
+            }
+            std::fprintf(stderr, "\n");
         }
     }
     g_prev_func_addr = g_last_func_addr;
