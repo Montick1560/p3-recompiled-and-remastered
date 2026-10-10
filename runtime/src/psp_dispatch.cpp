@@ -78,6 +78,8 @@ void psp_dispatch_set_miss_handler(PspLookupMissHandler fn) {
     g_miss_handler = fn;
 }
 
+void psp_print_host_backtrace(const char* tag);  // psp_backtrace.cpp
+
 static void noop_stub(uint8_t* rdram, recomp_context* ctx) {
     uint32_t addr = g_last_miss_addr;
     int& c = g_miss_counts[addr];
@@ -103,6 +105,9 @@ static void noop_stub(uint8_t* rdram, recomp_context* ctx) {
                 std::fprintf(stderr, " %08X", ring[i]);
             }
             std::fprintf(stderr, "\n");
+            char tag[40];
+            std::snprintf(tag, sizeof(tag), "miss %08X", addr);
+            psp_print_host_backtrace(tag);  // the real caller (build/tools/bt.py)
         }
     }
 
@@ -177,7 +182,6 @@ static FuncPtr g_ovl_args_real[OVL_ARGS_MAX];
 static std::atomic<int> g_ovl_args_calls[OVL_ARGS_MAX];
 static int g_ovl_args_count = -1;
 
-void psp_print_host_backtrace(const char* tag);  // psp_backtrace.cpp
 
 static void ovl_args_call(int slot, uint8_t* rdram, recomp_context* ctx) {
     const bool log = g_ovl_args_calls[slot].fetch_add(1, std::memory_order_relaxed) < 200;
