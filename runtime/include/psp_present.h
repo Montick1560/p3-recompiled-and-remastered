@@ -8,3 +8,7 @@ PresentRect present_fit_rect(int win_w, int win_h);
 
 // Initial window scale from PSPRECOMP_WINDOW_SCALE: 1..8, anything else -> 2.
 int present_window_scale(const char* env);
+
+// Internal render scale from PSPRECOMP_RENDER_SCALE: 1..8, anything else -> 1.
+// 1 = native 480x272, the setting every PPSSPP comparison uses.
+int present_render_scale(const char* env);

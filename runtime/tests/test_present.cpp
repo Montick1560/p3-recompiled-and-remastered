@@ -29,6 +29,16 @@ int main() {
     CHECK(present_window_scale("9") == 2, "scale 9 -> 2");
     CHECK(present_window_scale("abc") == 2, "garbage -> 2");
 
+    CHECK(present_render_scale(nullptr) == 1, "unset render scale -> 1");
+    CHECK(present_render_scale("") == 1, "empty render scale -> 1");
+    CHECK(present_render_scale("1") == 1, "render scale 1");
+    CHECK(present_render_scale("4") == 4, "render scale 4");
+    CHECK(present_render_scale("8") == 8, "render scale 8");
+    CHECK(present_render_scale("0") == 1, "render scale 0 -> 1");
+    CHECK(present_render_scale("9") == 1, "render scale 9 -> 1");
+    CHECK(present_render_scale("-2") == 1, "negative render scale -> 1");
+    CHECK(present_render_scale("abc") == 1, "garbage render scale -> 1");
+
     if (failures == 0) std::printf("test_present: all passed\n");
     return failures == 0 ? 0 : 1;
 }

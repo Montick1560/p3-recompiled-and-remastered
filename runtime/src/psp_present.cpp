@@ -20,3 +20,9 @@ int present_window_scale(const char* env) {
     const int s = std::atoi(env);
     return (s >= 1 && s <= 8) ? s : 2;
 }
+
+int present_render_scale(const char* env) {
+    if (env == nullptr || env[0] == '\0') return 1;
+    const int s = std::atoi(env);
+    return (s >= 1 && s <= 8) ? s : 1;
+}
