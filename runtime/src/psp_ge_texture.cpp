@@ -4,6 +4,7 @@
 #include "psp_ge_texdecode.h"
 #include "psp_ge_constants.h"
 #include "psp_memory.h"
+#include "psp_texrep.h"
 #include "recomp.h"
 
 #include <glad/glad.h>
@@ -96,6 +97,7 @@ void ge_texture_init() {
     g_tex_initialized = true;
     std::fprintf(stderr, "[TEX] Texture cache initialized "
                          "(%d entries)\n", TEX_CACHE_SIZE);
+    ge_texrep_init();
 }
 
 void ge_texture_shutdown() {
@@ -122,7 +124,8 @@ void ge_texture_invalidate_all() {
 
 GLuint ge_texture_bind(
     uint8_t* rdram,
-    uint32_t frame_num
+    uint32_t frame_num,
+    uint16_t draw_max_v
 ) {
     const GeState& state = ge_get_state();
 
@@ -213,6 +216,10 @@ GLuint ge_texture_bind(
         glBindTexture(GL_TEXTURE_2D, entry.gl_tex);
         apply_sampler(state);
         return entry.gl_tex;
+    }
+
+    if (ge_texrep_enabled()) {
+        (void)ge_texrep_lookup(rdram, state, draw_max_v, nullptr);  // Task 5 uses the result
     }
 
     // Cache miss -- decode texture (stride, swizzle and CLUT transform in

@@ -55,7 +55,8 @@ uint32_t ge_clut_load_bytes(uint32_t loadclut_data);
 void ge_clut_snapshot_load(GeClutSnapshot& s, const uint8_t* src, uint32_t load_bytes);
 
 /// PPSSPP cluthash for the key: XXH32(buf, min(total + startPos*entryBytes,
-/// max), 0xC0108888) ^ clutformat.
+/// max), 0xC0108888) ^ (0xC5 << 24 | clutformat). `clutformat` is the 24-bit
+/// register data; PPSSPP's gstate word also carries the command byte 0xC5.
 uint32_t ge_texrep_cluthash(const GeClutSnapshot& s, uint32_t clutformat);
 
 /// Level-0 texture parameters from the raw GE registers, PPSSPP style.

@@ -1423,7 +1423,9 @@ Expected: all ctest pass, `0` cargo failures, remote = HEAD.
 
 ## Task 4 result
 
-(fill in: date, pack line, hit/miss/ignored counts for the menu and the hideout, per-format split, anything investigated)
+2026-10-10. Pack line: `3042 textures, hash=xxh64 ignoreAddress=1 reduceHash=1` (almost all pack keys are CLUT textures: only 2 have a dim-only middle part).
+First run: 0 hits. 46 of our CLUT data hashes (last 8 hex) were in the pack, but the CLUT part never matched; the difference was the constant `0xC5000000` in nearly every pair. Cause: PPSSPP xors `gstate.clutformat`, the whole command word (GE_CMD_CLUTFORMAT `0xC5` in bits 24-31); our GeState keeps the 24-bit data. Fixed in `ge_texrep_cluthash` (test updated first: RED -> GREEN).
+After the fix (`to_square.py m3c_gate3`, 40 s in the hideout): fmt=4 (CLUT4) 44 hit, fmt=5 (CLUT8) 8 hit + 1 miss (`0964bc0052d7789d6582bf66`, 512x512) -> 52/53 game textures. Also 1288 fmt=3 512x512 misses at four fixed addresses during the opening movie (`sceMpegAvcDecode` frames): video, not replaceable (spec "Out of scope"). Language menu: 7 misses, a screen the pack does not cover (its keys' data hashes are not in the pack). Gate PASSED.
 
 ## Task 6 result
 

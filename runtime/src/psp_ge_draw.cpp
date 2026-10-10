@@ -788,6 +788,17 @@ void ge_draw_prim(
         }
     }
 
+    // Largest V (texels) this draw samples: PPSSPP's vertBounds.maxV, used by
+    // texture replacement to hash only the visible rows of 512-tall textures.
+    uint16_t draw_max_v = 0;
+    if (state.texture_enable && ge_vtype_through(state.vertex_type)) {
+        for (const DecodedVertex& v : decoded) {
+            if (v.has_uv && v.uv[1] > draw_max_v) {
+                draw_max_v = static_cast<uint16_t>(std::min(v.uv[1], 65535.0f));
+            }
+        }
+    }
+
     // Render scale > 1: snap 2D (through-mode) fills to the PSP pixel grid so
     // pieces that touch at 1x still touch (ge_snap_through_positions). Lines
     // and points keep their positions; scale 1 is untouched.
@@ -869,7 +880,7 @@ void ge_draw_prim(
     // Bind texture if enabled
     if (state.texture_enable) {
         glActiveTexture(GL_TEXTURE0);
-        ge_texture_bind(rdram, g_frame_counter);
+        ge_texture_bind(rdram, g_frame_counter, draw_max_v);
         // PSPRECOMP_TEX_WATCH companion: the watched texture's first vertex.
         static const char* watch = std::getenv("PSPRECOMP_TEX_WATCH");
         static int watch_logs = 0;

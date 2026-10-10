@@ -59,7 +59,9 @@ Reference: `DECO/tools/ppsspp-src/GPU/Common/TextureReplacer.cpp` and `TextureCa
   `clutMaxBytes = max(clutMaxBytes, loadBytes)`. The hash is `XXH32(buffer, min(clutTotalBytes +
   clutBaseBytes, clutMaxBytes), 0xC0108888)`, where `clutBaseBytes = startPos * (32-bit palette ?
   4 : 2)` and `startPos = ((CLUTFORMAT >> 16) & 0x1F) << 4`. It is recomputed after every
-  `LOADCLUT` and whenever CLUTFORMAT changes. `cluthash = clutHash ^ CLUTFORMAT`.
+  `LOADCLUT` and whenever CLUTFORMAT changes. `cluthash = clutHash ^ CLUTFORMAT`, where CLUTFORMAT is
+  PPSSPP's `gstate.clutformat` word: the 24-bit data **plus the command byte `0xC5` in bits 24-31**
+  (found by the Task 4 gate: without it no CLUT key matched).
 - **Key:** `cachekey = ((addr & 0x3FFFFFFF) << 32) | dim`, then `^= cluthash` for CLUT formats.
   `ReplacementCacheKey = (cachekey, dataHash)`; its name is `%016llx%08x` (24 hex), plus `_<level>`
   for mip levels (unused: the pack sets `ignoreMipmap`).

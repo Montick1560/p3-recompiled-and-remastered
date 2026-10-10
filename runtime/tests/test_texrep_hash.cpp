@@ -115,11 +115,12 @@ static void clut_snapshot() {
     GeClutSnapshot t{};
     ge_clut_snapshot_load(t, src.data(), 64);
     const uint32_t fmt_start1 = 0x01 | (1u << 16);
-    CHECK(ge_texrep_cluthash(t, fmt_start1) == (XXH32(t.buf, 64, 0xC0108888u) ^ fmt_start1),
-          "min(total + base, max) = 64");
+    // PPSSPP xors gstate.clutformat, the whole command word: 0xC5 << 24 | data.
+    CHECK(ge_texrep_cluthash(t, fmt_start1) == (XXH32(t.buf, 64, 0xC0108888u) ^ 0xC5000000u ^ fmt_start1),
+          "min(total + base, max) = 64, command byte xored in");
     const uint32_t fmt_plain = 0x03;  // 32-bit palette, start 0
     ge_clut_snapshot_load(t, src.data(), 32);
-    CHECK(ge_texrep_cluthash(t, fmt_plain) == (XXH32(t.buf, 32, 0xC0108888u) ^ fmt_plain),
+    CHECK(ge_texrep_cluthash(t, fmt_plain) == (XXH32(t.buf, 32, 0xC0108888u) ^ 0xC5000000u ^ fmt_plain),
           "total = 32 after a smaller reload");
 }
 

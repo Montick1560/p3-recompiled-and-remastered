@@ -30,9 +30,12 @@ void ge_texture_shutdown();
 /// Look up or create a GL texture from current GE texture state.
 /// Binds the result to GL_TEXTURE_2D. Returns the GL texture ID
 /// (0 if texture is disabled or decode fails).
+/// draw_max_v: largest V (texels) of the current through-mode draw, for
+/// texture-replacement keys of 512-tall textures (0 = unknown).
 GLuint ge_texture_bind(
     uint8_t* rdram,
-    uint32_t frame_num
+    uint32_t frame_num,
+    uint16_t draw_max_v = 0
 );
 
 /// Invalidate the entire texture cache (debug/reset).

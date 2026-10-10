@@ -95,7 +95,9 @@ uint32_t ge_texrep_cluthash(const GeClutSnapshot& s, uint32_t clutformat) {
     const uint32_t entry_bytes = (clutformat & 3) == 3 ? 4 : 2;
     const uint32_t base = (((clutformat >> 16) & 0x1F) << 4) * entry_bytes;
     const uint32_t n = std::min(s.total_bytes + base, s.max_bytes);
-    return XXH32(s.buf, n, 0xC0108888u) ^ clutformat;
+    // PPSSPP xors gstate.clutformat, which holds the whole command word
+    // (GE_CMD_CLUTFORMAT 0xC5 in bits 24-31), not just the 24-bit data.
+    return XXH32(s.buf, n, 0xC0108888u) ^ (0xC5000000u | (clutformat & 0x00FFFFFFu));
 }
 
 GeTexrepParams ge_texrep_params(uint32_t texaddr0, uint32_t texbufwidth0, uint32_t texsize0,

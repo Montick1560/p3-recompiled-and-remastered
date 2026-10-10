@@ -2,8 +2,23 @@
 
 #include "psp_memory.h"
 
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <unordered_set>
+#include <vector>
+
 namespace {
 GeClutSnapshot g_clut{};
+TexrepPack g_pack;
+bool g_enabled = false;
+bool g_dump = false;
+std::string g_dir;
+std::unordered_set<std::string> g_logged;  // DUMP: keys already printed
 }  // namespace
 
 void ge_texrep_on_loadclut(const uint8_t* rdram, uint32_t clut_addr, uint32_t loadclut_data) {
@@ -14,3 +29,73 @@ void ge_texrep_on_loadclut(const uint8_t* rdram, uint32_t clut_addr, uint32_t lo
 }
 
 const GeClutSnapshot& ge_texrep_clut() { return g_clut; }
+
+void ge_texrep_init() {
+    g_enabled = false;
+    g_logged.clear();
+    const char* dir = std::getenv("PSPRECOMP_TEXTURES");
+    if (!dir || !dir[0]) return;
+    const char* dump = std::getenv("PSPRECOMP_TEXTURES_DUMP");
+    g_dump = dump && dump[0] && dump[0] != '0';
+    g_dir = dir;
+    std::replace(g_dir.begin(), g_dir.end(), '\\', '/');
+    while (!g_dir.empty() && g_dir.back() == '/') g_dir.pop_back();
+    std::ifstream f(std::filesystem::u8path(g_dir + "/textures.ini"), std::ios::binary);
+    if (!f) {
+        std::fprintf(stderr, "[TEXREP] disabled: no textures.ini in %s\n", g_dir.c_str());
+        return;
+    }
+    std::stringstream text;
+    text << f.rdbuf();
+    std::vector<std::string> root;
+    std::error_code ec;
+    for (const auto& e : std::filesystem::directory_iterator(std::filesystem::u8path(g_dir), ec)) {
+        if (e.is_regular_file(ec)) root.push_back(e.path().filename().u8string());
+    }
+    std::string err;
+    if (!g_pack.load(text.str(), root, &err)) {
+        std::fprintf(stderr, "[TEXREP] disabled: %s\n", err.c_str());
+        return;
+    }
+    g_enabled = true;
+    std::fprintf(stderr, "[TEXREP] pack %s: %zu textures, hash=%s ignoreAddress=%d reduceHash=%d\n",
+                 g_dir.c_str(), g_pack.alias_count(), g_pack.xxh32() ? "xxh32" : "xxh64",
+                 g_pack.ignore_address() ? 1 : 0, g_pack.reduce_hash() ? 1 : 0);
+}
+
+bool ge_texrep_enabled() { return g_enabled; }
+
+GeTexrepKey ge_texrep_key(const uint8_t* rdram, const GeState& s, uint16_t draw_max_v) {
+    const GeTexrepParams p = ge_texrep_params(s.tex_addr[0], s.tex_bufw[0], s.tex_size[0],
+                                              s.tex_format, s.tex_mode);
+    int w = p.w, h = p.h;
+    if (!g_pack.hash_range(p.addr, p.w, p.h, &w, &h)) {
+        const bool through = (s.vertex_type & 0x00800000u) != 0;
+        h = ge_texrep_hash_height(h, p.fmt, p.swizzled, ge_texrep_max_seen_v(through, draw_max_v));
+    }
+    const float reduce = g_pack.reduce_hash() ? g_pack.reduce_for(w, h) : 1.0f;
+    const uint32_t off = p.addr & PSP_ADDR_MASK;
+    const uint64_t avail = off < PSP_MEM_SIZE ? PSP_MEM_SIZE - off : 0;
+    const uint32_t data = ge_texrep_data_hash(rdram + off, avail, p.bufw, w, h, p.fmt, reduce,
+                                              g_pack.xxh32());
+    const uint32_t cluthash =
+        (p.fmt >= 4 && p.fmt <= 7) ? ge_texrep_cluthash(g_clut, s.clut_format) : 0;
+    return {ge_texrep_cachekey(p.addr, p.fmt, p.dim, cluthash), data};
+}
+
+TexrepFind ge_texrep_lookup(const uint8_t* rdram, const GeState& s, uint16_t draw_max_v,
+                            GeTexrepKey* key_out) {
+    const GeTexrepKey key = ge_texrep_key(rdram, s, draw_max_v);
+    if (key_out) *key_out = key;
+    const TexrepFind f = g_pack.find(key);
+    if (g_dump) {
+        const std::string name = ge_texrep_key_name(key);
+        if (g_logged.insert(name).second) {
+            const GeTexrepParams p = ge_texrep_params(s.tex_addr[0], s.tex_bufw[0], s.tex_size[0],
+                                                      s.tex_format, s.tex_mode);
+            std::fprintf(stderr, "[TEXREP] key=%s %dx%d fmt=%d %s\n", name.c_str(), p.w, p.h, p.fmt,
+                         f.ignored ? "ignored" : (f.found ? "hit" : "miss"));
+        }
+    }
+    return f;
+}
