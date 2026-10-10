@@ -147,6 +147,7 @@ set(RUNTIME_SOURCES
     src/psp_ge_shader.cpp
     src/psp_ge_draw.cpp
     src/psp_ge_viewport.cpp
+    src/psp_texrep_hash.cpp
     src/psp_ge_test.cpp
     src/hle/psp_hle_dispatch.cpp
     src/hle/psp_hle_kernel_thread.cpp
@@ -237,6 +238,12 @@ target_include_directories(at3_standalone PUBLIC
 # Third-party code: no warnings, always optimised (the decoder is hot).
 target_compile_options(at3_standalone PRIVATE -w $<IF:$<CONFIG:Debug>,-O1,-O2>)
 
+# Vendored xxHash (BSD-2; third_party/xxhash/README.txt): texture-replacement
+# keys must match PPSSPP's, which hashes with this exact code.
+add_library(xxhash STATIC third_party/xxhash/xxhash.c)
+target_include_directories(xxhash PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/xxhash)
+target_compile_options(xxhash PRIVATE -w -O2)
+
 set(PSPRECOMP_FFMPEG_DIR "" CACHE PATH
     "FFmpeg LGPL shared package root (include/, lib/*.dll.a, bin/*.dll). Empty disables video decode.")
 if(PSPRECOMP_FFMPEG_DIR)
@@ -323,6 +330,7 @@ target_include_directories(psprecomp_runtime PRIVATE
 target_link_libraries(psprecomp_runtime PRIVATE
     psp::recomp
     at3_standalone
+    xxhash
     ${PSP_SDL2_LIBS}
     OpenGL::GL
     ZLIB::ZLIB
@@ -526,6 +534,12 @@ add_executable(test_present tests/test_present.cpp src/psp_present.cpp)
 target_include_directories(test_present PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_present PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME present_tests COMMAND test_present)
+
+add_executable(test_texrep_hash tests/test_texrep_hash.cpp src/psp_texrep_hash.cpp)
+target_include_directories(test_texrep_hash PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(test_texrep_hash PRIVATE xxhash)
+target_compile_options(test_texrep_hash PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME texrep_hash_tests COMMAND test_texrep_hash)
 
 # Host FPU mode from FCR31 (flush-to-zero).
 add_executable(test_fpu tests/test_fpu.cpp src/psp_fpu.cpp)
