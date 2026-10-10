@@ -389,6 +389,17 @@ host backtrace, and the return value:
 [OVL-ARGS-OUT] 0xADDR -> v0=0x..
 ```
 
+### `PSPRECOMP_HW_WATCH` (Windows hardware write watch)
+
+`PSPRECOMP_HW_WATCH=<hex guest address>` arms debug register DR0 (write, 4 bytes) on every host
+thread of the process (a watcher thread re-scans every 100 ms, so guest threads started later are
+covered). Every write to that guest word, from recompiled code or from an HLE call (memcpy, IO
+reads, result pointers), prints `[HW-WATCH] guest 0x... = <new value> rip +<offset>` and a
+`[BT] hw-watch:` host backtrace (symbolize with `llvm-nm -C`, image base `0x140000000`). Use it when
+the corrupting value is 0 or too common for `PSPRECOMP_STORE_WATCH`. Byte stores show one line per
+byte. Found the 2026-10-10 hideout-load freeze: the game's decompressor (`FUN_08869d00`, user_main)
+wrote the next archive over a GMO model that was still waiting to be parsed.
+
 ### `PSPRECOMP_STORE_WATCH` and `PSPRECOMP_STORE_WATCH_RANGE`
 
 Every 32-bit guest store is `MEM_W_WRITE` → `psp_mem_write_w`, emitted into

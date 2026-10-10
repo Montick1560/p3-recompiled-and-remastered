@@ -98,6 +98,7 @@ extern RECOMP_FUNC void entry(uint8_t* rdram, recomp_context* ctx);
 /// - SDL/GL initialized BEFORE module_start (render queue can accept requests)
 /// - Event loop runs AFTER module_start returns (module_start spawns threads)
 void psp_func_args_install();  // psp_dispatch.cpp
+void psp_hw_watch_start(uint8_t* rdram);  // psp_backtrace.cpp (PSPRECOMP_HW_WATCH)
 
 int main(int argc, char* argv[]) {
     (void)argc;
@@ -148,6 +149,7 @@ int main(int argc, char* argv[]) {
         "[RT] Memory initialized (%zu MB)\n",
         PSP_MEM_SIZE / (1024 * 1024));
     psp_overlay_set_rdram(rdram);  // overlay-bank resolution on dispatch misses
+    psp_hw_watch_start(rdram);     // PSPRECOMP_HW_WATCH=<guest addr>: debug-register write watch
 
     // 2b. Start TCP debug socket (loopback port 9999) for external memory
     //     reads/writes, info queries, button injection, and screenshots.
