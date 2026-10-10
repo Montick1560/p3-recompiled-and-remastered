@@ -23,6 +23,7 @@ struct Waiter {
     int prio;
     int order;  // 0 = front (returning from HLE), 1 = back
     uint64_t ticket;
+    int id;  // PSP thread id (diagnostics)
     bool operator<(const Waiter& o) const {
         return std::tie(prio, order, ticket) < std::tie(o.prio, o.order, o.ticket);
     }
@@ -46,6 +47,7 @@ thread_local char t_token;  // its address identifies this host thread
 struct Reservation {
     const void* owner;
     int prio;
+    int id;  // PSP thread id (diagnostics)
     std::chrono::steady_clock::time_point since;
 };
 std::vector<Reservation> g_res;
@@ -94,7 +96,7 @@ void psp_cpu_acquire(bool front) {
     const int prio = psp_current_thread_priority();
     std::unique_lock<std::mutex> lock(g_m);
     drop_reservation_locked(&t_token);  // our own HLE call is over
-    const Waiter me{prio, front ? 0 : 1, g_next_ticket++};
+    const Waiter me{prio, front ? 0 : 1, g_next_ticket++, psp_current_thread_id()};
     g_waiters.insert(me);
     publish_best_locked();
     auto ready = [&] {
@@ -141,7 +143,7 @@ void psp_cpu_release_reserved() {
         g_holder = -2;
         t_held = false;
         drop_reservation_locked(&t_token);
-        g_res.push_back({&t_token, psp_current_thread_priority(), std::chrono::steady_clock::now()});
+        g_res.push_back({&t_token, psp_current_thread_priority(), psp_current_thread_id(), std::chrono::steady_clock::now()});
     }
     g_cv.notify_all();
 }
@@ -167,4 +169,22 @@ void psp_cpu_yield_if_contended() {
     }
     psp_cpu_release();
     psp_cpu_acquire(/*front=*/false);
+}
+
+int psp_cpu_describe(char* buf, int size) {
+    std::lock_guard<std::mutex> lock(g_m);
+    const auto now = std::chrono::steady_clock::now();
+    int n = std::snprintf(buf, size, "held=%d holder=%d waiters=[", g_held ? 1 : 0, g_holder);
+    for (const Waiter& w : g_waiters) {
+        if (n >= size) break;
+        n += std::snprintf(buf + n, size - n, "(id %d prio %d %s)", w.id, w.prio, w.order ? "back" : "front");
+    }
+    if (n < size) n += std::snprintf(buf + n, size - n, "] reservations=[");
+    for (const Reservation& r : g_res) {
+        if (n >= size) break;
+        const long long us = std::chrono::duration_cast<std::chrono::microseconds>(now - r.since).count();
+        n += std::snprintf(buf + n, size - n, "(id %d prio %d age %lldus)", r.id, r.prio, us);
+    }
+    if (n < size) n += std::snprintf(buf + n, size - n, "]");
+    return n;
 }

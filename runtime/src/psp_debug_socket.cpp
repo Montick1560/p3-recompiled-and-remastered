@@ -177,6 +177,13 @@ static std::string build_info_json() {
         miss_unique, static_cast<unsigned long long>(miss_total));
     j += buf;
 
+    if (g_hooks.cpu_state) {
+        char cpu[1024];
+        const int n = g_hooks.cpu_state(cpu, sizeof(cpu));
+        j += "\"cpu\":\"";
+        json_append_escaped(j, std::string(cpu, n > 0 && n < (int)sizeof(cpu) ? n : 0).c_str());
+        j += "\",";
+    }
     j += "\"recent_funcs\":[";
     if (g_hooks.recent_funcs) {
         uint32_t ring[MAX_RING_ENTRIES];

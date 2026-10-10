@@ -28,6 +28,10 @@ void psp_cpu_release_reserved();
 /// reservation so any ready thread may run, like a PSP thread going to WAIT.
 void psp_cpu_block_begin();
 
+/// One-line lock state for the debug socket I command (holder, waiters,
+/// reservations). Returns the length written.
+int psp_cpu_describe(char* buf, int size);
+
 /// True when this host thread owns the CPU.
 bool psp_cpu_held();
 

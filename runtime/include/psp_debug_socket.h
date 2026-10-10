@@ -63,6 +63,8 @@ struct PspDebugHooks {
     /// K command: PSP thread <tid> prints its guest call stack ([BT]) at its
     /// next guest function entry.
     void (*thread_backtrace)(int tid) = nullptr;
+    /// I command: one-line guest CPU lock state (psp_cpu.h). Returns length.
+    int (*cpu_state)(char* buf, int size) = nullptr;
 };
 
 /// Install the providers used by the I and S commands.
