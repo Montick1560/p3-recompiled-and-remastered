@@ -6,6 +6,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -75,12 +76,17 @@ static void hle_trace_call(int slot, uint8_t* rdram,
         }
     }
 
+    // t=<ms>: steady-clock milliseconds since the first traced call (gaps
+    // between calls, e.g. a slow screen transition).
+    static const auto trace_t0 = std::chrono::steady_clock::now();
+    const long long t_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - trace_t0).count();
     std::fprintf(stderr,
         "[HLE-TRACE] %s: %s(a0=0x%08X, a1=0x%08X, "
-        "a2=0x%08X, a3=0x%08X%s)\n",
+        "a2=0x%08X, a3=0x%08X%s) t=%lld\n",
         t ? t->name : "boot", s.name,
         ctx->r[4], ctx->r[5], ctx->r[6], ctx->r[7],
-        a0_str);
+        a0_str, t_ms);
 
     // Call original function
     s.original(rdram, ctx);
