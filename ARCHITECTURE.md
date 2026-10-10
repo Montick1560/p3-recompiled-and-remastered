@@ -163,6 +163,50 @@ All under `runtime/` (headers in `runtime/include/`, sources in `runtime/src/`):
 | VFPU | `psp_vfpu_*.cpp` | VFPU instruction implementations (arith, convert, matrix, mem, trig, misc) |
 | Asset/BND | `games/patapon/runtime/asset_bnd.cpp` | Patapon BND archive parsing (`DATA_CMN.BND`) — lives wholly in the Patapon game module (#47 Phase 5), reached from core only through the `PspIoPolicy` seam; arena constants in `games/patapon/runtime/asset_bnd.h` |
 | Debug socket | `psp_debug_socket.cpp` | TCP server on port 9999, multiple concurrent clients, OK/ERR-framed line protocol: memory read/write, runtime-info JSON, button injection, screenshots (serviced by the render thread). Protocol reference: DEBUGGING.md §6 |
+| Guest CPU lock | `psp_cpu.cpp`, `psp_cpu.h` | One host thread runs recompiled guest code at a time — see [Guest CPU lock](#guest-cpu-lock-psp_cpu) |
+
+### Guest CPU lock (`psp_cpu`)
+
+The PSP runs one thread at a time. Games rely on that (allocators, task lists
+and loaders without locks). Guest threads here are host threads, so letting
+them run recompiled code truly in parallel produced nondeterministic races.
+`psp_cpu` is the token that restores the single-core rule: only the host
+thread that holds it runs guest code. `PSPRECOMP_NO_CPU_LOCK=1` disables the
+lock (free-threaded, for A/B comparison).
+
+Waiters are ordered by PSP priority (lowest number first), then by order
+(0 = front, used by a thread returning from an HLE call; 1 = back), then by
+ticket. A non-blocking HLE call gives the token back but leaves a reservation
+with a 2 ms TTL (`psp_cpu_release_reserved`): only a thread of strictly better
+priority may take the CPU until this thread blocks for real or the reservation
+ages out, so a lower-priority thread cannot slip in during the call.
+`psp_cpu_block_begin` drops the reservation at a real wait.
+
+`psp_cpu_yield_if_contended` is the preemption point. Generated loop back-edges
+call `sched_preempt` (`runtime/src/psp_scheduler.cpp`), which calls it
+unconditionally (the `PSPRECOMP_PREEMPT` flag gates only the extra cooperative
+yield). If a waiter of better or equal priority is queued, the holder releases
+and re-acquires at the back. It returns immediately when nobody of better or
+equal priority is waiting.
+
+A wait that lasts more than 5 s prints once, to stderr:
+`[CPU] thread N (prio P) waited 5 s for the CPU held by thread H`
+(`H` is the holder id, or `-2` when the lock is free and a reservation is what
+blocks). That means the owner never reached an HLE call or a loop back-edge.
+
+Who takes and drops the token:
+
+- `PspCpuAcquireScope` around guest code entered from the host: thread entry
+  (`psp_scheduler.cpp`), `module_start` (`main.cpp`), vblank sub-interrupt
+  handlers (`psp_hle_intr.cpp`), kernel callbacks
+  (`psp_hle_kernel_thread.cpp`), the sceMpeg ringbuffer callback
+  (`psp_hle_mpeg.cpp`), and the GE FINISH and SIGNAL callbacks (`psp_ge.cpp`).
+- `PspCpuReleaseScope` around every HLE call (`hle_cpu_wrapper` in
+  `psp_hle_dispatch.cpp`): release with a reservation on entry, re-acquire at
+  the front on return.
+- `psp_cpu_block_begin` at real waits: `sceDisplayWaitVblankStart`,
+  `sceKernelDelayThread`, semaphore / mutex / lwmutex / event-flag waits, and
+  the audio blocking paths in `psp_hle_utility.cpp`.
 
 ## Code Overlays (banks)
 
@@ -250,3 +294,5 @@ These are load-bearing; violating them causes real bugs.
     drift loud at analyze time instead of surfacing as translation bugs. The
     `<output>.ghidra_raw.meta.json` sidecar (binary hash, loader, imagebase) prevents a stale
     base-0 Ghidra cache from being silently reused. Details: DEBUGGING.md "#52".
+13. Guest code runs only while its host thread holds the CPU lock; real waits call
+    `psp_cpu_block_begin`; HLE calls release through the scopes.

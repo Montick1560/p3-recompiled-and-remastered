@@ -230,6 +230,25 @@ Read by the runtime binary at start-up or during execution.
 - **Set it when:** investigating constructor-walk-dependent initialization in
   Patapon.
 
+### `PSPRECOMP_NO_CPU_LOCK`
+- **Read in:** `runtime/src/psp_cpu.cpp` (`enabled()`, first call).
+- **Type:** env (`=1` to disable the lock; first character `'1'`).
+- **Default:** lock on.
+- **Effect:** Disables the guest CPU lock. Guest threads then run recompiled
+  code free-threaded (the pre-lock races). For A/B comparison only.
+- **Set it when:** checking whether a failure depends on the single-core token.
+
+### `PSPRECOMP_OSK_TEXT`
+- **Read in:** `runtime/src/hle/psp_hle_utility.cpp` (via
+  `psp_osk::resolve_text` in `runtime/src/hle/psp_osk.h`).
+- **Type:** env (UTF-8 string). Empty or unset falls back to `Hero`.
+- **Default:** `Hero` (Patapon 3 rejects names shorter than 2 characters).
+- **Effect:** There is no on-screen keyboard UI. When the OSK dialog's RUNNING
+  poll completes, field 0's output buffer is filled with this text (UTF-8
+  converted to UTF-16LE, truncated to the field limit) and the field result
+  is `CHANGED`. Logged as `[HLE] sceUtilityOsk: ...`.
+- **Set it when:** the game asks for a name and the default is wrong.
+
 ---
 
 ## Scheduler (#66)
@@ -318,6 +337,110 @@ flags toggle individual experimental fixes/band-aids in the Patapon game module.
 > (`runtime/src/psp_dispatch.cpp` retains only the explanatory comment). It is
 > listed here only so older notes referencing it are not mistaken for a live
 > flag.
+
+### `PSPRECOMP_FUNC_WATCH`
+- **Read in:** `runtime/src/psp_dispatch.cpp` (`psp_trace_checkpoint`).
+- **Type:** env (comma-separated hex addresses, up to 16).
+- **Default:** unset (no watches).
+- **Effect:** The first 200 entries of each listed guest function log
+  `[FUNC-WATCH] 0xADDR from 0xCALLER; this thread's path:` plus up to 16
+  addresses from that thread's entry ring.
+- **Set it when:** you need the caller chain into a known guest function
+  without a full `PSPRECOMP_PC_TRACE`.
+
+### `PSPRECOMP_FUNC_ARGS`
+- **Read in:** `runtime/src/psp_dispatch.cpp` (`psp_func_args_install`, called
+  from `runtime/src/main.cpp`).
+- **Type:** env (comma-separated hex addresses, up to 8).
+- **Default:** unset.
+- **Effect:** Wraps those dispatch-table entries at boot. The first 400 calls
+  through `RECOMP_LOOKUP` log `[FUNC-ARGS-IN]` (a0–a3, ra) on entry and
+  `[FUNC-ARGS]` with `v0` on return. Direct C++ calls bypass the wrapper. An
+  address that resolves to the miss stub at boot (overlay window) is skipped
+  with `[FUNC-ARGS] 0xADDR not resolvable at boot (overlay?), skipped`.
+- **Set it when:** logging arguments of a main-module function. Overlay code
+  uses `PSPRECOMP_OVL_ARGS`.
+
+### `PSPRECOMP_FUNC_ARGS_DUMP`
+- **Read in:** `runtime/src/psp_dispatch.cpp` (inside the `FUNC_ARGS` return
+  log).
+- **Type:** env (byte count; `strtoul` base 0, then masked with `~3`).
+- **Default:** unset (0, no dump).
+- **Effect:** After each logged `[FUNC-ARGS]` return, if `v0 != 0`, hex-dumps
+  that many bytes of guest memory at `v0` as `[FUNC-ARGS]   ADDR: WORD ...`
+  (16 bytes per line). Requires `PSPRECOMP_FUNC_ARGS`.
+- **Set it when:** the watched function returns a pointer to a block you need
+  to see before the game reuses it.
+
+### `PSPRECOMP_OVL_ARGS`
+- **Read in:** `runtime/src/psp_dispatch.cpp` (`ovl_args_intercept`).
+- **Type:** env (comma-separated hex addresses, up to 8).
+- **Default:** unset.
+- **Effect:** On each overlay-bank resolution of a listed address, the first
+  200 calls log `[OVL-ARGS-IN]` (a0–a3 and this thread's entry ring), a
+  `[BT] ovl-args:` host backtrace, and `[OVL-ARGS-OUT]` with `v0`.
+- **Set it when:** the function lives in an overlay window and cannot be
+  wrapped at boot.
+
+### `PSPRECOMP_STORE_WATCH`
+- **Read in:** `runtime/src/psp_backtrace.cpp` (`g_psp_store_watch`); the hook
+  is `psp_mem_write_w` / `MEM_W_WRITE` in the generated `recomp.h`
+  (`crates/psp-emitter/src/cpp_generator.rs`).
+- **Type:** env (hex word value). `0` or unset is off.
+- **Default:** off.
+- **Effect:** Every 32-bit guest store of that exact value calls
+  `psp_store_watch_hit`. Up to 5000 hits print
+  `[STORE-WATCH] store of 0xVALUE to 0xADDR`. A `[BT] store-watch:` line is
+  added only for the word at `+4` of a 16-byte-aligned block, and only for
+  the first 400 hits. Filtered further by `PSPRECOMP_STORE_WATCH_RANGE`.
+- **Set it when:** hunting who stores a known word (a vtable pointer, a
+  sentinel) without a debugger watchpoint.
+
+### `PSPRECOMP_STORE_WATCH_RANGE`
+- **Read in:** `runtime/src/psp_backtrace.cpp` (`psp_store_watch_hit`).
+- **Type:** env (`<lo>-<hi>`, both hex).
+- **Default:** unset, which is `[0, 0xFFFFFFFF)` — no address filter.
+- **Effect:** `psp_store_watch_hit` returns immediately unless the store
+  address is in `[lo, hi)`. Requires `PSPRECOMP_STORE_WATCH`.
+- **Set it when:** the watched value is stored often and only one object
+  range matters.
+
+### `PSPRECOMP_PRIM_LOG`
+- **Read in:** `runtime/src/psp_ge_draw.cpp`.
+- **Type:** env (presence — any value, including empty).
+- **Default:** unset.
+- **Effect:** The draw path always logs the first 50 PRIMs and the first 5
+  non-clear PRIMs as `[DRAW_PRIM]`. With this set it also logs every 25th
+  PRIM. The comment in the draw path: unrestricted periodic logging grew a
+  log to 1 GB in a 3 h run.
+- **Set it when:** you need a PRIM heartbeat and can afford the log size.
+
+### `PSPRECOMP_VTX_WATCH`
+- **Read in:** `runtime/src/psp_ge_draw.cpp`.
+- **Type:** env (hex vertex type, compared to `state.vertex_type`).
+- **Default:** unset.
+- **Effect:** The first 12 draws whose vertex type equals this value log
+  `[VTX-WATCH] prim= count= stride= vaddr=` and, for up to 6 vertices, the
+  raw bytes plus decoded position and RGBA.
+- **Set it when:** a vertex format is decoding to the wrong positions.
+
+### Patapon 3 module — diagnostics
+
+Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
+
+### `PSPRECOMP_P3_GMO_GUARD`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`.
+- **Type:** env (`=1`; first character `'1'`). **Game-specific: patapon3.**
+- **Default:** off.
+- **Effect:** Diagnostics only (the original functions still run). Wraps the
+  GMO display-list relocators `0x08859AC0` (jump/call), `0x08859D2C`
+  (vertex) and `0x08859E78` (texture). `a0` is the BASE+address command pair
+  being patched; the pair must lie in the loaded model's GE region
+  `[a1+0x28, a1+0x28 + a2+0x2C)`. A pair outside it logs `[GMO-GUARD]` (first
+  20 reports) and a `[BT] gmo-guard:` host backtrace. Install prints
+  `[GMO-GUARD] watching the GMO display-list relocators`.
+- **Set it when:** a model load is suspected of walking off its display list
+  and rewriting unrelated heap memory.
 
 ### Patapon module — band-aid / fix toggles
 

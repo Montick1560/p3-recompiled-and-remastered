@@ -277,6 +277,180 @@ them (issue #43 tracks a proper registry/channel system).
 
 ---
 
+## Guest backtraces, watches and the CPU lock (2026-10)
+
+Recompiled guest functions are host functions, so the host stack is the guest
+call stack (the recompiled code never writes a usable `$ra`).
+`psp_print_host_backtrace(tag)` in `runtime/src/psp_backtrace.cpp` prints one
+stderr line:
+
+```
+[BT] <tag>: +<offset> +<offset> ...
+```
+
+Windows only: `RtlCaptureStackBackTrace` (skip 1, up to 48 frames), offsets
+relative to `GetModuleHandleW(nullptr)`. On other hosts the function is a
+no-op.
+
+`tools/bt.py` symbolizes those lines with `llvm-nm -C`. It subtracts the PE
+image base `0x140000000` from each `t`/`T` symbol and maps a frame to the
+nearest symbol at or below that offset (`FUN_xxxxxxxx`,
+`ovBank::FUN_xxxxxxxx`, `func_*_entry`, `thunk_*`, `entry`).
+
+```
+python tools/bt.py <log> [<exe>]
+```
+
+`<exe>` is required as the second argument or as `PSPRECOMP_EXE`. `llvm-nm`
+must be on `PATH` (the script runs `llvm-nm -C <exe>`). Besides `[BT]` lines
+it also reprints `[OVL-ARGS-IN]` and `[FUNC-WATCH]` lines with the `path:` /
+`; this` tails stripped.
+
+### `PSPRECOMP_FUNC_WATCH`
+
+`<hex>[,<hex>...]`, up to 16 addresses, parsed once in
+`psp_trace_checkpoint` (`runtime/src/psp_dispatch.cpp`). The first 200 entries
+of each listed guest function log:
+
+```
+[FUNC-WATCH] 0xADDR from 0xCALLER; this thread's path: ADDR ADDR ...
+```
+
+`from` is this thread's previous checkpoint. `path` is this thread's
+function-entry ring, up to 16 addresses, oldest of those first.
+
+### `PSPRECOMP_FUNC_ARGS` and `PSPRECOMP_FUNC_ARGS_DUMP`
+
+`PSPRECOMP_FUNC_ARGS=<hex>[,<hex>...]` wraps up to 8 dispatch-table entries at
+boot (`psp_func_args_install`). Calls that go through `RECOMP_LOOKUP` log the
+first 400 of each. Direct C++ calls the emitter resolved bypass the wrapper.
+
+```
+[FUNC-ARGS-IN] 0xADDR(a0=0x.. a1=0x.. a2=0x.. a3=0x..) ra=0x..
+[FUNC-ARGS] 0xADDR(a0=0x.. a1=0x.. a2=0x.. a3=0x..) ra=0x.. -> v0=0x..
+```
+
+An address that is not resolvable at boot (nothing loaded in an overlay
+window; the lookup is the miss stub) is skipped:
+`[FUNC-ARGS] 0xADDR not resolvable at boot (overlay?), skipped`. A successful
+wrap prints `[FUNC-ARGS] watching 0xADDR`.
+
+`PSPRECOMP_FUNC_ARGS_DUMP=<bytes>` (`strtoul` base 0, then masked with `~3`)
+adds, after the return line and only when `v0 != 0`, a word hex dump of guest
+memory at `v0`, 16 bytes per line:
+
+```
+[FUNC-ARGS]   V0+OFF: WORD WORD WORD WORD
+```
+
+### `PSPRECOMP_OVL_ARGS`
+
+`<hex>[,<hex>...]`, up to 8. Same idea as `FUNC_ARGS` for code in an overlay
+bank, resolved on each call (it cannot be wrapped at boot). The first 200
+calls of each address log arguments, this thread's entry ring (up to 12), a
+host backtrace, and the return value:
+
+```
+[OVL-ARGS-IN] 0xADDR(a0=0x.. a1=0x.. a2=0x.. a3=0x..) path: ADDR ...
+[BT] ovl-args: +offset ...
+[OVL-ARGS-OUT] 0xADDR -> v0=0x..
+```
+
+### `PSPRECOMP_STORE_WATCH` and `PSPRECOMP_STORE_WATCH_RANGE`
+
+Every 32-bit guest store is `MEM_W_WRITE` → `psp_mem_write_w`, emitted into
+`recomp.h` by `crates/psp-emitter/src/cpp_generator.rs`. When
+`PSPRECOMP_STORE_WATCH=<hex value>` is non-zero and the stored word equals
+that value, `psp_store_watch_hit` runs (`runtime/src/psp_backtrace.cpp`).
+`PSPRECOMP_STORE_WATCH_RANGE=<lo>-<hi>` (hex) keeps only stores whose address
+is in `[lo, hi)`. Unset range means the whole space (`0` .. `0xFFFFFFFF`).
+Up to 5000 hits print:
+
+```
+[STORE-WATCH] store of 0xVALUE to 0xADDR
+```
+
+A `[BT] store-watch:` line is added only for the word at `+4` of a
+16-byte-aligned block (`addr & 0xF == 4`; object vtable slots), and only while
+the hit index is below 400. Every other address prints the store line alone.
+
+### First LOOKUP miss: ring and backtrace
+
+`psp_on_lookup_miss` prints `[LOOKUP_MISS] addr=0xADDR (first hit)` the first
+time an address misses. The noop stub then, while that address's count is
+`<= 5`, prints:
+
+```
+[LOOKUP_MISS_CTX] addr=0xADDR caller=0xLAST a0=0x.. a1=0x.. sp=0x.. r16=0x.. r17=0x.. r21=0x..
+```
+
+`caller` is `g_last_func_addr` (last dispatched function on this thread, not
+`$ra`). On the first invocation (`count == 1`) it also prints the shared
+cross-thread entry ring (last 32 of the 64-entry ring, oldest first) and a
+host backtrace of the thread that missed:
+
+```
+[LOOKUP_MISS_RECENT] addr=0xADDR ra=0xRA: ADDR ADDR ...
+[BT] miss ADDR: +offset ...
+```
+
+The shared ring interleaves every game thread, so its order is approximate.
+The `[BT]` line is that thread's real host stack.
+
+### Debug socket `K` and the `cpu` field of `I`
+
+`K <tid>` replies `OK 0` immediately (`ERR unsupported` if the hook is not
+wired). The named PSP thread prints its guest call stack on stderr at its
+next guest function entry (`psp_trace_checkpoint`), not in the socket reply:
+
+```
+[BT] thread <tid> at <addr>: +offset ...
+```
+
+A thread that never enters another guest function (blocked in a host wait)
+prints nothing. Symbolize the line with `tools/bt.py`.
+
+`I` now includes a `cpu` string from `psp_cpu_describe`, and each thread has
+`func` (last guest function entry) and `regs` (32 GPRs, `%08X`, a racy
+snapshot of that thread's `recomp_context`):
+
+```
+held=0|1 holder=<tid> waiters=[(id N prio P front|back)...] reservations=[(id N prio P age Nus)...]
+```
+
+`holder` is `-2` when the lock is free. Waiters are listed in lock order
+(priority, then front/back, then ticket). Reservation age is microseconds.
+
+### Reading a `[CPU] ... waited 5 s` report
+
+```
+[CPU] thread N (prio P) waited 5 s for the CPU held by thread H
+```
+
+Printed once per `psp_cpu_acquire` wait that exceeds 5 s
+(`runtime/src/psp_cpu.cpp`). `N` and `P` are the waiter. `H` is the current
+holder (`g_holder`), or `-2` when the token is free and a reservation is what
+blocks the waiter. The acquire path's comment: a long wait means the owner
+never reached an HLE call or a loop back-edge. Read `I` (`cpu`, plus the
+holder's `func` and `regs`), then `K H`, then `tools/bt.py` on the log.
+`PSPRECOMP_NO_CPU_LOCK=1` disables the lock.
+
+### `tools/mdis.py`
+
+Mini MIPS disassembler for an EBOOT or overlay ELF (common ops only). The
+binary path is a required argument:
+
+```
+python tools/mdis.py <hex start> <hex end> <elf>
+```
+
+Prints `ADDR WORD  mnemonic` for `[start, end)`, or `ADDR --` when the
+address is not in a loadable segment. An overlay ELF section whose address is
+`0x08ABB180` and whose size is non-zero is treated as a loadable window
+(`OL_*.bin`).
+
+---
+
 # Per-issue infrastructure notes
 
 Sections below are added by the issue that introduced the infrastructure. Each section:
@@ -307,6 +481,7 @@ what was added, how to use it, how it was verified, and any new failure modes di
 | `S` | `<path>` (rest of line, spaces allowed) | `OK 0` after the TGA is on disk | `bad-path`, `unsupported`, `timeout` (10 s; also covers pre-GL boot and a concurrent capture in flight) |
 | `T` | `0` or `1` | `OK 0`; switches the HLE trace off/on. Needs `PSPRECOMP_HLE_TRACE=1` (starts on) or `=2` (armed, starts off) | `unsupported` |
 | `D` | `<declists>` | `OK 0`; the next N display lists log one `[DL]` line per PRIM (state + matrices + 2 packed vertices) and a `[DL] ---- list end` marker | `unsupported` |
+| `K` | `<tid>` | `OK 0`; that PSP thread prints `[BT] thread <tid> at <addr>:` on stderr at its next guest function entry (not in the reply). See [Guest backtraces](#guest-backtraces-watches-and-the-cpu-lock-2026-10) | `unsupported` |
 | anything else | | | `unknown-command`, `empty`, `line-too-long` (>4095 chars; connection stays usable) |
 
 ### `I` JSON schema (one line, jq-able)
@@ -316,15 +491,22 @@ what was added, how to use it, how it was verified, and any new failure modes di
  "ge": {"frames": 1667, "prims": 12696, "real_nonsprite": 11030,
         "sprite_nonclear": 0, "clears": 1666},
  "lookup_miss": {"unique": 1, "total": 1},
+ "cpu": "held=1 holder=0 waiters=[] reservations=[]",
  "recent_funcs": ["0x089B440C", "..."],
- "threads": [{"id": 0, "name": "user_main", "status": "RUNNING", "wait": ""},
-             {"id": 2, "name": "sgx-psp-freq-thr", "status": "RUNNING", "wait": "sema:278"}]}
+ "threads": [{"id": 0, "name": "user_main", "status": "RUNNING", "wait": "",
+              "func": "0x089B440C", "regs": ["00000000", "...32 words..."]},
+             {"id": 2, "name": "sgx-psp-freq-thr", "status": "RUNNING", "wait": "sema:278",
+              "func": "0x00000000", "regs": ["00000000", "...32 words..."]}]}
 ```
 
 - `ge.*` mirrors the `[GE_GEOM_*]` sentinel counters (`real_nonsprite > 0` == GRAPHICS).
 - `recent_funcs` is a shared 64-entry ring fed by every recompiled-function entry,
   oldest first — entries from all game threads interleave, so cross-thread ordering is
   approximate. (The per-thread PC-TRACE ring is `thread_local` and not readable here.)
+- `cpu` is the guest CPU lock (`psp_cpu_describe`): holder, waiters, reservations.
+  `threads[].func` is that thread's last guest function entry; `threads[].regs`
+  is 32 GPRs (`%08X`), a racy snapshot. Format and how to read a 5 s wait:
+  [Guest backtraces](#guest-backtraces-watches-and-the-cpu-lock-2026-10).
 - `threads[].status` ∈ DORMANT/READY/RUNNING/WAIT/DEAD/WAIT_SLEEP. `wait` is `sema:<uid>` /
   `semacb:<uid>` / `sleep` / `thread_end:<id>` / `""`. **Caveat:** sema waits block on the
   sema's own condvar without changing scheduler status, so a sema-blocked thread shows
