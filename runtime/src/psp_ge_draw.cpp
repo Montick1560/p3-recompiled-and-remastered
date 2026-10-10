@@ -96,6 +96,20 @@ struct PackedVertex {
 static_assert(sizeof(PackedVertex) == 28,
               "PackedVertex must be 28 bytes");
 
+// PSP render-target dimensions. The runtime renders into an FBO of PSP size
+// x render scale; window upscaling happens later at present (blit). The PSP
+// viewport/scissor are scaled into FBO pixels by ge_compute_viewport_depth /
+// ge_compute_scissor.
+static constexpr int PSP_FB_WIDTH = 480;
+static constexpr int PSP_FB_HEIGHT = 272;
+
+// Internal render scale (PSPRECOMP_RENDER_SCALE, 1..8; ge_draw_init). Every
+// FBO-pixel quantity (target size, viewport, scissor, blit, readback) goes
+// through it; through-mode vertices are already in NDC.
+static int g_render_scale = 1;
+static int fb_w() { return PSP_FB_WIDTH * g_render_scale; }
+static int fb_h() { return PSP_FB_HEIGHT * g_render_scale; }
+
 // ---- Screenshot (TGA format -- no external dependency) ----
 
 static bool write_tga(
@@ -142,6 +156,21 @@ static bool write_tga(
     return true;
 }
 
+/// Read a render target back as top-down RGBA rows and write it as TGA at
+/// the FBO size. Render (GL) thread only.
+static bool write_fbo_tga(GLuint fbo, const char* path) {
+    const int w = fb_w(), h = fb_h();
+    const size_t row = static_cast<size_t>(w) * 4;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    std::vector<uint8_t> pixels(row * h);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    std::vector<uint8_t> flipped(pixels.size());
+    for (int y = 0; y < h; y++) {  // GL origin is bottom-left
+        std::memcpy(flipped.data() + y * row, pixels.data() + (h - 1 - y) * row, row);
+    }
+    return write_tga(path, flipped.data(), w, h);
+}
+
 // Resolve the FBO id of the most-recently-presented (front) target, or the
 // current render target as a fallback. Returns 0 if no target exists yet.
 static GLuint front_fbo_id() {
@@ -152,17 +181,7 @@ static GLuint front_fbo_id() {
 
 /// Read the FBO back, flip, and write a TGA. Render (GL) thread only.
 static bool capture_fbo_to_tga(const char* path) {
-    GLuint fbo = front_fbo_id();
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
-    std::vector<uint8_t> pixels(480 * 272 * 4);
-    glReadPixels(0, 0, 480, 272, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-    // Flip vertically (GL origin is bottom-left)
-    std::vector<uint8_t> flipped(480 * 272 * 4);
-    for (int y = 0; y < 272; y++) {
-        std::memcpy(flipped.data() + y * 480 * 4,
-                    pixels.data() + (271 - y) * 480 * 4, 480 * 4);
-    }
-    return write_tga(path, flipped.data(), 480, 272);
+    return write_fbo_tga(front_fbo_id(), path);
 }
 
 // ---- GL state mapping ----
@@ -208,12 +227,6 @@ static GLenum map_prim_type(int prim_type) {
     }
 }
 
-// PSP-native render-target dimensions. The runtime always renders into a
-// 480x272 FBO at 1:1 PSP resolution; window upscaling happens later at
-// present (blit). So the NDC->screen viewport maps directly to FBO pixels.
-static constexpr int PSP_FB_WIDTH = 480;
-static constexpr int PSP_FB_HEIGHT = 272;
-
 // Compute the PSP viewport scale/offset + depth-range -> GL viewport/depth
 // range for the live state. Generic for all games (issue #23). The math lives
 // in the pure ge_compute_viewport_depth (tests/test_ge_viewport.cpp) so it is
@@ -223,7 +236,7 @@ static GeViewportDepth compute_state_viewport_depth(const GeState& state) {
         state.viewport_x_scale, state.viewport_y_scale,
         state.viewport_x_center, state.viewport_y_center,
         state.viewport_z_scale, state.viewport_z_center,
-        state.offset_x, state.offset_y, PSP_FB_HEIGHT);
+        state.offset_x, state.offset_y, PSP_FB_HEIGHT, g_render_scale);
 }
 
 // A reversed depth range (PSP ZSCALE<0 -> glDepthRange near>far, issue #23)
@@ -237,7 +250,7 @@ static bool depth_range_reversed(const GeViewportDepth& vp) {
 // ---- FBO pool helpers ----
 
 // Create one render target (FBO + RGBA8 color texture + Depth24 renderbuffer,
-// 480x272, NEAREST) for the given normalized key. Clears it to black. The
+// PSP size x render scale, NEAREST) for the given normalized key. Clears it to black. The
 // pool owns the GL objects; ge_draw_shutdown deletes them.
 static GeTarget make_target(uint32_t key) {
     GeTarget t;
@@ -247,7 +260,7 @@ static GeTarget make_target(uint32_t key) {
 
     glGenTextures(1, &t.color_tex);
     glBindTexture(GL_TEXTURE_2D, t.color_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 480, 272, 0,
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, fb_w(), fb_h(), 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -256,7 +269,7 @@ static GeTarget make_target(uint32_t key) {
 
     glGenRenderbuffers(1, &t.depth_rb);
     glBindRenderbuffer(GL_RENDERBUFFER, t.depth_rb);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 480, 272);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, fb_w(), fb_h());
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
                               GL_RENDERBUFFER, t.depth_rb);
 
@@ -321,6 +334,10 @@ void ge_draw_mark_dirty() {
 // ---- Public API ----
 
 void ge_draw_init() {
+    g_render_scale = present_render_scale(std::getenv("PSPRECOMP_RENDER_SCALE"));
+    std::fprintf(stderr, "[DRAW] render scale %d (%dx%d)\n",
+                 g_render_scale, fb_w(), fb_h());
+
     // Check screenshot env var
     const char* ss_env =
         std::getenv("PSPRECOMP_SCREENSHOT");
@@ -387,18 +404,9 @@ void ge_draw_shutdown() {
     g_draw_ready.store(false, std::memory_order_release);
     // Auto-capture final frame if any PRIMs were rendered and no screenshot taken yet
     if (g_has_drawn_prims && !g_screenshot_done) {
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, front_fbo_id());
-        std::vector<uint8_t> pixels(480 * 272 * 4);
-        glReadPixels(0, 0, 480, 272, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-        // Flip vertically (GL origin is bottom-left)
-        std::vector<uint8_t> flipped(480 * 272 * 4);
-        for (int y = 0; y < 272; y++) {
-            std::memcpy(flipped.data() + y * 480 * 4,
-                        pixels.data() + (271 - y) * 480 * 4, 480 * 4);
-        }
         const char* out_path = (g_screenshot_path[0] != '\0')
             ? g_screenshot_path : "frame.tga";
-        write_tga(out_path, flipped.data(), 480, 272);
+        write_fbo_tga(front_fbo_id(), out_path);
         g_screenshot_done = true;
         std::fprintf(stderr, "[DRAW] Auto-capture: %s\n", out_path);
     }
@@ -435,7 +443,7 @@ void ge_draw_begin_list() {
     // Full-buffer default; the precise PSP viewport (scale/offset + depth
     // range) is applied per-PRIM in ge_draw_prim from the live registers,
     // which may be set after begin_list (issue #23).
-    glViewport(0, 0, PSP_FB_WIDTH, PSP_FB_HEIGHT);
+    glViewport(0, 0, fb_w(), fb_h());
     g_frame_counter++;
     g_list_prim_index = 0;
 }
@@ -591,17 +599,13 @@ void ge_draw_prim(
     // top-left origin) applies to every draw, clears included. The FBO uses
     // GL's bottom-left origin, so y is flipped.
     {
-        const int x1 = static_cast<int>(state.scissor1 & 0x3FF);
-        const int y1 = static_cast<int>((state.scissor1 >> 10) & 0x3FF);
-        const int x2 = static_cast<int>(state.scissor2 & 0x3FF);
-        const int y2 = static_cast<int>((state.scissor2 >> 10) & 0x3FF);
-        if (state.scissor2 == 0 && state.scissor1 == 0) {
+        const GeScissor sc = ge_compute_scissor(state.scissor1, state.scissor2,
+                                                PSP_FB_HEIGHT, g_render_scale);
+        if (!sc.enabled) {
             glDisable(GL_SCISSOR_TEST);  // never set: whole buffer
         } else {
             glEnable(GL_SCISSOR_TEST);
-            const int w = x2 >= x1 ? x2 - x1 + 1 : 0;
-            const int h = y2 >= y1 ? y2 - y1 + 1 : 0;
-            glScissor(x1, PSP_FB_HEIGHT - 1 - y2, w, h);
+            glScissor(sc.x, sc.y, sc.w, sc.h);
         }
     }
     {
@@ -734,7 +738,7 @@ void ge_draw_prim(
         glDepthRange(vp.near_z, vp.far_z);
         depth_reversed = depth_range_reversed(vp);
     } else {
-        glViewport(0, 0, PSP_FB_WIDTH, PSP_FB_HEIGHT);
+        glViewport(0, 0, fb_w(), fb_h());
         glDepthRange(0.0, 1.0);
     }
 
@@ -928,15 +932,7 @@ static void present_service_screenshot(GLuint fbo) {
     if (!g_screenshot_enabled || g_screenshot_done || !g_has_drawn_prims) {
         return;
     }
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
-    std::vector<uint8_t> pixels(480 * 272 * 4);
-    glReadPixels(0, 0, 480, 272, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-    std::vector<uint8_t> flipped(480 * 272 * 4);
-    for (int y = 0; y < 272; y++) {
-        std::memcpy(flipped.data() + y * 480 * 4,
-                    pixels.data() + (271 - y) * 480 * 4, 480 * 4);
-    }
-    write_tga(g_screenshot_path, flipped.data(), 480, 272);
+    write_fbo_tga(fbo, g_screenshot_path);
     g_screenshot_done = true;
 }
 
@@ -957,7 +953,7 @@ static void present_blit(GLuint fbo) {
     if (!window) return;
     glDisable(GL_SCISSOR_TEST);  // the GE scissor must not crop the blit
     present_service_screenshot(fbo);
-    // Letterbox the 480x272 image into the drawable, keeping the PSP aspect
+    // Letterbox the rendered image into the drawable, keeping the PSP aspect
     // ratio; linear scaling unless PSPRECOMP_PRESENT_FILTER=nearest. The GE
     // path re-sets viewport, colour mask and clear colour before its draws.
     int win_w = 480, win_h = 272;
@@ -969,7 +965,7 @@ static void present_blit(GLuint fbo) {
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
-    glBlitFramebuffer(0, 0, 480, 272, r.x, r.y, r.x + r.w, r.y + r.h,
+    glBlitFramebuffer(0, 0, fb_w(), fb_h(), r.x, r.y, r.x + r.w, r.y + r.h,
                       GL_COLOR_BUFFER_BIT, present_filter());
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     SDL_GL_SwapWindow(window);
