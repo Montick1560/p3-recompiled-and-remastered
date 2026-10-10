@@ -337,6 +337,21 @@ void ge_draw_init() {
     g_render_scale = present_render_scale(std::getenv("PSPRECOMP_RENDER_SCALE"));
     std::fprintf(stderr, "[DRAW] render scale %d (%dx%d)\n",
                  g_render_scale, fb_w(), fb_h());
+    if (g_render_scale > 1) {
+        // GE points and lines are one PSP pixel wide: keep that apparent size
+        // (no draw path changes these GL states afterwards). Wide lines are
+        // allowed in this non-forward-compatible core context; a driver that
+        // rejects them leaves 1 px lines.
+        GLfloat range[2] = {1.0f, 1.0f};
+        glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, range);
+        while (glGetError() != GL_NO_ERROR) {}
+        glLineWidth(static_cast<GLfloat>(g_render_scale));
+        glPointSize(static_cast<GLfloat>(g_render_scale));
+        const GLenum err = glGetError();
+        std::fprintf(stderr, "[DRAW] line/point width %d (driver line range %.0f..%.0f)%s\n",
+                     g_render_scale, range[0], range[1],
+                     err != GL_NO_ERROR ? " REJECTED, lines stay 1 px" : "");
+    }
 
     // Check screenshot env var
     const char* ss_env =
