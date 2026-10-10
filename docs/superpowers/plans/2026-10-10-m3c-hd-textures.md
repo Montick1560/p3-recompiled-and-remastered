@@ -1429,4 +1429,4 @@ After the fix (`to_square.py m3c_gate3`, 40 s in the hideout): fmt=4 (CLUT4) 44 
 
 ## Task 6 result
 
-(fill in: user findings, load times, whether 6b was needed)
+2026-10-10. 6b was done before the user check: the hideout decoded 49 PNGs synchronously (1.6 s total, 4096x4096 ones ~250 ms), over the plan's 30 ms trigger. After it, the user played with `jugar.bat` (scale 4 + pack, 12:06-12:10): "se ve increible". Log: pack loaded (3042 textures), no errors during play; the only `[CRASH]` is the known post-`Shutdown complete` teardown race when the window closes (same guest function as on 2026-10-09).
