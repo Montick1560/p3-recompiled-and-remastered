@@ -306,6 +306,7 @@ static void hle_sceKernelDelayThread(
     // plain sceKernelDelayThread (not the CB variant).
     psp_kernel_check_callbacks(rdram, ctx);
     sched_yield_point();
+    psp_cpu_block_begin();  // a real wait: let any ready thread run
     std::this_thread::sleep_for(std::chrono::microseconds(usec));
     ctx->r[2] = SCE_OK;
 }

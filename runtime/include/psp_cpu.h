@@ -19,6 +19,15 @@ void psp_cpu_acquire(bool front = false);
 /// Give the CPU back (no-op if this host thread does not own it).
 void psp_cpu_release();
 
+/// Give the CPU back for a non-blocking HLE call: only threads of strictly
+/// better priority may run meanwhile (PSP syscalls do not let worse threads
+/// in) until this thread blocks (psp_cpu_block_begin) or 2 ms pass.
+void psp_cpu_release_reserved();
+
+/// An HLE call is about to block (wait, delay, sleep): drop this thread's
+/// reservation so any ready thread may run, like a PSP thread going to WAIT.
+void psp_cpu_block_begin();
+
 /// True when this host thread owns the CPU.
 bool psp_cpu_held();
 
@@ -29,7 +38,7 @@ void psp_cpu_yield_if_contended();
 /// Releases the CPU for the scope if this thread owns it (HLE calls).
 struct PspCpuReleaseScope {
     bool was_held;
-    PspCpuReleaseScope() : was_held(psp_cpu_held()) { if (was_held) psp_cpu_release(); }
+    PspCpuReleaseScope() : was_held(psp_cpu_held()) { if (was_held) psp_cpu_release_reserved(); }
     ~PspCpuReleaseScope() { if (was_held) psp_cpu_acquire(/*front=*/true); }
     PspCpuReleaseScope(const PspCpuReleaseScope&) = delete;
     PspCpuReleaseScope& operator=(const PspCpuReleaseScope&) = delete;

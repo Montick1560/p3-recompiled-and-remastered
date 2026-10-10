@@ -1,3 +1,4 @@
+#include "psp_cpu.h"
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_intr.h"
 #include "hle/psp_hle_kernel.h"
@@ -204,6 +205,7 @@ static void audio_block_for_samples(
 ) {
     psp_kernel_check_callbacks(rdram, ctx);
     sched_yield_point();
+    psp_cpu_block_begin();  // a real wait: let any ready thread run
     std::this_thread::sleep_for(std::chrono::microseconds(
         samples * 1000000LL / AUDIO_OUTPUT_SAMPLE_RATE));
 }
@@ -239,6 +241,7 @@ static void audio_wait_drain(
            std::chrono::steady_clock::now() < deadline) {
         psp_kernel_check_callbacks(rdram, ctx);
         sched_yield_point();
+        psp_cpu_block_begin();  // a real wait: let any ready thread run
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     psp_kernel_check_callbacks(rdram, ctx);

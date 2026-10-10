@@ -1,3 +1,4 @@
+#include "psp_cpu.h"
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_kernel.h"
 #include "psp_scheduler.h"
@@ -70,6 +71,9 @@ static void hle_sceKernelLockMutex(
     PspThread* t = psp_get_current_thread();
     int my_thid = t ? t->id : 0;
 
+    if (m->owner_thid != -1 && m->owner_thid != my_thid) {
+        psp_cpu_block_begin();  // a real wait: let any ready thread run
+    }
     m->cv.wait(lock, [&] {
         return m->owner_thid == -1 || m->owner_thid == my_thid;
     });

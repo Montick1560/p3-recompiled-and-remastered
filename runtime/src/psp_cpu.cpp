@@ -9,6 +9,7 @@
 #include <mutex>
 #include <set>
 #include <tuple>
+#include <vector>
 
 namespace {
 
@@ -35,6 +36,38 @@ uint64_t g_next_ticket = 0;
 std::set<Waiter> g_waiters;
 std::atomic<int> g_best_waiting_prio{INT_MAX};
 thread_local bool t_held = false;
+thread_local char t_token;  // its address identifies this host thread
+
+// A thread inside a non-blocking HLE call keeps its place: on the PSP a
+// syscall that does not block never lets a lower-priority thread run. The
+// caller leaves a reservation with its priority; only strictly better threads
+// may take the CPU until it blocks for real (psp_cpu_block_begin) or the
+// reservation ages out (a long host-side call counts as blocking).
+struct Reservation {
+    const void* owner;
+    int prio;
+    std::chrono::steady_clock::time_point since;
+};
+std::vector<Reservation> g_res;
+constexpr auto kReservationTtl = std::chrono::milliseconds(2);
+
+bool reserved_against_locked(int prio, const void* me) {
+    const auto now = std::chrono::steady_clock::now();
+    for (const Reservation& r : g_res) {
+        if (r.owner != me && r.prio <= prio && now - r.since < kReservationTtl) return true;
+    }
+    return false;
+}
+
+bool drop_reservation_locked(const void* me) {
+    for (size_t i = 0; i < g_res.size(); i++) {
+        if (g_res[i].owner == me) {
+            g_res.erase(g_res.begin() + static_cast<std::ptrdiff_t>(i));
+            return true;
+        }
+    }
+    return false;
+}
 
 bool enabled() {
     static const bool on = [] {
@@ -60,16 +93,27 @@ void psp_cpu_acquire(bool front) {
     if (!enabled() || t_held) return;
     const int prio = psp_current_thread_priority();
     std::unique_lock<std::mutex> lock(g_m);
+    drop_reservation_locked(&t_token);  // our own HLE call is over
     const Waiter me{prio, front ? 0 : 1, g_next_ticket++};
     g_waiters.insert(me);
     publish_best_locked();
-    auto ready = [&] { return !g_held && g_waiters.begin()->ticket == me.ticket; };
+    auto ready = [&] {
+        return !g_held && g_waiters.begin()->ticket == me.ticket &&
+               !reserved_against_locked(prio, &t_token);
+    };
+    // Reservations age out without a notification: poll while any exists.
     // A long wait means the owner never reached an HLE call or a loop
     // back-edge: report it once per wait (deadlock diagnostics).
-    if (!g_cv.wait_for(lock, std::chrono::seconds(5), ready)) {
-        std::fprintf(stderr, "[CPU] thread %d (prio %d) waited 5 s for the CPU held by thread %d\n",
-                     psp_current_thread_id(), prio, g_holder);
-        g_cv.wait(lock, ready);
+    const auto start = std::chrono::steady_clock::now();
+    bool reported = false;
+    while (!ready()) {
+        g_cv.wait_for(lock, g_res.empty() ? std::chrono::milliseconds(100)
+                                          : std::chrono::milliseconds(1));
+        if (!reported && std::chrono::steady_clock::now() - start > std::chrono::seconds(5)) {
+            reported = true;
+            std::fprintf(stderr, "[CPU] thread %d (prio %d) waited 5 s for the CPU held by thread %d\n",
+                         psp_current_thread_id(), prio, g_holder);
+        }
     }
     g_waiters.erase(me);
     publish_best_locked();
@@ -87,6 +131,29 @@ void psp_cpu_release() {
         t_held = false;
     }
     g_cv.notify_all();
+}
+
+void psp_cpu_release_reserved() {
+    if (!enabled() || !t_held) return;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        g_held = false;
+        g_holder = -2;
+        t_held = false;
+        drop_reservation_locked(&t_token);
+        g_res.push_back({&t_token, psp_current_thread_priority(), std::chrono::steady_clock::now()});
+    }
+    g_cv.notify_all();
+}
+
+void psp_cpu_block_begin() {
+    if (!enabled()) return;
+    bool dropped;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        dropped = drop_reservation_locked(&t_token);
+    }
+    if (dropped) g_cv.notify_all();
 }
 
 bool psp_cpu_held() {

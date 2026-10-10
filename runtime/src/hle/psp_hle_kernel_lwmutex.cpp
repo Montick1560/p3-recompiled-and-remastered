@@ -21,6 +21,7 @@
 // sema/eventflag code: sched_yield_point() at entry, psp_thread_note_wait
 // tagging, cv waits with a 5 s safety valve and a g_should_exit escape.
 
+#include "psp_cpu.h"
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_kernel.h"
 #include "psp_scheduler.h"
@@ -181,6 +182,7 @@ void lw_lock_blocking(uint8_t* rdram, recomp_context* ctx,
         }
         // 5 s safety valve (sema/eventflag convention) so shutdown and
         // missed notifies cannot wedge the host thread forever.
+        psp_cpu_block_begin();  // a real wait: let any ready thread run
         auto valve = std::chrono::seconds(5);
         if (timed && deadline - now < valve) {
             m->cv.wait_until(lock, deadline);

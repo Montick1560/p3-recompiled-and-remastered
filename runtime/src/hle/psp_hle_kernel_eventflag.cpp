@@ -1,3 +1,4 @@
+#include "psp_cpu.h"
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_kernel.h"
 #include "hle/psp_hle_refer_info.h"
@@ -230,6 +231,9 @@ static void hle_sceKernelWaitEventFlag(
     if (timeout_ptr != 0) {
         timeout = std::chrono::microseconds(
             psp_mem_read<uint32_t>(rdram, timeout_ptr));
+    }
+    if (!ef->deleted && !pattern_matches(ef->pattern, bits, wait_mode)) {
+        psp_cpu_block_begin();  // a real wait: let any ready thread run
     }
     bool matched = ef->cv.wait_for(lock, timeout, [&] {
         return ef->deleted || pattern_matches(ef->pattern, bits, wait_mode);

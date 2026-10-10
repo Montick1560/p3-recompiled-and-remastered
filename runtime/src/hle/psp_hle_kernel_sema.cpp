@@ -1,3 +1,5 @@
+void psp_print_host_backtrace(const char* tag);  // psp_backtrace.cpp
+#include "psp_cpu.h"
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_kernel.h"
 #include "psp_scheduler.h"
@@ -179,6 +181,7 @@ static void hle_sceKernelSignalSema(
                 g_last_func_addr,
                 static_cast<uint32_t>(ctx->r[4]),
                 deref0, deref4, deref0_0, deref0_4, deref0_0_0, deref0_0_4);
+            psp_print_host_backtrace("signal-unknown-sema");  // guest callers (bt.py)
             warned_signal_uids.insert(uid);
         }
         ctx->r[2] = SCE_OK;
@@ -266,6 +269,7 @@ static void hle_sceKernelWaitSema(
         }
         std::unique_lock<std::mutex> lock(s->mtx);
         s->wait_count++;
+        psp_cpu_block_begin();  // a real wait: let any ready thread run
         bool got_it = s->cv.wait_for(lock,
             std::chrono::milliseconds(100),
             [&] { return s->current_count >= signal
@@ -322,6 +326,7 @@ static void hle_sceKernelWaitSema(
         uint32_t timeout_us = psp_mem_read<uint32_t>(
             rdram, timeout_ptr);
         auto timeout = std::chrono::microseconds(timeout_us);
+        psp_cpu_block_begin();  // a real wait: let any ready thread run
         s->cv.wait_for(lock, timeout,
             [&] { return waiter.granted || g_should_exit.load(); });
         if (!waiter.granted) {
@@ -337,6 +342,7 @@ static void hle_sceKernelWaitSema(
     } else {
         // Unbounded wait: 5-second safety valve + g_should_exit escape
         // so threads can be cleaned up on shutdown.
+        psp_cpu_block_begin();  // a real wait: let any ready thread run
         while (!waiter.granted && !g_should_exit.load()) {
             s->cv.wait_for(lock, std::chrono::seconds(5),
                 [&] { return waiter.granted || g_should_exit.load(); });
@@ -443,6 +449,7 @@ static void hle_sceKernelWaitSemaCB(
             // cv.wait_for wakes immediately on notify_all() from
             // SignalSema — much faster than sleep_for.
             s->wait_count++;
+            psp_cpu_block_begin();  // a real wait: let any ready thread run
             s->cv.wait_for(lock, std::chrono::milliseconds(5),
                 [&] { return (s->current_count >= signal
                               && s->waiters.empty())

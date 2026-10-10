@@ -1,3 +1,4 @@
+#include "psp_cpu.h"
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_intr.h"
 #include "psp_vblank_clock.h"
@@ -55,6 +56,7 @@ static void hle_sceDisplayWaitVblankStart(
     // Block until the next vblank boundary of the 59.94 Hz display clock
     // (not a fixed period after the call: the frame's own work time is
     // part of the frame, as on hardware).
+    psp_cpu_block_begin();  // a real wait: let any ready thread run
     std::this_thread::sleep_for(std::chrono::microseconds(
         psp_us_until_next_vblank(psp_display_elapsed_us())));
     // Vblank interrupt: games hang per-frame work (e.g. waking a loader
