@@ -93,6 +93,49 @@ static void cachekey_and_name() {
     CHECK(ge_texrep_key_name(k) == "00000000098b1cca0ddf97bd", "key name is %016llx%08x lower-case");
 }
 
+static void clut_snapshot() {
+    CHECK(ge_clut_load_bytes(0x02) == 64, "2 blocks = 64 bytes");
+    CHECK(ge_clut_load_bytes(0x43) == 96, "bit 6 ignored unless exactly 0x40");
+    CHECK(ge_clut_load_bytes(0x40) == 2048, "0x40 blocks allowed");
+    CHECK(ge_clut_load_bytes(0x00) == 0, "0 = no load");
+
+    GeClutSnapshot s{};
+    const auto src = pattern(2048);
+    ge_clut_snapshot_load(s, src.data(), 64);
+    CHECK(s.total_bytes == 64 && s.max_bytes == 64, "first load");
+    CHECK(s.buf[63] == src[63], "bytes copied");
+    ge_clut_snapshot_load(s, nullptr, 0);
+    CHECK(s.total_bytes == 64, "0-byte load is a no-op");
+    ge_clut_snapshot_load(s, src.data(), 32);
+    CHECK(s.total_bytes == 32 && s.max_bytes == 64, "max keeps the largest load");
+    ge_clut_snapshot_load(s, nullptr, 32);
+    CHECK(s.buf[0] == 0 && s.buf[31] == 0 && s.buf[32] == src[32], "invalid source zero-fills only the load");
+
+    // 16-bit palette (fmt 1), start pos 1 -> base 16 entries * 2 = 32 bytes.
+    GeClutSnapshot t{};
+    ge_clut_snapshot_load(t, src.data(), 64);
+    const uint32_t fmt_start1 = 0x01 | (1u << 16);
+    CHECK(ge_texrep_cluthash(t, fmt_start1) == (XXH32(t.buf, 64, 0xC0108888u) ^ fmt_start1),
+          "min(total + base, max) = 64");
+    const uint32_t fmt_plain = 0x03;  // 32-bit palette, start 0
+    ge_clut_snapshot_load(t, src.data(), 32);
+    CHECK(ge_texrep_cluthash(t, fmt_plain) == (XXH32(t.buf, 32, 0xC0108888u) ^ fmt_plain),
+          "total = 32 after a smaller reload");
+}
+
+static void params_from_registers() {
+    // TEXADDR0 0x123450, TEXBUFWIDTH0 bufw 64 | upper address 0x09 << 16,
+    // TEXSIZE0 0x0506 (64x32), CLUT8, swizzled.
+    const GeTexrepParams p = ge_texrep_params(0x123450u, (0x09u << 16) | 64u, 0x0506u, 5u, 1u);
+    CHECK(p.addr == 0x09123450u, "address = TEXADDR0 | upper bits");
+    CHECK(p.dim == 0x0506 && p.w == 64 && p.h == 32, "dim and size");
+    CHECK(p.fmt == 5 && p.bufw == 64 && p.swizzled, "fmt, bufw, swizzle");
+    const GeTexrepParams q = ge_texrep_params(0x12345Fu, 64u, 0x0F0F09u, 12u, 0u);
+    CHECK(q.addr == 0x00123450u, "low 4 address bits dropped");
+    CHECK(q.dim == 0x0F09, "dim keeps nibbles only");
+    CHECK(q.fmt == 0, "invalid format -> 5650");
+}
+
 int main() {
     xxhash_vectors();
     bpp_and_bufw();
@@ -101,6 +144,8 @@ int main() {
     strided_reduce();
     odd_reduce();
     cachekey_and_name();
+    clut_snapshot();
+    params_from_registers();
     if (failures == 0) std::printf("test_texrep_hash: all passed\n");
     return failures == 0 ? 0 : 1;
 }

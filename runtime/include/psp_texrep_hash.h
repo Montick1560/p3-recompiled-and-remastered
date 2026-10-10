@@ -38,3 +38,34 @@ struct GeTexrepKey {
 
 /// "%016llx%08x": the file/ini name of a key (level 0).
 std::string ge_texrep_key_name(const GeTexrepKey& k);
+
+/// CLUT bytes copied at the last LOADCLUT (PPSSPP TextureCacheCommon::LoadClut).
+/// The replacement key hashes these, not the palette's current RAM contents.
+struct GeClutSnapshot {
+    uint8_t buf[2048];
+    uint32_t total_bytes;  // bytes of the last load
+    uint32_t max_bytes;    // largest load so far
+};
+
+/// LOADCLUT data -> bytes: (data & 0x3F) blocks of 32, or 0x40 blocks when
+/// (data & 0x7F) == 0x40.
+uint32_t ge_clut_load_bytes(uint32_t loadclut_data);
+
+/// Copy `load_bytes` from `src` (nullptr = invalid address: zeros). 0 = no-op.
+void ge_clut_snapshot_load(GeClutSnapshot& s, const uint8_t* src, uint32_t load_bytes);
+
+/// PPSSPP cluthash for the key: XXH32(buf, min(total + startPos*entryBytes,
+/// max), 0xC0108888) ^ clutformat.
+uint32_t ge_texrep_cluthash(const GeClutSnapshot& s, uint32_t clutformat);
+
+/// Level-0 texture parameters from the raw GE registers, PPSSPP style.
+struct GeTexrepParams {
+    uint32_t addr;   // (TEXADDR0 & 0xFFFFF0) | ((TEXBUFWIDTH0 << 8) & 0x0F000000)
+    uint16_t dim;    // TEXSIZE0 & 0x0F0F
+    int w, h;        // 1 << nibbles of dim
+    int fmt;         // TEXFORMAT, >= 11 -> 0 (5650)
+    int bufw;        // ge_texrep_bufw
+    bool swizzled;   // TEXMODE bit 0
+};
+GeTexrepParams ge_texrep_params(uint32_t texaddr0, uint32_t texbufwidth0, uint32_t texsize0,
+                                uint32_t texformat, uint32_t texmode);

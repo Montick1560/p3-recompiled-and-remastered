@@ -1,5 +1,6 @@
 #include "psp_cpu.h"
 #include "psp_ge.h"
+#include "psp_texrep.h"
 #include "psp_ge_vertex.h"
 #include "psp_ge_constants.h"
 #include "psp_ge_draw.h"
@@ -601,7 +602,12 @@ GeListResult ge_process_display_list(
             g_ge_state.clut_format = data;
             break;
         case GE_CMD_LOADCLUT:
-            // Trigger CLUT load (texture cache handles this)
+            // Snapshot the palette for texture-replacement keys (PPSSPP
+            // LoadClut); decoding still reads the CLUT from RAM at bind time.
+            ge_texrep_on_loadclut(rdram,
+                                  (g_ge_state.clut_addr & 0xFFFFF0u) |
+                                      ((g_ge_state.clut_addr_upper << 8) & 0x0F000000u),
+                                  data);
             break;
 
         // ---- Enable flags ----

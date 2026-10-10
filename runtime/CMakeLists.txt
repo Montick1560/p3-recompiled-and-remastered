@@ -148,6 +148,7 @@ set(RUNTIME_SOURCES
     src/psp_ge_draw.cpp
     src/psp_ge_viewport.cpp
     src/psp_texrep_hash.cpp
+    src/psp_texrep.cpp
     src/psp_ge_test.cpp
     src/hle/psp_hle_dispatch.cpp
     src/hle/psp_hle_kernel_thread.cpp

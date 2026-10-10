@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 
 namespace {
 constexpr uint32_t kSeed = 0xBACD7814u;
@@ -71,4 +72,41 @@ std::string ge_texrep_key_name(const GeTexrepKey& k) {
     std::snprintf(buf, sizeof(buf), "%016llx%08x",
                   static_cast<unsigned long long>(k.cachekey), k.hash);
     return buf;
+}
+
+uint32_t ge_clut_load_bytes(uint32_t loadclut_data) {
+    const uint32_t blocks = (loadclut_data & 0x7F) == 0x40 ? 0x40 : (loadclut_data & 0x3F);
+    return blocks * 32;
+}
+
+void ge_clut_snapshot_load(GeClutSnapshot& s, const uint8_t* src, uint32_t load_bytes) {
+    if (load_bytes == 0) return;
+    load_bytes = std::min<uint32_t>(load_bytes, sizeof(s.buf));
+    if (src) {
+        std::memcpy(s.buf, src, load_bytes);
+    } else {
+        std::memset(s.buf, 0, load_bytes);
+    }
+    s.total_bytes = load_bytes;
+    s.max_bytes = std::max(s.max_bytes, load_bytes);
+}
+
+uint32_t ge_texrep_cluthash(const GeClutSnapshot& s, uint32_t clutformat) {
+    const uint32_t entry_bytes = (clutformat & 3) == 3 ? 4 : 2;
+    const uint32_t base = (((clutformat >> 16) & 0x1F) << 4) * entry_bytes;
+    const uint32_t n = std::min(s.total_bytes + base, s.max_bytes);
+    return XXH32(s.buf, n, 0xC0108888u) ^ clutformat;
+}
+
+GeTexrepParams ge_texrep_params(uint32_t texaddr0, uint32_t texbufwidth0, uint32_t texsize0,
+                                uint32_t texformat, uint32_t texmode) {
+    GeTexrepParams p{};
+    p.addr = (texaddr0 & 0xFFFFF0u) | ((texbufwidth0 << 8) & 0x0F000000u);
+    p.dim = static_cast<uint16_t>(texsize0 & 0x0F0Fu);
+    p.w = 1 << (p.dim & 0xF);
+    p.h = 1 << ((p.dim >> 8) & 0xF);
+    p.fmt = texformat >= 11 ? 0 : static_cast<int>(texformat);
+    p.bufw = ge_texrep_bufw(texbufwidth0, p.fmt);
+    p.swizzled = (texmode & 1) != 0;
+    return p;
 }
