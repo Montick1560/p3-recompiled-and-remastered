@@ -136,6 +136,77 @@ static void test_reversed_z_range() {
     }
 }
 
+// Render scale (M3b): outputs are FBO pixels = PSP pixels * scale.
+static void test_fullscreen_scale2() {
+    GeViewportDepth v = ge_compute_viewport_depth(
+        240.0f, -136.0f, 2048.0f, 2048.0f, 32767.5f, 32767.5f,
+        1808u * 16u, 1912u * 16u, FBH, 2);
+    ASSERT_EQ(v.x, 0, "scale2 fullscreen x");
+    ASSERT_EQ(v.y, 0, "scale2 fullscreen y");
+    ASSERT_EQ(v.w, 960, "scale2 fullscreen w");
+    ASSERT_EQ(v.h, 544, "scale2 fullscreen h");
+    ASSERT_NEAR(v.near_z, 0.0f, "scale does not touch depth (near)");
+    ASSERT_NEAR(v.far_z, 1.0f, "scale does not touch depth (far)");
+}
+
+// Centred half-size viewport: PSP rect x 120..359, y 68..203 (top-left
+// origin) -> GL (bottom-left) x=120 y=68 w=240 h=136; scale 3 triples all.
+static void test_half_viewport_scale3() {
+    GeViewportDepth v = ge_compute_viewport_depth(
+        120.0f, -68.0f, 2048.0f, 2048.0f, 32767.5f, 32767.5f,
+        1808u * 16u, 1912u * 16u, FBH, 3);
+    ASSERT_EQ(v.x, 360, "scale3 half x");
+    ASSERT_EQ(v.y, 204, "scale3 half y");
+    ASSERT_EQ(v.w, 720, "scale3 half w");
+    ASSERT_EQ(v.h, 408, "scale3 half h");
+}
+
+// A quarter-pixel offset rounds away at scale 1 (left = -0.25 -> 0) but is
+// a whole FBO pixel at scale 4 (-1): scale must apply before rounding.
+static void test_subpixel_offset_scales_before_rounding() {
+    GeViewportDepth s1 = ge_compute_viewport_depth(
+        240.0f, -136.0f, 2048.0f, 2048.0f, 32767.5f, 32767.5f,
+        1808u * 16u + 4u, 1912u * 16u, FBH, 1);
+    GeViewportDepth s4 = ge_compute_viewport_depth(
+        240.0f, -136.0f, 2048.0f, 2048.0f, 32767.5f, 32767.5f,
+        1808u * 16u + 4u, 1912u * 16u, FBH, 4);
+    ASSERT_EQ(s1.x, 0, "quarter-pixel offset at scale 1");
+    ASSERT_EQ(s4.x, -1, "quarter-pixel offset at scale 4");
+}
+
+static void test_scissor_never_set_is_disabled() {
+    GeScissor s = ge_compute_scissor(0u, 0u, FBH, 2);
+    ASSERT_EQ(s.enabled, false, "both registers 0 -> disabled");
+}
+
+static void test_scissor_fullscreen_scaled() {
+    const uint32_t s2 = 479u | (271u << 10);
+    GeScissor a = ge_compute_scissor(0u, s2, FBH, 1);
+    ASSERT_EQ(a.enabled, true, "full scissor enabled");
+    ASSERT_EQ(a.x, 0, "full x"); ASSERT_EQ(a.y, 0, "full y");
+    ASSERT_EQ(a.w, 480, "full w"); ASSERT_EQ(a.h, 272, "full h");
+    GeScissor b = ge_compute_scissor(0u, s2, FBH, 2);
+    ASSERT_EQ(b.w, 960, "full w scale2"); ASSERT_EQ(b.h, 544, "full h scale2");
+}
+
+// PSP inclusive rect (10,20)-(109,69): 100x50, GL y = 272-1-69 = 202.
+static void test_scissor_partial_scaled() {
+    const uint32_t s1 = 10u | (20u << 10);
+    const uint32_t s2 = 109u | (69u << 10);
+    GeScissor a = ge_compute_scissor(s1, s2, FBH, 1);
+    ASSERT_EQ(a.x, 10, "partial x"); ASSERT_EQ(a.y, 202, "partial y");
+    ASSERT_EQ(a.w, 100, "partial w"); ASSERT_EQ(a.h, 50, "partial h");
+    GeScissor b = ge_compute_scissor(s1, s2, FBH, 2);
+    ASSERT_EQ(b.x, 20, "partial x scale2"); ASSERT_EQ(b.y, 404, "partial y scale2");
+    ASSERT_EQ(b.w, 200, "partial w scale2"); ASSERT_EQ(b.h, 100, "partial h scale2");
+}
+
+static void test_scissor_inverted_is_empty() {
+    GeScissor s = ge_compute_scissor(50u, 10u | (100u << 10), FBH, 2);
+    ASSERT_EQ(s.enabled, true, "inverted still enabled");
+    ASSERT_EQ(s.w, 0, "x2 < x1 -> zero width");
+}
+
 int main() {
     test_fullscreen_default_matches_hardcoded();
     test_fullscreen_depth_range();
@@ -144,6 +215,13 @@ int main() {
     test_offset_subpixel_and_mask();
     test_depth_clamped_subrange();
     test_reversed_z_range();
+    test_fullscreen_scale2();
+    test_half_viewport_scale3();
+    test_subpixel_offset_scales_before_rounding();
+    test_scissor_never_set_is_disabled();
+    test_scissor_fullscreen_scaled();
+    test_scissor_partial_scaled();
+    test_scissor_inverted_is_empty();
 
     if (failures == 0) {
         std::printf("test_ge_viewport: %d/%d PASS\n", tests_run, tests_run);

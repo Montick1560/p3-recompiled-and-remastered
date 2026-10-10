@@ -15,12 +15,25 @@ struct GeViewportDepth {
 /// off_x_raw/off_y_raw are the raw OFFSETX/OFFSETY register words (1/16
 /// subpixel, low 16 bits used). fb_height is the render-target height in
 /// pixels (PSP top-left origin is flipped to GL bottom-left).
+/// fb_height is in PSP pixels; scale (render scale, >= 1) multiplies the
+/// returned x/y/w/h, applied before rounding so sub-pixel offsets survive at
+/// scale > 1.
 GeViewportDepth ge_compute_viewport_depth(
     float vp_x_scale, float vp_y_scale,
     float vp_x_center, float vp_y_center,
     float vp_z_scale, float vp_z_center,
     uint32_t off_x_raw, uint32_t off_y_raw,
-    int fb_height);
+    int fb_height, int scale = 1);
+
+/// GE scissor (SCISSOR1/2: inclusive x1,y1 / x2,y2, 10 bits each, PSP
+/// top-left origin) -> glScissor rect in FBO pixels (GL bottom-left origin)
+/// for a target `scale` times the PSP size. Both registers 0 = never set:
+/// disabled. fb_height is in PSP pixels.
+struct GeScissor {
+    bool enabled;
+    int x, y, w, h;
+};
+GeScissor ge_compute_scissor(uint32_t scissor1, uint32_t scissor2, int fb_height, int scale);
 
 /// Initialize the GE draw infrastructure: FBO, VAO/VBO, shader.
 /// Must be called after SDL/GL init and after ge_init()/ge_texture_init().

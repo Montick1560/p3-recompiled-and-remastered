@@ -29,7 +29,7 @@ GeViewportDepth ge_compute_viewport_depth(
     float vp_x_center, float vp_y_center,
     float vp_z_scale, float vp_z_center,
     uint32_t off_x_raw, uint32_t off_y_raw,
-    int fb_height) {
+    int fb_height, int scale) {
     const float off_x = static_cast<float>(off_x_raw & 0xFFFFu) / 16.0f;
     const float off_y = static_cast<float>(off_y_raw & 0xFFFFu) / 16.0f;
 
@@ -47,11 +47,23 @@ GeViewportDepth ge_compute_viewport_depth(
     far_z = std::min(std::max(far_z, 0.0f), 1.0f);
 
     GeViewportDepth out;
-    out.x = static_cast<int>(std::lround(left));
-    out.y = static_cast<int>(std::lround(gl_y));
-    out.w = static_cast<int>(std::lround(w));
-    out.h = static_cast<int>(std::lround(h));
+    const float s = static_cast<float>(scale);
+    out.x = static_cast<int>(std::lround(left * s));
+    out.y = static_cast<int>(std::lround(gl_y * s));
+    out.w = static_cast<int>(std::lround(w * s));
+    out.h = static_cast<int>(std::lround(h * s));
     out.near_z = near_z;
     out.far_z = far_z;
     return out;
+}
+
+GeScissor ge_compute_scissor(uint32_t scissor1, uint32_t scissor2, int fb_height, int scale) {
+    if (scissor1 == 0 && scissor2 == 0) return {false, 0, 0, 0, 0};
+    const int x1 = static_cast<int>(scissor1 & 0x3FF);
+    const int y1 = static_cast<int>((scissor1 >> 10) & 0x3FF);
+    const int x2 = static_cast<int>(scissor2 & 0x3FF);
+    const int y2 = static_cast<int>((scissor2 >> 10) & 0x3FF);
+    const int w = x2 >= x1 ? x2 - x1 + 1 : 0;
+    const int h = y2 >= y1 ? y2 - y1 + 1 : 0;
+    return {true, x1 * scale, (fb_height - 1 - y2) * scale, w * scale, h * scale};
 }
