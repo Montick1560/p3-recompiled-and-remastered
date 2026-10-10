@@ -149,6 +149,7 @@ set(RUNTIME_SOURCES
     src/psp_ge_viewport.cpp
     src/psp_texrep_hash.cpp
     src/psp_texrep.cpp
+    src/psp_texrep_pack.cpp
     src/psp_ge_test.cpp
     src/hle/psp_hle_dispatch.cpp
     src/hle/psp_hle_kernel_thread.cpp
@@ -541,6 +542,11 @@ target_include_directories(test_texrep_hash PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/
 target_link_libraries(test_texrep_hash PRIVATE xxhash)
 target_compile_options(test_texrep_hash PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME texrep_hash_tests COMMAND test_texrep_hash)
+
+add_executable(test_texrep_pack tests/test_texrep_pack.cpp src/psp_texrep_pack.cpp)
+target_include_directories(test_texrep_pack PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_texrep_pack PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME texrep_pack_tests COMMAND test_texrep_pack)
 
 # Host FPU mode from FCR31 (flush-to-zero).
 add_executable(test_fpu tests/test_fpu.cpp src/psp_fpu.cpp)
