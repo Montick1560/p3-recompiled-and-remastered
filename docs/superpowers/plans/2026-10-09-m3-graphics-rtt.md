@@ -26,6 +26,7 @@
 - Gates after every runtime change: `cd DECO/build/rtw && ninja && ctest` (all pass), and `cargo test` in `psprecomp` (393 pass, unchanged).
 - The user navigates the game; never write navigation/driver scripts (user feedback 2026-10-09). Ask the user to bring the game to a screen, then use socket commands only (`D`, `S`, `I`, `K`).
 - Launch for diagnosis: `DECO/jugar.bat` writes stderr to `DECO/build/logs/jugar.log`. Pick "Español EU" at the language menu to see "Continuar".
+- Scale-ready pixel code: write every FBO-pixel quantity this plan touches (target size, blit rects in Task 3) through one render-scale factor (`static int g_render_scale = 1;` in `psp_ge_draw.cpp`, multiply 480/272 and x/y/w/h by it), so the internal-resolution upscaling milestone (M3b, below) needs no rework of the RTT path. Diagnosis and oracle comparisons always run at scale 1.
 - A/B switch: every new behaviour gets an env kill-switch (`PSPRECOMP_NO_RTT=1`) so a regression can be bisected in one run.
 
 ## Review Focus
@@ -389,3 +390,13 @@ Write this task only if a block transfer or CPU read of a GL-written target is o
 ## Next screenshots to request from the user
 
 After this plan, ask the user for three more side-by-side pairs (PPSSPP vs runtime): the hideout (full view), a mission in progress (with the drum/rhythm HUD), and the world map. Use them to order the next graphics fixes.
+
+## Roadmap after M3a (evaluated 2026-10-09 with the user)
+
+1. **M3a+ (small, right after RTT):** honour `TEXFILTER` (bilinear) and `TEXWRAP` (repeat/clamp). Both are stored but ignored today; the sampler is fixed at NEAREST + CLAMP. Also make the window resizable, add fullscreen, and offer a linear present filter. The user compares against PPSSPP, which renders at window resolution with bilinear filtering, so part of the "looks worse" impression comes from these.
+2. **M3b internal resolution (2x–4x, configurable, default from config):** scale the FBOs, viewport (`ge_compute_viewport_depth`), scissor, RTT blit rects, clears and screenshot readback. Watch for atlas seams on 2D sprites (PPSSPP has texture-coordinate snapping for this) and keep scale 1 for oracle diffs.
+3. **Remaining graphics bugs** from the user's next screenshot pairs, all written scale-aware.
+4. **Late, optional, HD textures:**
+   - Mechanism: dump decoded textures plus a replacement lookup keyed by the texture-cache hash. Prefer PPSSPP's `textures.ini` + hash format so a pack works in both.
+   - Content: no Patapon 3 pack is known to exist, so it would mean AI-upscaling dumped textures. That is a large content job and needs care with alpha edges, CLUT variants and the DxD mod's own textures.
+   - Textures sampled from render targets cannot be replaced.
