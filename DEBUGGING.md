@@ -202,6 +202,7 @@ silently dropped. Full protocol details in the issue #35 section below.
 | `B <hexmask> <decms>` | Inject button mask for duration (UP=10, CROSS=4000, START=8; clamped 60 s) | `OK 0` |
 | `S <path>` | Screenshot: render thread writes 480x272 TGA to `<path>` | `OK 0` (≤10 s) or `ERR timeout` |
 | `D <lists>` | Draw log: every PRIM of the next `<lists>` display lists prints a `[DL]` line to the log (full draw state, world/view/proj matrices, first two packed vertices) | `OK 0` |
+| `X <lo> <hi>` | Draw skip: PRIMs whose index inside their display list (`i=` in `[DL]` lines) is in `[lo, hi]` are not drawn (clears still run); bare `X` or `lo > hi` draws everything again. Bisects which draw paints a region | `OK 0` |
 
 ```bash
 printf 'B 10 250\n'   | nc 127.0.0.1 9999   # UP
@@ -480,7 +481,8 @@ what was added, how to use it, how it was verified, and any new failure modes di
 | `B` | `<hexmask> <decms>` (clamped 60 s) | `OK 0` | `bad-mask`, `bad-duration` |
 | `S` | `<path>` (rest of line, spaces allowed) | `OK 0` after the TGA is on disk | `bad-path`, `unsupported`, `timeout` (10 s; also covers pre-GL boot and a concurrent capture in flight) |
 | `T` | `0` or `1` | `OK 0`; switches the HLE trace off/on. Needs `PSPRECOMP_HLE_TRACE=1` (starts on) or `=2` (armed, starts off) | `unsupported` |
-| `D` | `<declists>` | `OK 0`; the next N display lists log one `[DL]` line per PRIM (state + matrices + 2 packed vertices) and a `[DL] ---- list end` marker | `unsupported` |
+| `D` | `<declists>` | `OK 0`; the next N display lists log one `[DL] i=<index>` line per PRIM (state + matrices + 2 packed vertices) and a `[DL] ---- list end` marker | `unsupported` |
+| `X` | `<lo> <hi>` (decimal; none = off) | `OK 0`; non-clear PRIMs with list index in `[lo, hi]` are skipped until the next `X` | `usage: X <lo> <hi>`, `unsupported` |
 | `K` | `<tid>` | `OK 0`; that PSP thread prints `[BT] thread <tid> at <addr>:` on stderr at its next guest function entry (not in the reply). See [Guest backtraces](#guest-backtraces-watches-and-the-cpu-lock-2026-10) | `unsupported` |
 | anything else | | | `unknown-command`, `empty`, `line-too-long` (>4095 chars; connection stays usable) |
 

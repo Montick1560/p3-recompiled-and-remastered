@@ -164,6 +164,7 @@ int main(int argc, char* argv[]) {
         hooks.cpu_state          = psp_cpu_describe;
         hooks.capture_screenshot = ge_draw_capture_screenshot;
         hooks.draw_log           = ge_draw_request_log;
+        hooks.draw_skip          = ge_draw_request_skip;
         hooks.hle_trace          = psp_hle_trace_set_live;
         psp_debug_socket_set_hooks(hooks);
     }

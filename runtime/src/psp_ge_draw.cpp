@@ -58,6 +58,8 @@ static int g_present_stale_ms = 100;   // PSPRECOMP_PRESENT_STALE_MS
 static GLuint g_vao = 0;
 static GLuint g_vbo = 0;
 static uint32_t g_frame_counter = 0;
+// PRIM index inside the current display list ([DL] i=, debug socket X).
+static int g_list_prim_index = 0;
 static bool g_has_drawn_prims = false;
 static bool g_screenshot_enabled = false;
 static bool g_screenshot_done = false;
@@ -434,10 +436,19 @@ void ge_draw_begin_list() {
     // which may be set after begin_list (issue #23).
     glViewport(0, 0, PSP_FB_WIDTH, PSP_FB_HEIGHT);
     g_frame_counter++;
+    g_list_prim_index = 0;
 }
 
 // Debug socket `D <lists>`: remaining display lists to log ([DL] lines).
 static std::atomic<int> g_drawlog_lists{0};
+
+// Debug socket `X <lo> <hi>`: PRIM index range (per list) not drawn.
+static std::atomic<int> g_skip_lo{1}, g_skip_hi{0};
+
+void ge_draw_request_skip(int lo, int hi) {
+    g_skip_lo.store(lo, std::memory_order_relaxed);
+    g_skip_hi.store(hi, std::memory_order_relaxed);
+}
 
 void ge_draw_request_log(int lists) {
     g_drawlog_lists.store(lists, std::memory_order_relaxed);
@@ -458,13 +469,13 @@ void ge_draw_end_list() {
     }
 }
 
-static void drawlog_prim(const GeState& s, int prim_type, int count) {
+static void drawlog_prim(const GeState& s, int index, int prim_type, int count) {
     std::fprintf(stderr,
-        "[DL] prim=%d n=%d vt=0x%06X va=0x%08X base=0x%06X off=0x%08X fb=0x%06X clr=%d thr=%d "
+        "[DL] i=%d prim=%d n=%d vt=0x%06X va=0x%08X base=0x%06X off=0x%08X fb=0x%06X clr=%d thr=%d "
         "tex=%d ta=0x%08X tf=%u tsz=0x%04X bw=%u clut=0x%08X cf=0x%06X "
         "tfn=0x%X blend=%d bm=0x%03X fa=0x%06X fb2=0x%06X at=%d atv=0x%06X "
         "zt=%d zf=%u zw=%d st=%d lit=%d mat=0x%06X/%02X amb=0x%06X sc=0x%06X/0x%06X\n",
-        prim_type, count, s.vertex_type, s.vertex_addr, s.base_addr, s.offset_addr,
+        index, prim_type, count, s.vertex_type, s.vertex_addr, s.base_addr, s.offset_addr,
         s.framebuf_ptr,
         s.clear_mode ? 1 : 0, ge_vtype_through(s.vertex_type) ? 1 : 0,
         s.texture_enable ? 1 : 0, s.tex_addr[0], s.tex_format, s.tex_size[0],
@@ -568,7 +579,12 @@ void ge_draw_prim(
 
     const GeState& state = ge_get_state();
     const bool drawlog = g_drawlog_lists.load(std::memory_order_relaxed) > 0;
-    if (drawlog) drawlog_prim(state, prim_type, count);
+    const int list_index = g_list_prim_index++;
+    if (drawlog) drawlog_prim(state, list_index, prim_type, count);
+    if (!state.clear_mode && list_index >= g_skip_lo.load(std::memory_order_relaxed) &&
+        list_index <= g_skip_hi.load(std::memory_order_relaxed)) {
+        return;
+    }
 
     // Scissor (GE_CMD_SCISSOR1/2: inclusive x1,y1 / x2,y2, 10 bits each,
     // top-left origin) applies to every draw, clears included. The FBO uses

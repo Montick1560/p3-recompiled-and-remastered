@@ -58,6 +58,9 @@ struct PspDebugHooks {
     bool (*capture_screenshot)(const char* path, int timeout_ms) = nullptr;
     /// D command: log the draw state of the next N display lists.
     void (*draw_log)(int lists) = nullptr;
+    /// X command: hide the non-clear PRIMs whose index inside their display
+    /// list is in [lo, hi] (lo > hi shows everything again).
+    void (*draw_skip)(int lo, int hi) = nullptr;
     /// T command: switch the HLE trace on/off (PSPRECOMP_HLE_TRACE=1|2).
     void (*hle_trace)(bool on) = nullptr;
     /// K command: PSP thread <tid> prints its guest call stack ([BT]) at its

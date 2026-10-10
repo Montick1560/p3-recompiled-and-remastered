@@ -86,6 +86,11 @@ bool ge_draw_capture_screenshot(const char* path, int timeout_ms);
 /// next `lists` display lists ([DL] lines). Callable from any thread.
 void ge_draw_request_log(int lists);
 
+/// Debug socket `X <lo> <hi>`: hide the non-clear PRIMs whose index inside
+/// their display list (the `i=` of `[DL]` lines) is in [lo, hi]; lo > hi
+/// shows everything. Bisects which draw paints (or hides) a screen region.
+void ge_draw_request_skip(int lo, int hi);
+
 /// True while a `D` draw log is active (the GE also logs raw commands).
 bool ge_draw_log_active();
 

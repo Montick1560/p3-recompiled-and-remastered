@@ -97,9 +97,13 @@ static bool fake_capture_fail(const char* path, int timeout_ms) {
 static void test_err_framing(uint8_t* rdram) {
     PspDebugReply r;
 
-    r = psp_debug_handle_line("X 1 2", rdram, TEST_RDRAM_SIZE);
+    r = psp_debug_handle_line("Z 1 2", rdram, TEST_RDRAM_SIZE);
     ASSERT_STR_EQ(r.header, "ERR unknown-command\n", "unknown command");
     ASSERT_TRUE(r.payload.empty(), "ERR has no payload");
+
+    // X (draw skip) is a known command; without a draw hook it is unsupported.
+    r = psp_debug_handle_line("X 1 2", rdram, TEST_RDRAM_SIZE);
+    ASSERT_STR_EQ(r.header, "ERR unsupported\n", "X without draw hook");
 
     r = psp_debug_handle_line("", rdram, TEST_RDRAM_SIZE);
     ASSERT_TRUE(r.header.rfind("ERR ", 0) == 0, "empty line gets ERR");

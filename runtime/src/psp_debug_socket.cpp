@@ -363,6 +363,16 @@ PspDebugReply psp_debug_handle_line(const char* line,
         g_hooks.draw_log(std::atoi(line + 2));
         return make_ok_empty();
     }
+    if (line[0] == 'X' && (line[1] == '\0' || line[1] == ' ')) {
+        // X <lo> <hi>: hide those PRIM indices of every list; bare X = off.
+        if (!g_hooks.draw_skip) return make_err("unsupported");
+        int lo = 1, hi = 0;
+        if (line[1] == ' ' && std::sscanf(line + 2, "%d %d", &lo, &hi) != 2) {
+            return make_err("usage: X <lo> <hi>");
+        }
+        g_hooks.draw_skip(lo, hi);
+        return make_ok_empty();
+    }
     return make_err("unknown-command");
 }
 
