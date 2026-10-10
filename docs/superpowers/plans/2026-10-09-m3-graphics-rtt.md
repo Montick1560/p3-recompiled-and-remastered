@@ -385,7 +385,27 @@ Write this task only if a block transfer or CPU read of a GL-written target is o
 
 ## Task 1 result
 
-(To be filled in by the executing session: decision A/B/C, the sky draw's `[DL]` line, and the fb/ta summary.)
+**Decision: (C) guest side. Not render-to-texture.** (2026-10-10, Lady Meden page, user-driven.)
+
+- Runtime `D 3`: two FBO targets only (`0x000000`, `0x044000`, the double buffer), no
+  offscreen target, every texture is CLUT4 in VRAM (`0x04106E80`..`0x04148B80`) or RAM, and no
+  draw covers the sky region. The frame's 1494 PRIMs match the list walked from guest memory
+  with `tools/gelist.py rt`.
+- PPSSPP oracle (user's PPSSPP at the same page, WebSocket debugger, `tools/gelist.py pp 0 <port>`):
+  1496 PRIMs. Diffing both walks (addresses masked) leaves exactly two extra PRIMs in PPSSPP, right
+  after the clear: `p=4 n=29 vt=000193 tex=0 mat=B2B2B2/FF` twice, the sky gradient strips
+  (per-vertex 5650 colour). Everything else differs only in animation alphas.
+- `tools/ppwatch.py` on the main-list word that CALLs the sky sublist gives the emitting path:
+  `0883DC8C <- 0887A814 <- 088DA51C <- 088DA05C (sky node render, vtable) <- 088DA820 <- 0889DFBC <- 088DA820 <- 08ABE1A0 (Title)`.
+- Root cause: `088DA05C` calls the DxD code cave `jal 0x08A53424`, which ends
+  `bnel v1,v0,+8 / addiu ra,ra,40 / jr ra`: when the node's field +268 is not 3 it returns to
+  `0x088DA0FC`, skipping the `f1 <= 0` early-out. The recompiled caller ignores the edited `$ra`,
+  continues at `0x088DA0D4`, takes the early-out and never draws the sky.
+- Scope: 17 `jal` targets in the EBOOT (18 call sites) and 4 call sites in OL_Title/OL_Mission edit
+  `$ra` arithmetically before `jr ra`. Fix: recompiler marks those targets (`ra_adjusting_target`)
+  and emits `ctx->r[31] = ret; call; if (ra != ret) goto L_RA_REDIRECT` (switch over the
+  function's labels, else dispatch). Tasks 2-5 (RTT) are deferred until a screen needs them;
+  Task 2's matcher is done on branch `wt-rtt` (9520081), unmerged.
 
 ## Next screenshots to request from the user
 

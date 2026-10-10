@@ -161,6 +161,27 @@ PPSSPP is a scriptable behavioral oracle, not a passive reference:
   `CORE_STEPPING_CPU` — the same crash path on this build. `gpu.record.dump` is the safe
   frame-capture route.
 
+**Windows, PPSSPP 1.20.4 (2026-10): display-list diff without a GE dump.** Exec and
+memory-write breakpoints work on this build (no stepping crash seen). Enable *Settings ->
+Tools -> Developer tools -> Allow remote debugger*; the port is the PPSSPP process's
+LISTENING TCP port (`netstat -ano`). Python clients (stdlib only, run with `python -I`):
+
+- `tools/gelist.py rt <list>` / `tools/gelist.py pp 0 <port>`: walk a GE display list in live
+  guest memory (this runtime via socket `R`, or PPSSPP via `memory.read`), following
+  CALL/JUMP/RET/BASE/OFFSET, one line per PRIM (type, count, vtype, vaddr, texture, CLUT,
+  material, blend). `pp 0` finds PPSSPP's next list with a one-shot breakpoint on the
+  `sceGeListEnQueue` import stub (heaps differ, so list addresses differ between the two).
+  `GELIST_PC=1` adds the PRIM's address and CALL chain. Diff the two walks with the
+  `va=`/`fb=` fields masked: an extra or missing PRIM is a guest-side (CPU) bug, a differing
+  state field is a GE-side bug.
+- `tools/ppwatch.py <port> <addr> [n]`: PPSSPP memory-write breakpoint; prints the writer's
+  registers and the `hle.backtrace` guest stack (who wrote that list word / field).
+- `tools/pptrace.py <port> <n> <addr[:regs]>...`: exec breakpoints, one line per hit with
+  chosen registers (`*a0+4` = word at a0+4). Use ONE address per run: with several, only
+  the last one added reported hits.
+- `tools/texdump.py`: CLUT4/CLUT8 texture (+8888 CLUT, PSP swizzle) from live memory to PNG.
+- `tools/dlseq.py <log> [line] [keys]`: run-length summary of `[DL]` lines.
+
 ## 5. lldb recipes
 
 Launch, don't attach (macOS denies attach). `runtime/.lldbinit` auto-loads
