@@ -121,6 +121,11 @@ fn is_callee_saved(reg: u8) -> bool {
 /// so the function is transparent to its C++ caller's callee-saved registers and
 /// stack pointer. Returns `true` when an epilogue was emitted.
 ///
+/// Reconstruction is only the fallback when the continuation is not a dispatch
+/// target (`DecodedFunction::fall_through_dispatchable`). A dispatchable
+/// continuation falls through into the real code instead of synthesizing a
+/// teardown here.
+///
 /// This closes the recompiler LINK/RA faithfulness gap where such a function
 /// returns to its C++ caller with its frame and `$s0..$s7` UNrestored, silently
 /// corrupting the caller's callee-saved registers (e.g. the boot-app store base).
@@ -499,6 +504,8 @@ pub fn emit_function(func: &DecodedFunction, gen: &mut dyn Generator, imports: &
     let reconstruct_terminal_epilogue = ra_ctx.is_none() && !func_has_jr_ra(func);
     // Set when `emit_reconstructed_epilogue` actually emitted a teardown —
     // MUTUALLY EXCLUSIVE with the fall-through tail below (see there).
+    // Reconstruction is only the fallback when the continuation is not a
+    // dispatch target.
     let mut epilogue_reconstructed = false;
 
     for block in &func.blocks {
@@ -591,6 +598,7 @@ pub fn emit_function(func: &DecodedFunction, gen: &mut dyn Generator, imports: &
             // it spilled and pop its frame — the teardown the real code only
             // reaches via the downstream tail chain.
             if reconstruct_terminal_epilogue
+                && !func.fall_through_dispatchable
                 && is_last_block
                 && is_terminal_external_jal(instrs, i, func.vaddr, func_end)
             {
@@ -609,9 +617,11 @@ pub fn emit_function(func: &DecodedFunction, gen: &mut dyn Generator, imports: &
     // absent from the dispatch table become LOUD LOOKUP_MISSes and are
     // recorded by the #37 dispatch audit via `emit_call_lookup`.
     //
-    // MUTUALLY EXCLUSIVE with the reconstructed terminal-jal epilogue above:
-    // that path already synthesized the downstream chain's frame teardown —
-    // also dispatching into the chain would pop the frame a second time.
+    // MUTUALLY EXCLUSIVE with the reconstructed terminal-jal epilogue above.
+    // Reconstruction is only the fallback when the continuation is not a
+    // dispatch target; when it ran, it already synthesized the downstream
+    // chain's frame teardown — also dispatching into the chain would pop
+    // the frame a second time.
     //
     // `func_end > func.vaddr` guards the degenerate size-0 shape against
     // self-dispatch recursion.
@@ -1998,6 +2008,7 @@ mod tests {
             is_mid_entry_parent: false,
             mid_entry_addrs: vec![],
             coalesced: false,
+            fall_through_dispatchable: false,
         }
     }
 
@@ -2924,6 +2935,21 @@ mod tests {
         assert!(
             !gen.output.contains(&format!("CALL_LOOKUP:0x{func_end:08X}")),
             "tail must be suppressed when the epilogue was reconstructed: {out}"
+        );
+    }
+
+    #[test]
+    fn dispatchable_continuation_beats_reconstruction() {
+        let mut func = terminal_jal_func();
+        func.fall_through_dispatchable = true;
+        let func_end = func.vaddr + func.size;
+        let mut gen = TestGenerator::new();
+        emit_function(&func, &mut gen, &ImportMap::new());
+        let out = gen.output.join("\n");
+        assert!(!out.contains("reconstructed epilogue"), "{out}");
+        assert!(
+            gen.output.contains(&format!("CALL_LOOKUP:0x{func_end:08X}")),
+            "{out}"
         );
     }
 

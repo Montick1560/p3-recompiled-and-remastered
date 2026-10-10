@@ -40,4 +40,8 @@ pub struct DecodedFunction {
     /// EXIT vs INTERNAL via a boundary-aware backward walk). All other functions
     /// keep the baseline `jal`→nested-call / `jr ra`→`return;` lowering.
     pub coalesced: bool,
+    /// The address right after the decoded body (`vaddr + size`) is a dispatch
+    /// target (a function start or a mid-entry), so falling off the end can
+    /// dispatch there instead of reconstructing a terminal-jal epilogue.
+    pub fall_through_dispatchable: bool,
 }

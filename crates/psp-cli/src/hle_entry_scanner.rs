@@ -446,7 +446,7 @@ fn branch_target(w: u32, va: u32) -> Option<u32> {
 /// instruction: `j`, `jr` (any register), `b` (`beq rs,rs`), or
 /// `bgez $zero` (branch-always idiom). `jal`/`jalr` return, so they are
 /// NOT terminators.
-fn is_unconditional_transfer(w: u32) -> bool {
+pub(crate) fn is_unconditional_transfer(w: u32) -> bool {
     let op = w >> 26;
     match op {
         0x02 => true,                       // j

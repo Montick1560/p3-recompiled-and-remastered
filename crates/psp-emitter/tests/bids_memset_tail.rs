@@ -38,6 +38,7 @@ fn emit_memset_tail_cpp() -> String {
         is_mid_entry_parent: false,
         mid_entry_addrs: vec![],
         coalesced: false,
+        fall_through_dispatchable: false,
     };
     let mut gen = CppGenerator::new();
     emit_function(&func, &mut gen, &ImportMap::new());

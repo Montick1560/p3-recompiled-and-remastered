@@ -200,6 +200,30 @@ pub(crate) fn prepare_emission_with(
         tracing::info!("Data code-pointer scan: {} mid-entries", n);
     }
 
+    if std::env::var("PSPRECOMP_NO_FALLTHRU_ENTRIES").as_deref() != Ok("1") {
+        let intervals = sorted_function_intervals(&analysis);
+        let starts: HashSet<u32> = analysis
+            .functions
+            .iter()
+            .filter_map(|f| parse_hex_u32(&f.address))
+            .collect();
+        let mut n = 0usize;
+        for f in &analysis.functions {
+            let Some(start) = parse_hex_u32(&f.address) else { continue };
+            let Some(c) = fall_through_continuation(&segment_bytes, start, f.size as u32) else {
+                continue;
+            };
+            if starts.contains(&c) {
+                continue;
+            }
+            if let Some(owner) = owning_function_start(&intervals, c) {
+                force_mid_entries.push((c, owner));
+                n += 1;
+            }
+        }
+        tracing::info!("Fall-through continuations: {} mid-entries", n);
+    }
+
     // Force-inject mid-entries that Ghidra missed but are confirmed call targets
     // observed as repeated LOOKUP_MISS in the runtime. Mirrors force_entries but
     // for mid-function entry points inside an existing parent function.
@@ -1553,6 +1577,28 @@ fn get_func_bytes<'a>(
     })
 }
 
+/// Where control goes when a function's decoded body falls off its end, or None when its last
+/// branch/jump (with delay slot) is an unconditional transfer. The decoded body includes a trailing
+/// branch's delay slot (`get_func_bytes`), so the continuation is `start + decoded_len`.
+fn fall_through_continuation(segment_bytes: &[(u32, Vec<u8>)], start: u32, size: u32) -> Option<u32> {
+    let bytes = get_func_bytes(segment_bytes, start, size)?;
+    let len = bytes.len() as u32;
+    let end = start + len;
+    if len >= 8 {
+        let w = u32::from_le_bytes(bytes[len as usize - 8..len as usize - 4].try_into().ok()?);
+        if crate::hle_entry_scanner::is_unconditional_transfer(w) {
+            return None;
+        }
+    }
+    if len >= 4 {
+        let w = u32::from_le_bytes(bytes[len as usize - 4..len as usize].try_into().ok()?);
+        if w == 0x03E00008 {
+            return None;
+        }
+    }
+    Some(end)
+}
+
 /// Per-function emission diagnostics, consumed by the recompile report.
 #[derive(Debug, Default)]
 pub struct EmitDiagnostics {
@@ -1572,7 +1618,7 @@ pub fn decode_and_emit_function_with_name(
     canonical_name: &str,
     segments: &[(u32, Vec<u8>)],
     import_map: &HashMap<u32, String>,
-    _func_map: &HashMap<u32, String>,
+    func_map: &HashMap<u32, String>,
     config: &GameConfig,
     data_xrefs: &[(u32, u32)],
     mid_entry_addr_map: &HashMap<u32, Vec<u32>>,
@@ -1616,15 +1662,20 @@ pub fn decode_and_emit_function_with_name(
     let ops = optimize(ops, &OptimizerConfig::default());
 
     // Build DecodedFunction for emission
+    let decoded_size = patched.len() as u32;
+    let cont = func_vaddr + decoded_size;
+    let fall_through_dispatchable = func_map.contains_key(&cont)
+        || mid_entry_addr_map.values().any(|addrs| addrs.contains(&cont));
     let decoded = DecodedFunction {
         vaddr: func_vaddr,
         name: func.name.clone(),
         cpp_name: cpp_name.clone(),
-        size: func_size,
+        size: decoded_size,
         blocks: vec![BasicBlock { vaddr: func_vaddr, instrs: ops }],
         is_mid_entry_parent: mid_entry_addr_map.contains_key(&func_vaddr),
         mid_entry_addrs: mid_entry_addr_map.get(&func_vaddr).cloned().unwrap_or_default(),
         coalesced,
+        fall_through_dispatchable,
     };
 
     let mut gen = CppGenerator::new();
@@ -2078,6 +2129,30 @@ mod tests {
         // Branch ends the segment: nothing to add, keep the declared size.
         let short = vec![(0x0881_AB40u32, segs[0].1[..8].to_vec())];
         assert_eq!(get_func_bytes(&short, 0x0881_AB40, 8).map(|b| b.len()), Some(8));
+    }
+
+    fn words_at(base: u32, words: &[u32]) -> Vec<(u32, Vec<u8>)> {
+        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        vec![(base, bytes)]
+    }
+
+    #[test]
+    fn fall_through_continuation_cases() {
+        let jal_tail = words_at(
+            0x1000,
+            &[0x27BD_FFE0, 0x0C00_0400, 0x0000_0000, 0x1000_0003],
+        );
+        assert_eq!(fall_through_continuation(&jal_tail, 0x1000, 8), Some(0x100C));
+        assert_eq!(fall_through_continuation(&jal_tail, 0x1000, 12), Some(0x100C));
+
+        let jr_ra = words_at(0x2000, &[0x03E0_0008, 0x0000_0000]);
+        assert_eq!(fall_through_continuation(&jr_ra, 0x2000, 4), None);
+
+        let branch = words_at(0x3000, &[0x1000_0003, 0x0000_0000]);
+        assert_eq!(fall_through_continuation(&branch, 0x3000, 4), None);
+
+        let bnez = words_at(0x4000, &[0x1440_0003, 0x0000_0000]);
+        assert_eq!(fall_through_continuation(&bnez, 0x4000, 4), Some(0x4008));
     }
 
     fn wfn(addr: u32) -> JsonFunction {
