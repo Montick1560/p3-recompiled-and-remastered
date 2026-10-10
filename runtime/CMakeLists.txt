@@ -132,6 +132,7 @@ set(RUNTIME_SOURCES
     src/psp_subintr.cpp
     src/psp_backtrace.cpp
     src/psp_cpu.cpp
+    src/psp_perf.cpp
     src/psp_scheduler.cpp
     src/psp_render_queue.cpp
     src/psp_event_loop.cpp
@@ -568,6 +569,11 @@ target_include_directories(test_pad PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include 
 target_compile_options(test_pad PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME pad_tests COMMAND test_pad)
 
+add_executable(test_perf tests/test_perf.cpp src/psp_perf.cpp)
+target_include_directories(test_perf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_perf PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME perf_tests COMMAND test_perf)
+
 # Host FPU mode from FCR31 (flush-to-zero).
 add_executable(test_fpu tests/test_fpu.cpp src/psp_fpu.cpp)
 target_include_directories(test_fpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -807,6 +813,7 @@ add_executable(test_hle_mpeg
     tests/test_hle_mpeg.cpp
     src/hle/psp_hle_mpeg.cpp
     src/psp_cpu.cpp
+    src/psp_perf.cpp
     src/hle/psp_media_engine.cpp
     src/hle/psp_mpeg_demux.cpp
     src/hle/psp_psmf.cpp

@@ -1,4 +1,5 @@
 #include "psp_ge_draw.h"
+#include "psp_perf.h"
 #include "psp_ge_blend.h"
 #include "psp_ge_mask.h"
 #include "psp_ge.h"
@@ -534,6 +535,7 @@ void ge_draw_prim(
     int prim_type,
     int count
 ) {
+    if (perf_enabled()) g_perf.prims.fetch_add(1, std::memory_order_relaxed);
     // Phase 11.4 / Plan 02 Task 2 — alternate-path GE PRIM investigation.
     //
     // Even when count <= 0 we tally [GE_PRIM_DETAIL] before the early-return
@@ -954,6 +956,7 @@ void ge_draw_prim(
 
     // Draw
     GLenum gl_prim = map_prim_type(prim_type);
+    if (perf_enabled()) g_perf.draw_calls.fetch_add(1, std::memory_order_relaxed);
     glDrawArrays(gl_prim, 0,
                  static_cast<GLsizei>(packed.size()));
     g_has_drawn_prims = true;
@@ -985,6 +988,7 @@ static GLenum present_filter() {
 static void present_blit(GLuint fbo) {
     SDL_Window* window = psp_get_sdl_window();
     if (!window) return;
+    if (perf_enabled()) g_perf.presents.fetch_add(1, std::memory_order_relaxed);
     glDisable(GL_SCISSOR_TEST);  // the GE scissor must not crop the blit
     present_service_screenshot(fbo);
     // Letterbox the rendered image into the drawable, keeping the PSP aspect

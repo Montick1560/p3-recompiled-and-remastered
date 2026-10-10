@@ -1,4 +1,5 @@
 #include "psp_cpu.h"
+#include "psp_perf.h"
 
 #include <atomic>
 #include <chrono>
@@ -116,6 +117,12 @@ void psp_cpu_acquire(bool front) {
             std::fprintf(stderr, "[CPU] thread %d (prio %d) waited 5 s for the CPU held by thread %d\n",
                          psp_current_thread_id(), prio, g_holder);
         }
+    }
+    if (perf_enabled()) {
+        g_perf.cpu_wait_ns.fetch_add(
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - start).count()),
+            std::memory_order_relaxed);
     }
     g_waiters.erase(me);
     publish_best_locked();

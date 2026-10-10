@@ -1,4 +1,5 @@
 #include "psp_ge_texture.h"
+#include "psp_perf.h"
 #include "psp_ge.h"
 #include "psp_ge_sampler.h"
 #include "psp_ge_texdecode.h"
@@ -194,6 +195,10 @@ GLuint ge_texture_bind(
                      state.alpha_test_enable ? 1 : 0, state.alpha_test, state.vertex_type,
                      state.clear_mode ? 1 : 0);
     }
+    if (perf_enabled()) {
+        g_perf.tex_binds.fetch_add(1, std::memory_order_relaxed);
+        g_perf.tex_hash_bytes.fetch_add(span, std::memory_order_relaxed);
+    }
     uint32_t content_hash = fnv1a_hash(rdram + masked_addr, static_cast<int>(span));
     const uint32_t param_words[6] = {
         static_cast<uint32_t>(params.bufw), static_cast<uint32_t>(fmt),
@@ -206,6 +211,7 @@ GLuint ge_texture_bind(
         const uint32_t clut_off = params.clut_addr & PSP_ADDR_MASK;
         if (clut_off + 1024 <= static_cast<uint32_t>(PSP_MEM_SIZE)) {
             content_hash ^= fnv1a_hash(rdram + clut_off, 1024) * 0x85EBCA6Bu;
+            if (perf_enabled()) g_perf.tex_hash_bytes.fetch_add(1024, std::memory_order_relaxed);
         }
     }
 
@@ -240,6 +246,7 @@ GLuint ge_texture_bind(
     // nothing else changes. Otherwise decode from guest RAM (stride, swizzle
     // and CLUT transform in psp_ge_texdecode.cpp; unsupported formats:
     // magenta placeholder).
+    if (perf_enabled()) g_perf.tex_misses.fetch_add(1, std::memory_order_relaxed);
     GeTexrepImage rep;
     const uint64_t epoch = ge_texrep_epoch();
     const GeTexrepResult r = ge_texrep_enabled()

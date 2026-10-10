@@ -5,6 +5,7 @@
 #include "psp_ge_draw.h"
 #include "psp_present.h"
 #include "psp_pad.h"
+#include "psp_perf.h"
 
 #include <SDL.h>
 #include <glad/glad.h>
@@ -277,6 +278,7 @@ void psp_event_loop(uint8_t* rdram) {
         // 2b. Service any pending debug-socket screenshot request here on
         //     the main (GL) thread — the socket thread never touches GL.
         ge_draw_service_screenshot_request();
+        perf_tick();  // PSPRECOMP_PERF=1: [PERF] line every 2 s
 
         // 3. Check if any game threads are still alive
         if (g_alive_threads.load() == 0) {

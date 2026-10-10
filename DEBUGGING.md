@@ -263,6 +263,7 @@ the socket for scripted/agent input.
 | `PSPRECOMP_HLE_TRACE=1` | Per-call HLE arg/ret logging (`[HLE-TRACE]`) |
 | `PSPRECOMP_PC_TRACE=1` | Per-function frequency counters + atexit top-20 |
 | `PSPRECOMP_GE_TRACE=1` | GE command-stream logging |
+| `PSPRECOMP_PERF=1` | Every 2 s one `[PERF]` line: fps, GE list ms/frame, lists/prims/draws/texture binds per frame, texture misses/s, texture bytes hashed per frame (MB), guest CPU-lock wait ms/s |
 | `PSPRECOMP_SEMA_TRACE=1` | Per-call sema logging (off by default — floods ~1 GB/min) |
 | `PSPRECOMP_OVERLAY_TRACE=1` | Logs the first 64 overlay-window lookups with their bank-resolution status (0 NotInWindow, 1 NoBank, 2 HashMismatch, 3 NotFound, 4 Found) |
 | `PSPRECOMP_SCREENSHOT=path` | One-shot TGA after first prims + shutdown capture |

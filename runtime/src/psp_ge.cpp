@@ -1,4 +1,5 @@
 #include "psp_cpu.h"
+#include "psp_perf.h"
 #include "psp_ge.h"
 #include "psp_texrep.h"
 #include "psp_ge_vertex.h"
@@ -162,6 +163,8 @@ GeListResult ge_process_display_list(
     uint32_t list_addr,
     uint32_t stall_addr
 ) {
+    PerfScope perf_scope(g_perf.ge_ns);
+    if (perf_enabled()) g_perf.ge_lists.fetch_add(1, std::memory_order_relaxed);
     uint32_t pc = list_addr;
     int prim_count = 0;
     int cmd_count = 0;
