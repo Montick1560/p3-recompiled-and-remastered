@@ -390,6 +390,9 @@ pub fn run_recompile(
     // window addresses against the bank of the overlay loaded there.
     let overlay_window = prep.config.overlay_window()?;
     let mut main_side_ghidra: Vec<u32> = Vec::new();
+    // Main-side Ghidra functions as (start, end) spans: targets that heuristic
+    // bank functions call are exported only when they fall outside all of them.
+    let mut main_side_spans: Vec<(u32, u32)> = Vec::new();
     let bank = match (&opts.bank, overlay_window) {
         (Some(name), Some((lo, hi))) => {
             main_side_ghidra = prep
@@ -400,6 +403,17 @@ pub fn run_recompile(
                 .filter_map(|f| parse_hex_u32(&f.address))
                 .filter(|&a| a < lo || a >= hi)
                 .collect();
+            main_side_spans = prep
+                .analysis
+                .functions
+                .iter()
+                .filter(|f| f.source == "ghidra")
+                .filter_map(|f| {
+                    let a = parse_hex_u32(&f.address)?;
+                    (a < lo || a >= hi).then(|| (a, a.saturating_add(f.size as u32)))
+                })
+                .collect();
+            main_side_spans.sort_unstable();
             retain_by_window(&mut prep.analysis.functions, &mut prep.analysis.mid_entries, lo, hi, true);
             let (id, _text_size) = read_overlay_header(&prep.segment_bytes, lo)?;
             let file_end = lo + read_overlay_file_len(&prep.segment_bytes, lo)?;
@@ -501,6 +515,9 @@ pub fn run_recompile(
     // exports to the main build. Heuristic "functions" decoded from data make
     // calls to arbitrary addresses that must not become main entries.
     let real_code_targets: Mutex<HashSet<u32>> = Mutex::new(HashSet::new());
+    // Targets called from heuristic (non-Ghidra) bank functions: real overlay
+    // code Ghidra missed calls mod code caves in main gaps (Patapon 3 DxD).
+    let heuristic_code_targets: Mutex<HashSet<u32>> = Mutex::new(HashSet::new());
 
     // Batch emit (parallel via rayon inside emit_function_batches)
     let batch_output = emit_function_batches(
@@ -520,6 +537,8 @@ pub fn run_recompile(
             if !diag.static_lookup_targets.is_empty() {
                 if func.source == "ghidra" {
                     real_code_targets.lock().unwrap().extend(diag.static_lookup_targets.iter().copied());
+                } else {
+                    heuristic_code_targets.lock().unwrap().extend(diag.static_lookup_targets.iter().copied());
                 }
                 lookup_targets.lock().unwrap().extend(diag.static_lookup_targets);
             }
@@ -538,6 +557,15 @@ pub fn run_recompile(
         let targets = real_code_targets.lock().unwrap();
         let mut calls: Vec<u32> =
             targets.iter().copied().filter(|&a| a < *lo || a >= *hi).collect();
+        // Heuristic callers may be data decoded as code: keep only targets in
+        // a main gap (never inside a main function, where a junk mid-entry
+        // changes emission -- 48647f5), e.g. mod code caves.
+        let heuristic = heuristic_code_targets.lock().unwrap();
+        let gap_calls = gap_targets(&heuristic, &main_side_spans, *lo, *hi);
+        tracing::info!("Main gap entries called from heuristic bank code: {}", gap_calls.len());
+        calls.extend(gap_calls);
+        calls.sort_unstable();
+        calls.dedup();
         calls.sort_unstable();
         main_side_ghidra.sort_unstable();
         write_main_entries(&output_dir.join("main_entries.json"), &calls, &main_side_ghidra)?;
@@ -1181,6 +1209,10 @@ enum FrameSig {
     /// No `addiu sp, sp, -N` prologue before the first `jr` — a continuation /
     /// leaf piece with no own frame (a coalesce-absorption candidate).
     NoPrologue,
+    /// Bytes unavailable or not decodable: emitted as an empty stub, so it can
+    /// neither own a cluster nor be absorbed (a heuristic "function" starting in
+    /// data once swallowed the DxD mod trampoline at 0x08A6B454 that way).
+    Undecodable,
 }
 
 /// Classify a function's frame signature by decoding its bytes.
@@ -1345,7 +1377,7 @@ fn coalesce_split_frame_siblings(
             .entry(start)
             .or_insert_with(|| {
                 func_frame_signature(segment_bytes, data_xrefs, start, sz)
-                    .unwrap_or(FrameSig::Owner)
+                    .unwrap_or(FrameSig::Undecodable)
             })
     };
 
@@ -1783,6 +1815,22 @@ fn skip_nop_padding(segment_bytes: &[(u32, Vec<u8>)], addr: u32, limit: u32) -> 
     addr
 }
 
+/// Targets outside the overlay window `[lo, hi)` that are not inside or at
+/// the start of any main-side span (sorted `(start, end)`): main gaps.
+fn gap_targets(targets: &HashSet<u32>, spans: &[(u32, u32)], lo: u32, hi: u32) -> Vec<u32> {
+    let mut out: Vec<u32> = targets
+        .iter()
+        .copied()
+        .filter(|&a| (a < lo || a >= hi) && a % 4 == 0)
+        .filter(|&a| {
+            let i = spans.partition_point(|&(s, _)| s <= a);
+            !(i > 0 && a < spans[i - 1].1)
+        })
+        .collect();
+    out.sort_unstable();
+    out
+}
+
 /// Point every mid-entry at the function that contains it after discovery
 /// may have split or resized functions; drop mid-entries that are now
 /// function starts or lie in no function. Returns how many changed.
@@ -2137,6 +2185,17 @@ mod tests {
     }
 
     #[test]
+    fn gap_targets_keeps_only_main_gaps() {
+        // Main spans [0x1000,0x1100) and [0x2000,0x2010); window [0x8000,0x9000).
+        let spans = [(0x1000, 0x1100), (0x2000, 0x2010)];
+        let t: HashSet<u32> =
+            [0x1000, 0x1050, 0x1100, 0x1F00, 0x2008, 0x8100, 0x3002].into_iter().collect();
+        // 0x1000 start and 0x1050/0x2008 inside: dropped; 0x8100 in the window and
+        // 0x3002 unaligned: dropped; 0x1100 (end, exclusive) and 0x1F00 are gaps.
+        assert_eq!(gap_targets(&t, &spans, 0x8000, 0x9000), vec![0x1100, 0x1F00]);
+    }
+
+    #[test]
     fn fall_through_continuation_cases() {
         let jal_tail = words_at(
             0x1000,
@@ -2164,6 +2223,26 @@ mod tests {
             is_thunk: false,
             source: "ghidra".into(),
         }
+    }
+
+    #[test]
+    fn undecodable_function_never_owns_a_cluster() {
+        // 0x1000: data that does not decode (special funct 0x39) followed by the
+        // contiguous no-prologue code piece at 0x1008 (lui; jr ra; nop).
+        let segs = words_at(
+            0x1000,
+            &[0x0000_0039, 0x0000_0032, 0x3C0E_08AB, 0x03E0_0008, 0x0000_0000],
+        );
+        let mut owner = wfn(0x1000);
+        owner.size = 8;
+        let mut piece = wfn(0x1008);
+        piece.size = 12;
+        let mut a = analysis_with_module(None);
+        a.functions = vec![owner, piece];
+        let owners = coalesce_split_frame_siblings(&mut a, &segs, &[]);
+        assert!(owners.is_empty());
+        assert_eq!(a.functions.len(), 2);
+        assert!(a.mid_entries.is_empty());
     }
 
     fn wmid(addr: u32, parent: u32) -> JsonMidEntry {
