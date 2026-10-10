@@ -248,6 +248,29 @@ pub(crate) fn prepare_emission_with(
         }
     }
 
+    if std::env::var("PSPRECOMP_NO_CALL_TARGET_MIDS").as_deref() != Ok("1") {
+        let data_xrefs: Vec<(u32, u32)> = analysis
+            .xrefs
+            .iter()
+            .filter(|x| x.ref_type == "DATA")
+            .filter_map(|x| Some((parse_hex_u32(&x.from_addr)?, parse_hex_u32(&x.to_addr)?)))
+            .collect();
+        let targets = static_targets_needing_mid_entries(
+            &analysis.functions,
+            &analysis.mid_entries,
+            &segment_bytes,
+            &data_xrefs,
+        );
+        let mut n = 0usize;
+        for (t, owner) in targets {
+            if !force_mid_entries.contains(&(t, owner)) {
+                force_mid_entries.push((t, owner));
+                n += 1;
+            }
+        }
+        tracing::info!("Static call targets inside functions: {} mid-entries", n);
+    }
+
     if std::env::var("PSPRECOMP_NO_FALLTHRU_ENTRIES").as_deref() != Ok("1") {
         let intervals = sorted_function_intervals(&analysis);
         let starts: HashSet<u32> = analysis
@@ -1338,6 +1361,69 @@ fn op_unwrap_ds(op: &MipsOp) -> MipsOp {
     }
 }
 
+/// Static control-flow targets (jal/j/branches) of every decodable function that lie strictly inside
+/// another (or the same) function and are not a function start or an existing mid-entry: calls into
+/// code that discovery merged into a bigger function. Returns (target, owner_start), sorted, deduped.
+fn static_targets_needing_mid_entries(
+    functions: &[JsonFunction],
+    mid_entries: &[JsonMidEntry],
+    segment_bytes: &[(u32, Vec<u8>)],
+    data_xrefs: &[(u32, u32)],
+) -> Vec<(u32, u32)> {
+    let mut intervals: Vec<(u32, u32)> = functions
+        .iter()
+        .filter_map(|f| {
+            let start = parse_hex_u32(&f.address)?;
+            Some((start, start.checked_add(f.size as u32)?))
+        })
+        .collect();
+    intervals.sort_by_key(|&(s, _)| s);
+
+    let starts: HashSet<u32> = intervals.iter().map(|&(s, _)| s).collect();
+    let known_mids: HashSet<u32> = mid_entries
+        .iter()
+        .filter_map(|me| parse_hex_u32(&me.addr))
+        .collect();
+
+    let mut found: Vec<(u32, u32)> = Vec::new();
+    // Callers: Ghidra-identified code only. Heuristic "functions" may be data
+    // decoded as code whose jal targets are junk; a junk mid-entry inside a real
+    // function changes its emission (48647f5).
+    for f in functions.iter().filter(|f| f.source == "ghidra") {
+        let Some(fstart) = parse_hex_u32(&f.address) else { continue };
+        let fsize = f.size as u32;
+        let Some(fend) = fstart.checked_add(fsize) else { continue };
+        let Some(bytes) = get_func_bytes(segment_bytes, fstart, fsize) else { continue };
+        let Ok(ops) = psp_decoder::decode_function(bytes, fstart, data_xrefs) else { continue };
+        let ops = optimize(ops, &OptimizerConfig::default());
+        for op in &ops {
+            let unwrapped = op_unwrap_ds(op);
+            let (is_jal, target) = match &unwrapped {
+                MipsOp::Jal { target } => (true, *target),
+                MipsOp::J { target } => (false, *target),
+                MipsOp::BranchHazardDelay { branch, .. } => match branch.as_ref() {
+                    MipsOp::Jal { target } => (true, *target),
+                    MipsOp::J { target } => (false, *target),
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            let inside = target >= fstart && target < fend;
+            if inside && !is_jal {
+                continue;
+            }
+            if starts.contains(&target) || known_mids.contains(&target) {
+                continue;
+            }
+            let Some(owner) = owning_function_start(&intervals, target) else { continue };
+            found.push((target, owner));
+        }
+    }
+    found.sort_unstable();
+    found.dedup();
+    found
+}
+
 /// Build a map: target address -> set of source-function-start addresses that
 /// statically branch/jump/call to it.
 ///
@@ -2295,6 +2381,32 @@ mod tests {
 
     fn wmid(addr: u32, parent: u32) -> JsonMidEntry {
         JsonMidEntry { addr: format!("0x{addr:08X}"), parent_addr: format!("0x{parent:08X}") }
+    }
+
+    #[test]
+    fn static_call_into_grown_function_becomes_mid_entry() {
+        let segs = words_at(
+            0x1000,
+            &[
+                0x0C00_0406, // jal 0x1018
+                0x0000_0000,
+                0x03E0_0008, // jr ra
+                0x0000_0000,
+                0x1000_0001, // beq zero,zero,+1 -> 0x1018
+                0x0000_0000,
+                0xAC80_0000, // sw zero,0(a0)
+                0x03E0_0008, // jr ra
+            ],
+        );
+        let mut f = wfn(0x1000);
+        f.size = 0x20;
+        assert_eq!(
+            static_targets_needing_mid_entries(&[f.clone()], &[], &segs, &[]),
+            vec![(0x1018, 0x1000)]
+        );
+        assert!(
+            static_targets_needing_mid_entries(&[f], &[wmid(0x1018, 0x1000)], &segs, &[]).is_empty()
+        );
     }
 
     #[test]
