@@ -6,6 +6,7 @@
 #include "psp_ge_constants.h"
 #include "psp_ge_draw.h"
 #include "psp_ge_transfer.h"
+#include "psp_ge_texture.h"
 #include "recomp.h"
 #include "hle/psp_hle_kernel.h"  // psp_alloc_stack (needs recomp.h first)
 
@@ -828,6 +829,7 @@ GeListResult ge_process_display_list(
                     (data & 1) ? 32 : 16);
             }
             psp_ge_block_transfer(rdram, g_transfer);
+            ge_texture_memo_invalidate();  // the transfer may rewrite a texture
             break;
         }
 

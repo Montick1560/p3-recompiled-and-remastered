@@ -154,6 +154,7 @@ set(RUNTIME_SOURCES
     src/psp_texrep_png.cpp
     src/psp_texrep_queue.cpp
     src/psp_pad.cpp
+    src/psp_ge_texmemo.cpp
     src/psp_ge_test.cpp
     src/hle/psp_hle_dispatch.cpp
     src/hle/psp_hle_kernel_thread.cpp
@@ -573,6 +574,11 @@ add_executable(test_perf tests/test_perf.cpp src/psp_perf.cpp)
 target_include_directories(test_perf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_perf PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME perf_tests COMMAND test_perf)
+
+add_executable(test_tex_memo tests/test_tex_memo.cpp src/psp_ge_texmemo.cpp)
+target_include_directories(test_tex_memo PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_tex_memo PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME tex_memo_tests COMMAND test_tex_memo)
 
 # Host FPU mode from FCR31 (flush-to-zero).
 add_executable(test_fpu tests/test_fpu.cpp src/psp_fpu.cpp)

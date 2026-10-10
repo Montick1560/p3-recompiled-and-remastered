@@ -3,6 +3,7 @@
 #include "psp_ge.h"
 #include "psp_ge_sampler.h"
 #include "psp_ge_texdecode.h"
+#include "psp_ge_texmemo.h"
 #include "psp_ge_constants.h"
 #include "psp_memory.h"
 #include "psp_texrep.h"
@@ -19,6 +20,7 @@
 // ---- Module state ----
 static std::array<TexCacheEntry, TEX_CACHE_SIZE> g_tex_cache;
 static bool g_tex_initialized = false;
+static TexHashMemo g_hash_memo;  // per-list content-hash memo (psp_ge_texmemo.h)
 
 // ---- FNV-1a hash ----
 
@@ -118,7 +120,10 @@ void ge_texture_shutdown() {
     std::fprintf(stderr, "[TEX] Texture cache shutdown\n");
 }
 
+void ge_texture_memo_invalidate() { g_hash_memo.invalidate(); }
+
 void ge_texture_invalidate_all() {
+    g_hash_memo.invalidate();
     for (auto& e : g_tex_cache) {
         if (e.gl_tex != 0) {
             glDeleteTextures(1, &e.gl_tex);
@@ -195,24 +200,29 @@ GLuint ge_texture_bind(
                      state.alpha_test_enable ? 1 : 0, state.alpha_test, state.vertex_type,
                      state.clear_mode ? 1 : 0);
     }
-    if (perf_enabled()) {
-        g_perf.tex_binds.fetch_add(1, std::memory_order_relaxed);
-        g_perf.tex_hash_bytes.fetch_add(span, std::memory_order_relaxed);
-    }
-    uint32_t content_hash = fnv1a_hash(rdram + masked_addr, static_cast<int>(span));
+    if (perf_enabled()) g_perf.tex_binds.fetch_add(1, std::memory_order_relaxed);
     const uint32_t param_words[6] = {
         static_cast<uint32_t>(params.bufw), static_cast<uint32_t>(fmt),
         params.swizzle ? 1u : 0u, state.clut_format, params.clut_addr,
         static_cast<uint32_t>(width | (height << 16)),
     };
-    content_hash ^= fnv1a_hash(reinterpret_cast<const uint8_t*>(param_words),
-                               static_cast<int>(sizeof(param_words))) * 0x9E3779B1u;
-    if (fmt >= GE_TFMT_CLUT4 && fmt <= GE_TFMT_CLUT32) {
-        const uint32_t clut_off = params.clut_addr & PSP_ADDR_MASK;
-        if (clut_off + 1024 <= static_cast<uint32_t>(PSP_MEM_SIZE)) {
-            content_hash ^= fnv1a_hash(rdram + clut_off, 1024) * 0x85EBCA6Bu;
-            if (perf_enabled()) g_perf.tex_hash_bytes.fetch_add(1024, std::memory_order_relaxed);
+    const uint32_t params_hash = fnv1a_hash(reinterpret_cast<const uint8_t*>(param_words),
+                                            static_cast<int>(sizeof(param_words)));
+    // The bytes are hashed once per display list (frame_num counts lists);
+    // later binds of the same texture in the list reuse that hash.
+    uint32_t content_hash = 0;
+    if (!g_hash_memo.find(frame_num, masked_addr, params_hash, &content_hash)) {
+        content_hash = fnv1a_hash(rdram + masked_addr, static_cast<int>(span));
+        content_hash ^= params_hash * 0x9E3779B1u;
+        if (perf_enabled()) g_perf.tex_hash_bytes.fetch_add(span, std::memory_order_relaxed);
+        if (fmt >= GE_TFMT_CLUT4 && fmt <= GE_TFMT_CLUT32) {
+            const uint32_t clut_off = params.clut_addr & PSP_ADDR_MASK;
+            if (clut_off + 1024 <= static_cast<uint32_t>(PSP_MEM_SIZE)) {
+                content_hash ^= fnv1a_hash(rdram + clut_off, 1024) * 0x85EBCA6Bu;
+                if (perf_enabled()) g_perf.tex_hash_bytes.fetch_add(1024, std::memory_order_relaxed);
+            }
         }
+        g_hash_memo.put(frame_num, masked_addr, params_hash, content_hash);
     }
 
     // Cache lookup

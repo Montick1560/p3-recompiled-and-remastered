@@ -33,6 +33,7 @@ void ge_texture_shutdown();
 /// Look up or create a GL texture from current GE texture state.
 /// Binds the result to GL_TEXTURE_2D. Returns the GL texture ID
 /// (0 if texture is disabled or decode fails).
+/// frame_num: display-list counter; texture bytes are hashed once per list.
 /// draw_max_v: largest V (texels) of the current through-mode draw, for
 /// texture-replacement keys of 512-tall textures (0 = unknown).
 GLuint ge_texture_bind(
@@ -43,3 +44,5 @@ GLuint ge_texture_bind(
 
 /// Invalidate the entire texture cache (debug/reset).
 void ge_texture_invalidate_all();
+/// Forget the per-list texture hashes (a GE block transfer wrote guest memory).
+void ge_texture_memo_invalidate();
