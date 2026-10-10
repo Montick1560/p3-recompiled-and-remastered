@@ -177,6 +177,8 @@ static FuncPtr g_ovl_args_real[OVL_ARGS_MAX];
 static std::atomic<int> g_ovl_args_calls[OVL_ARGS_MAX];
 static int g_ovl_args_count = -1;
 
+void psp_print_host_backtrace(const char* tag);  // psp_backtrace.cpp
+
 static void ovl_args_call(int slot, uint8_t* rdram, recomp_context* ctx) {
     const bool log = g_ovl_args_calls[slot].fetch_add(1, std::memory_order_relaxed) < 200;
     const uint32_t addr = g_ovl_args_addr[slot];
@@ -189,6 +191,7 @@ static void ovl_args_call(int slot, uint8_t* rdram, recomp_context* ctx) {
             if (f) std::fprintf(stderr, " %08X", f);
         }
         std::fprintf(stderr, "\n");
+        psp_print_host_backtrace("ovl-args");
     }
     g_ovl_args_real[slot](rdram, ctx);
     if (log) {

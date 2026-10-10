@@ -130,6 +130,7 @@ set(RUNTIME_SOURCES
     src/psp_audio_mixer.cpp
     src/psp_audio_out.cpp
     src/psp_subintr.cpp
+    src/psp_backtrace.cpp
     src/psp_cpu.cpp
     src/psp_scheduler.cpp
     src/psp_render_queue.cpp
