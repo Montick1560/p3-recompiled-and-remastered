@@ -26,6 +26,10 @@ extern std::atomic<uint32_t> g_host_buttons;
 extern std::atomic<uint32_t> g_pad_buttons;
 extern std::atomic<uint16_t> g_pad_analog;
 
+/// Mouse wheel as D-pad UP/DOWN (psp_wheel.h): the timed press the event loop
+/// publishes every iteration; ORed in by the sceCtrl HLE.
+extern std::atomic<uint32_t> g_wheel_buttons;
+
 /// Debug-socket injected button mask + expiry (steady_clock milliseconds).
 /// Set by the `B <hexmask> <ms>` debug-socket command; the sceCtrl HLE ORs
 /// the mask in only while now < deadline (one-shot timed overlay).

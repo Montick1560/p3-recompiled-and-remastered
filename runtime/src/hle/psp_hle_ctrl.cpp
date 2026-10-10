@@ -30,7 +30,8 @@ static void write_ctrl_data(
     // injected mask (injected mask only while its deadline has not expired).
     uint32_t buttons =
         g_host_buttons.load(std::memory_order_relaxed) |
-        g_pad_buttons.load(std::memory_order_relaxed);
+        g_pad_buttons.load(std::memory_order_relaxed) |
+        g_wheel_buttons.load(std::memory_order_relaxed);
     auto now_ms = std::chrono::duration_cast<
         std::chrono::milliseconds>(
             now.time_since_epoch()).count();

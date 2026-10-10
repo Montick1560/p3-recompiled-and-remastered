@@ -5,6 +5,7 @@
 #include "psp_ge_draw.h"
 #include "psp_present.h"
 #include "psp_pad.h"
+#include "psp_wheel.h"
 #include "psp_perf.h"
 
 #include <SDL.h>
@@ -25,6 +26,7 @@ std::thread::id   g_main_thread_id;
 std::atomic<uint32_t> g_host_buttons{0};
 std::atomic<uint32_t> g_pad_buttons{0};
 std::atomic<uint16_t> g_pad_analog{0x8080};
+std::atomic<uint32_t> g_wheel_buttons{0};
 
 // ---------------------------------------------------------------------------
 // Keyboard -> PSP button mapping
@@ -140,9 +142,27 @@ static bool handle_controller_event(const SDL_Event& ev) {
     }
 }
 
+// --- Mouse wheel: one D-pad UP/DOWN press per notch (psp_wheel.h) ---
+static WheelPulses g_wheel;
+
+static int64_t steady_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+static void publish_wheel() {
+    g_wheel_buttons.store(g_wheel.buttons(steady_ms()), std::memory_order_relaxed);
+}
+
 // Handle one SDL event: window close + keyboard button state + controllers.
 static void handle_sdl_event(const SDL_Event& ev) {
     if (handle_controller_event(ev)) return;
+    if (ev.type == SDL_MOUSEWHEEL) {
+        int y = ev.wheel.y;
+        if (ev.wheel.direction == SDL_MOUSEWHEEL_FLIPPED) y = -y;
+        if (y != 0) g_wheel.add(y, steady_ms());
+        return;
+    }
     if (ev.type == SDL_QUIT) {
         g_should_exit.store(true);
     } else if (ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP) {
@@ -266,6 +286,7 @@ void psp_event_loop(uint8_t* rdram) {
         while (SDL_PollEvent(&ev)) {
             handle_sdl_event(ev);
         }
+        publish_wheel();  // timed wheel presses advance even without events
 
         // 2. Drain render queue — execute pending GL work from game threads
         render_queue_process();
