@@ -358,6 +358,12 @@ PspDebugReply psp_debug_handle_line(const char* line,
         g_hooks.thread_backtrace(std::atoi(line + 2));
         return make_ok_empty();
     }
+    if (line[0] == 'A' && line[1] == '\0') {
+        // A: log the next calls of the watched functions again.
+        if (!g_hooks.trace_rearm) return make_err("unsupported");
+        g_hooks.trace_rearm();
+        return make_ok_empty();
+    }
     if (line[0] == 'D' && line[1] == ' ') {
         if (!g_hooks.draw_log) return make_err("unsupported");
         g_hooks.draw_log(std::atoi(line + 2));

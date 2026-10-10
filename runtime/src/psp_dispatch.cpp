@@ -443,6 +443,13 @@ static uint32_t g_func_args_addr[FUNC_ARGS_MAX];
 static FuncPtr g_func_args_orig[FUNC_ARGS_MAX];
 static std::atomic<int> g_func_args_calls[FUNC_ARGS_MAX];
 
+void psp_dispatch_trace_rearm() {
+    for (auto& c : g_func_args_calls) c.store(0, std::memory_order_relaxed);
+    for (auto& c : g_func_watch_hits) c.store(0, std::memory_order_relaxed);
+    for (auto& c : g_ovl_args_calls) c.store(0, std::memory_order_relaxed);
+    std::fprintf(stderr, "[TRACE] function watch/args budgets re-armed\n");
+}
+
 static void func_args_call(int slot, uint8_t* rdram, recomp_context* ctx) {
     const bool log = g_func_args_calls[slot].fetch_add(1, std::memory_order_relaxed) < 400;
     const uint32_t a[4] = {(uint32_t)ctx->r[4], (uint32_t)ctx->r[5],

@@ -14,7 +14,7 @@ def rd32(a):
 for a in bps: m.call({'event': 'cpu.breakpoint.add', 'address': a, 'enabled': True}, 'cpu.breakpoint.add')
 try:
     for k in range(n):
-        m.recv(('cpu.stepping',)); pc = reg('pc'); out = []
+        m.s.settimeout(None); m.recv(('cpu.stepping',)); m.s.settimeout(10); pc = reg('pc'); out = []
         for r in bps.get(pc, ['ra']):
             if r.startswith('*'):  # *a0+4 = word at a0+4
                 base, _, off = r[1:].partition('+'); v = rd32(reg(base) + int(off or '0', 16)); out.append('%s=%08X' % (r, v))

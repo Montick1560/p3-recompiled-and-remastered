@@ -8,7 +8,7 @@ def reg(r): return m.call({'event': 'cpu.getReg', 'name': r}, 'cpu.getReg')['uin
 m.call({'event': 'memory.breakpoint.add', 'address': addr, 'size': 4, 'enabled': True, 'read': False, 'write': True, 'change': False, 'log': False}, 'memory.breakpoint.add')
 try:
     for k in range(n):
-        m.recv(('cpu.stepping',))
+        m.s.settimeout(None); m.recv(('cpu.stepping',)); m.s.settimeout(10)
         regs = {r: reg(r) for r in ('pc', 'ra', 'v0', 'v1', 'a0', 'a1', 'a2', 'a3', 's0', 's1')}
         bt = m.call({'event': 'hle.backtrace'}, 'hle.backtrace')['frames']
         print('hit %d: ' % k + ' '.join('%s=%08X' % kv for kv in regs.items()))

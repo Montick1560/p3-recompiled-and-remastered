@@ -36,6 +36,9 @@ void psp_dispatch_get_miss_stats(uint32_t* unique_addrs,
 int psp_dispatch_get_recent_funcs(uint32_t* out, int max);
 /// Debug socket K: PSP thread <tid> prints its guest call stack at its next function entry.
 void psp_dispatch_request_backtrace(int tid);
+/// Debug socket `A`: restart the per-function log budgets of
+/// PSPRECOMP_FUNC_WATCH / _FUNC_ARGS / _OVL_ARGS (log the next calls again).
+void psp_dispatch_trace_rearm();
 
 /// Debug-only GL thread safety check.
 /// In debug builds: aborts if current thread is not the main thread.
