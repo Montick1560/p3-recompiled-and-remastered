@@ -572,8 +572,12 @@ git ls-remote p3 refs/heads/main   # must equal git rev-parse HEAD
 
 ## Task 1 result
 
-(fill in: date, reachable_cuts.txt count and suspicious entries, what the user played, log check, baseline noise N0 from Task 2 Step 3)
+2026-10-10. `build/logs/reachable_cuts.txt`: 61 cuts (main 31, mission 11, title 13, azito 6); 58 are 0x8-0x28 bytes. Of the three >= 0x40 (all main): 0x08A6BFFC (0x4C) is real code (two DxD caves back to back); 0x08A60288 (0x6C) and 0x08A6F618 (0x6C) are DATA (a float table 0.4..1.9 / 0.01f plus code pointers, and a table of {-1, code ptr, 0}). Both were empty stubs before and now emit their bytes as code; harmless unless something calls them.
+User played (scale 1, ~10:37-10:42): Continue -> hideout -> a mission to the end -> SQUARE menu open/close: "no se bloquea, todo bien". Log: no LOOKUP_MISS/FATAL during play; one `[CRASH] 0xC0000005` AFTER `[RT] Shutdown complete` (window closed, detached guest threads) - the same already appears in `jugar_watch.log` of 2026-10-09 (before 5f98221), so it is a pre-existing teardown race, not the cut.
+Baseline noise N0 (language menu, two shots 1 s apart): 0 of 130560.
 
 ## Task 5 result
 
-(fill in: user findings per screen at scale 4, points/lines census, whether 5b/5c were done)
+2026-10-10. Before asking the user, the language menu at scale 4 showed a 1-FBO-pixel black seam at the box's right corners. Cause: a GEOMETRY gap, not texture bleed: the body strip ends at x = 328 (s16 verts) and the corner sprite starts at x = 328.196 (float verts); 1x pixel-centre coverage hides it. 5b (UV inset) would not fix that, so a "5d" landed instead (48ad9cf): `ge_snap_through_positions` snaps through-mode fills to the PSP pixel grid (edge -> ceil(x - 0.5), the exact 1x coverage) at scale > 1 only; seam pixels 48 -> 0, scale 1 still 0 diff.
+Census (GE summary of the user's scale-1 session; no `D` dump): points 9280, lines 722, line strips 9280 -> 5c done (d52eff7) as glLineWidth/glPointSize = scale in ge_draw_init (driver line range 1..10, accepted).
+User at scale 4 (10:54-, hideout, SQUARE menu, barracks, world map, a mission, window + F11): "Todo bien"; the graphics bugs they see predate this change (engine/M3 fidelity). 5b not needed.
