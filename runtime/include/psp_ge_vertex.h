@@ -50,6 +50,12 @@ void ge_transform_vertices(
     const GeState& state
 );
 
+/// Through-mode x/y (PSP pixels, before ge_transform_vertices) -> the pixel
+/// edge with the same 1x coverage: ceil(x - 0.5). Used at render scale > 1
+/// so 2D pieces that touch at 1x (one ending at x = 328, the next starting
+/// at 328.196) still touch when each PSP pixel is N FBO pixels wide.
+void ge_snap_through_positions(std::vector<DecodedVertex>& verts);
+
 /// PPSSPP vertex range culling: true when the clip-space position (x,y,z,w)
 /// lands outside the GE's [0, 4096) drawing space after the viewport
 /// transform, or has w < -1, and is not z-clipped (z < -w). The hardware

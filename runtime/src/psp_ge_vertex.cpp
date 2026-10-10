@@ -579,6 +579,13 @@ static void ge_light_vertex(
     v.color[3] = lit[3];
 }
 
+void ge_snap_through_positions(std::vector<DecodedVertex>& verts) {
+    for (auto& v : verts) {
+        v.pos[0] = std::ceil(v.pos[0] - 0.5f);
+        v.pos[1] = std::ceil(v.pos[1] - 0.5f);
+    }
+}
+
 // Game-module degenerate-matrix fallback slot (#47 P5 seam).
 static GeDegenerateFallbackFn g_degenerate_fallback = nullptr;
 

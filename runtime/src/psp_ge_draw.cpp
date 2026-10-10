@@ -773,6 +773,14 @@ void ge_draw_prim(
         }
     }
 
+    // Render scale > 1: snap 2D (through-mode) fills to the PSP pixel grid so
+    // pieces that touch at 1x still touch (ge_snap_through_positions). Lines
+    // and points keep their positions; scale 1 is untouched.
+    if (g_render_scale > 1 && ge_vtype_through(state.vertex_type) &&
+        prim_type >= GE_PRIM_TRIANGLES) {
+        ge_snap_through_positions(decoded);
+    }
+
     // Transform
     ge_transform_vertices(decoded, state);
 

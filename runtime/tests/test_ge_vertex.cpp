@@ -530,6 +530,31 @@ static void test_blend_setup() {
     tests_run++; if (b.equation != GL_FUNC_ADD) { failures++; std::fprintf(stderr, "FAIL: absdiff equation\n"); }
 }
 
+// Render scale > 1 (M3b): through-mode x/y snap to the PSP pixel edge that
+// gives the same coverage as at 1x (a pixel is covered when its centre
+// p + 0.5 is inside the edge, so edge x -> ceil(x - 0.5)). Seen in the
+// language menu: a body strip ending at x = 328 and a corner sprite
+// starting at 328.196 touch at 1x but leave a 1-pixel gap at 4x.
+static void test_snap_through_positions() {
+    std::vector<DecodedVertex> v = {
+        make_pos_vertex(328.196f, 39.0f, 7.0f),   // corner left edge -> 328
+        make_pos_vertex(335.196f, 46.0f, 7.0f),   // corner right edge -> 335
+        make_pos_vertex(328.0f, 39.7f, 0.0f),     // integer x kept; y 39.7 -> 40
+        make_pos_vertex(10.5f, 10.6f, 0.0f),      // centre 10.5 covered -> 10; 10.6 -> 11
+    };
+    v[0].uv[0] = 8.0f; v[0].uv[1] = 1.0f;
+    ge_snap_through_positions(v);
+    ASSERT_NEAR(v[0].pos[0], 328.0f, "snap 328.196 -> 328");
+    ASSERT_NEAR(v[1].pos[0], 335.0f, "snap 335.196 -> 335");
+    ASSERT_NEAR(v[2].pos[0], 328.0f, "integer x unchanged");
+    ASSERT_NEAR(v[2].pos[1], 40.0f, "snap y 39.7 -> 40");
+    ASSERT_NEAR(v[3].pos[0], 10.0f, "edge on a pixel centre keeps that pixel");
+    ASSERT_NEAR(v[3].pos[1], 11.0f, "edge past a pixel centre drops that pixel");
+    ASSERT_NEAR(v[0].pos[2], 7.0f, "z untouched");
+    ASSERT_NEAR(v[0].uv[0], 8.0f, "u untouched");
+    ASSERT_NEAR(v[0].uv[1], 1.0f, "v untouched");
+}
+
 int main() {
     test_color_write_mask();
     test_blend_setup();
@@ -549,6 +574,7 @@ int main() {
     test_vertex_stride_alignment();
     test_decode_uses_aligned_stride();
     test_relative_address_adds_offset();
+    test_snap_through_positions();
 
     if (failures == 0) {
         std::printf("test_ge_vertex: %d/%d PASS\n", tests_run, tests_run);
