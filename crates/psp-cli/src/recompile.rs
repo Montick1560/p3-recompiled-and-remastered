@@ -213,6 +213,26 @@ pub(crate) fn prepare_emission_with(
         }
     }
 
+    // Branch/jump targets of Ghidra functions that land in a gap (no function):
+    // the rest of a function Ghidra truncated (FUN_08B5B868 branches to
+    // 0x08B5BBB0). As functions they are dispatchable continuations.
+    if std::env::var("PSPRECOMP_NO_CALL_TARGET_MIDS").as_deref() != Ok("1") {
+        let data_xrefs: Vec<(u32, u32)> = analysis
+            .xrefs
+            .iter()
+            .filter(|x| x.ref_type == "DATA")
+            .filter_map(|x| Some((parse_hex_u32(&x.from_addr)?, parse_hex_u32(&x.to_addr)?)))
+            .collect();
+        let gaps = static_targets_in_gaps(&analysis.functions, &segment_bytes, &data_xrefs);
+        let n = gaps.len();
+        for a in gaps {
+            if !force_entries.contains(&a) {
+                force_entries.push(a);
+            }
+        }
+        tracing::info!("Static branch targets in gaps: {} functions", n);
+    }
+
     // Enhanced function discovery: three-pass scan replaces vtable_miss_addresses.txt sidecar
     let discovery = enhance_function_discovery(
         &mut analysis,
@@ -271,6 +291,7 @@ pub(crate) fn prepare_emission_with(
         tracing::info!("Static call targets inside functions: {} mid-entries", n);
     }
 
+    let mut gap_entries: Vec<u32> = Vec::new();
     if std::env::var("PSPRECOMP_NO_FALLTHRU_ENTRIES").as_deref() != Ok("1") {
         let intervals = sorted_function_intervals(&analysis);
         let starts: HashSet<u32> = analysis
@@ -290,9 +311,33 @@ pub(crate) fn prepare_emission_with(
             if let Some(owner) = owning_function_start(&intervals, c) {
                 force_mid_entries.push((c, owner));
                 n += 1;
+            } else if f.source == "ghidra" && !gap_entries.contains(&c) {
+                gap_entries.push(c);
             }
         }
         tracing::info!("Fall-through continuations: {} mid-entries", n);
+    }
+
+    // Second discovery round: continuations and branch targets of functions
+    // discovery grew that land in a gap (FUN_08B5B868, grown from 0x44 bytes,
+    // falls through and branches into 0x08B5BBB0..). They become functions so
+    // the cross-function dispatch reaches them.
+    if std::env::var("PSPRECOMP_NO_CALL_TARGET_MIDS").as_deref() != Ok("1") {
+        let data_xrefs: Vec<(u32, u32)> = analysis
+            .xrefs
+            .iter()
+            .filter(|x| x.ref_type == "DATA")
+            .filter_map(|x| Some((parse_hex_u32(&x.from_addr)?, parse_hex_u32(&x.to_addr)?)))
+            .collect();
+        for t in static_targets_in_gaps(&analysis.functions, &segment_bytes, &data_xrefs) {
+            if !gap_entries.contains(&t) {
+                gap_entries.push(t);
+            }
+        }
+        if !gap_entries.is_empty() {
+            enhance_function_discovery(&mut analysis, &segment_bytes, &gap_entries, &[]);
+        }
+        tracing::info!("Second discovery round: {} gap entries", gap_entries.len());
     }
 
     // Force-inject mid-entries that Ghidra missed but are confirmed call targets
@@ -364,6 +409,67 @@ pub(crate) fn prepare_emission_with(
         inject_cross_function_mid_jumps(&mut analysis, &segment_bytes, &data_xrefs_pre);
     }
 
+    // Final pass on the function set that is emitted (after coalescing merged
+    // heuristic pieces into their owners): static targets inside a function
+    // that are not dispatchable yet become mid-entries (FUN_08B5B868 branches
+    // to 0x08B5BBB0 only once coalesced).
+    if std::env::var("PSPRECOMP_NO_CALL_TARGET_MIDS").as_deref() != Ok("1") {
+        let data_xrefs_f: Vec<(u32, u32)> = analysis.xrefs.iter()
+            .filter(|x| x.ref_type == "DATA")
+            .filter_map(|x| Some((parse_hex_u32(&x.from_addr)?, parse_hex_u32(&x.to_addr)?)))
+            .collect();
+        // Targets (and fall-through continuations of Ghidra code) in a gap: the
+        // gap is the rest of the code, so it becomes one function spanning up
+        // to the next function; other targets in it become its mid-entries.
+        let mut gap_targets = static_targets_in_gaps(&analysis.functions, &segment_bytes, &data_xrefs_f);
+        for f in analysis.functions.iter().filter(|f| f.source == "ghidra") {
+            let Some(start) = parse_hex_u32(&f.address) else { continue };
+            if let Some(c) = fall_through_continuation(&segment_bytes, start, f.size as u32) {
+                gap_targets.push(c);
+            }
+        }
+        gap_targets.sort_unstable();
+        gap_targets.dedup();
+        let mut created = 0usize;
+        for t in gap_targets {
+            let intervals = sorted_function_intervals(&analysis);
+            let i = intervals.partition_point(|&(s, _)| s <= t);
+            if i > 0 && t < intervals[i - 1].1 {
+                continue; // covered (maybe by a gap function created just now)
+            }
+            let Some(&(next, _)) = intervals.get(i) else { continue };
+            let size = next.saturating_sub(t);
+            if size == 0 || size > 0x2000 || get_func_bytes(&segment_bytes, t, size).is_none() {
+                continue;
+            }
+            analysis.functions.push(JsonFunction {
+                name: format!("FUN_{t:08X}"),
+                address: format!("0x{t:08X}"),
+                size: size as u64,
+                is_external: false,
+                is_thunk: false,
+                source: "gap_continuation".into(),
+            });
+            created += 1;
+        }
+        tracing::info!("Gap continuations after coalescing: {} functions", created);
+        let late = static_targets_needing_mid_entries(
+            &analysis.functions,
+            &analysis.mid_entries,
+            &segment_bytes,
+            &data_xrefs_f,
+        );
+        tracing::info!("Static call targets after coalescing: {} mid-entries", late.len());
+        inject_force_mid_entries(&mut analysis, &late);
+    }
+
+    // One mid-entry per address (passes may register the same one twice;
+    // each becomes a uniquely named wrapper and a dispatch-switch case).
+    {
+        let mut seen: HashSet<u32> = HashSet::new();
+        analysis.mid_entries.retain(|me| parse_hex_u32(&me.addr).is_some_and(|a| seen.insert(a)));
+    }
+
     // Lookup maps consumed by decode_and_emit_function_with_name.
     // Name dedup: Ghidra may produce multiple functions with the same name at
     // different addresses (e.g. thunk_FUN_xxx); collisions get _ADDR suffixes.
@@ -379,6 +485,11 @@ pub(crate) fn prepare_emission_with(
         if entry_addr != 0 && parent_addr != 0 {
             mid_entry_addr_map.entry(parent_addr).or_default().push(entry_addr);
         }
+    }
+    // Several passes may register the same mid-entry: one switch case each.
+    for addrs in mid_entry_addr_map.values_mut() {
+        addrs.sort_unstable();
+        addrs.dedup();
     }
     tracing::info!("Built mid-entry addr map: {} parent functions", mid_entry_addr_map.len());
 
@@ -1364,6 +1475,50 @@ fn op_unwrap_ds(op: &MipsOp) -> MipsOp {
 /// Static control-flow targets (jal/j/branches) of every decodable function that lie strictly inside
 /// another (or the same) function and are not a function start or an existing mid-entry: calls into
 /// code that discovery merged into a bigger function. Returns (target, owner_start), sorted, deduped.
+/// Static jump/branch/call targets of Ghidra functions that land outside every known function (a gap):
+/// the remainder of a function Ghidra truncated. Sorted, deduped; for force entries.
+fn static_targets_in_gaps(
+    functions: &[JsonFunction],
+    segment_bytes: &[(u32, Vec<u8>)],
+    data_xrefs: &[(u32, u32)],
+) -> Vec<u32> {
+    let mut intervals: Vec<(u32, u32)> = functions
+        .iter()
+        .filter_map(|f| {
+            let start = parse_hex_u32(&f.address)?;
+            Some((start, start.checked_add(f.size as u32)?))
+        })
+        .collect();
+    intervals.sort_by_key(|&(s, _)| s);
+    let covered = |t: u32| {
+        let i = intervals.partition_point(|&(s, _)| s <= t);
+        i > 0 && t < intervals[i - 1].1
+    };
+    let mut found = Vec::new();
+    // Ghidra callers only: heuristic "functions" may be data decoded as code.
+    for f in functions.iter().filter(|f| f.source == "ghidra") {
+        let Some(fstart) = parse_hex_u32(&f.address) else { continue };
+        let fsize = f.size as u32;
+        let Some(fend) = fstart.checked_add(fsize) else { continue };
+        let Some(bytes) = get_func_bytes(segment_bytes, fstart, fsize) else { continue };
+        let Ok(ops) = psp_decoder::decode_function(bytes, fstart, data_xrefs) else { continue };
+        let ops = optimize(ops, &OptimizerConfig::default());
+        for op in &ops {
+            let Some(t) = op_static_target(&op_unwrap_ds(op)) else { continue };
+            if (t >= fstart && t < fend) || t % 4 != 0 || covered(t) {
+                continue;
+            }
+            if get_func_bytes(segment_bytes, t, 4).is_none() {
+                continue;
+            }
+            found.push(t);
+        }
+    }
+    found.sort_unstable();
+    found.dedup();
+    found
+}
+
 fn static_targets_needing_mid_entries(
     functions: &[JsonFunction],
     mid_entries: &[JsonMidEntry],
@@ -1386,10 +1541,14 @@ fn static_targets_needing_mid_entries(
         .collect();
 
     let mut found: Vec<(u32, u32)> = Vec::new();
-    // Callers: Ghidra-identified code only. Heuristic "functions" may be data
-    // decoded as code whose jal targets are junk; a junk mid-entry inside a real
-    // function changes its emission (48647f5).
-    for f in functions.iter().filter(|f| f.source == "ghidra") {
+    // Heuristic "functions" may be data decoded as code whose jal targets are
+    // junk; a junk mid-entry inside a real function changes its emission
+    // (48647f5). So they only count for targets inside their own body (a piece
+    // that coalescing later merges into its Ghidra owner, FUN_08B679C8).
+    for f in functions {
+        // Gap continuations (created after coalescing from Ghidra code's own
+        // targets) are real code too.
+        let ghidra = f.source == "ghidra" || f.source == "gap_continuation";
         let Some(fstart) = parse_hex_u32(&f.address) else { continue };
         let fsize = f.size as u32;
         let Some(fend) = fstart.checked_add(fsize) else { continue };
@@ -1398,18 +1557,19 @@ fn static_targets_needing_mid_entries(
         let ops = optimize(ops, &OptimizerConfig::default());
         for op in &ops {
             let unwrapped = op_unwrap_ds(op);
-            let (is_jal, target) = match &unwrapped {
-                MipsOp::Jal { target } => (true, *target),
-                MipsOp::J { target } => (false, *target),
-                MipsOp::BranchHazardDelay { branch, .. } => match branch.as_ref() {
-                    MipsOp::Jal { target } => (true, *target),
-                    MipsOp::J { target } => (false, *target),
-                    _ => continue,
-                },
-                _ => continue,
+            let is_jal = match &unwrapped {
+                MipsOp::Jal { .. } => true,
+                MipsOp::BranchHazardDelay { branch, .. } => matches!(branch.as_ref(), MipsOp::Jal { .. }),
+                _ => false,
             };
+            // Any static target (calls, jumps, conditional branches): outside
+            // the caller they are all emitted as dispatches.
+            let Some(target) = op_static_target(&unwrapped) else { continue };
             let inside = target >= fstart && target < fend;
             if inside && !is_jal {
+                continue;
+            }
+            if !ghidra && !inside {
                 continue;
             }
             if starts.contains(&target) || known_mids.contains(&target) {
@@ -2381,6 +2541,23 @@ mod tests {
 
     fn wmid(addr: u32, parent: u32) -> JsonMidEntry {
         JsonMidEntry { addr: format!("0x{addr:08X}"), parent_addr: format!("0x{parent:08X}") }
+    }
+
+    #[test]
+    fn branch_into_gap_becomes_function_entry() {
+        // 0x1000 Ghidra fn (size 8): bne v0,zero -> 0x100C (a gap); 0x1010 another fn.
+        let segs = words_at(
+            0x1000,
+            &[0x1440_0002, 0x0000_0000, 0x0000_0000, 0x03E0_0008, 0x0000_0000],
+        );
+        let mut f = wfn(0x1000);
+        f.size = 8;
+        let mut g = wfn(0x1010);
+        g.size = 4;
+        assert_eq!(static_targets_in_gaps(&[f.clone(), g.clone()], &segs, &[]), vec![0x100C]);
+        // A heuristic caller does not count.
+        f.source = "binary_scan".into();
+        assert!(static_targets_in_gaps(&[f, g], &segs, &[]).is_empty());
     }
 
     #[test]
