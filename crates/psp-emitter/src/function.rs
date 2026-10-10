@@ -501,6 +501,8 @@ pub fn emit_function(func: &DecodedFunction, gen: &mut dyn Generator, imports: &
     // Reconstruction is only the fallback when the continuation is not a
     // dispatch target.
     let mut epilogue_reconstructed = false;
+    let mut ra_redirect_used = false;
+    let mut ra_redirect_labels: Vec<u32> = Vec::new();
 
     for block in &func.blocks {
         let instrs = &block.instrs;
@@ -509,6 +511,7 @@ pub fn emit_function(func: &DecodedFunction, gen: &mut dyn Generator, imports: &
         while i < instrs.len() {
             let instr_vaddr = block.vaddr.saturating_add(i as u32 * 4);
             gen.emit_label(&format!("L_{instr_vaddr:08X}"));
+            ra_redirect_labels.push(instr_vaddr);
 
             // Instruction-budget preemption point (#66, design approach (a)):
             // if this op is an in-function loop back-edge (static target at or
@@ -534,6 +537,7 @@ pub fn emit_function(func: &DecodedFunction, gen: &mut dyn Generator, imports: &
                     &instrs[i], dup, gen, &ra_ctx, instrs, i, instr_vaddr, func.vaddr,
                     func_end, imports,
                 );
+                ra_redirect_labels.push(instr_vaddr.wrapping_add(4));
                 i += 2;
                 continue;
             }
@@ -579,12 +583,33 @@ pub fn emit_function(func: &DecodedFunction, gen: &mut dyn Generator, imports: &
                     let ds_vaddr =
                         block.vaddr.saturating_add((i + 1) as u32 * 4);
                     gen.emit_label(&format!("L_{ds_vaddr:08X}"));
+                    ra_redirect_labels.push(ds_vaddr);
                     i += 2;
                     continue;
                 }
             }
 
-            emit_op(&instrs[i], gen, imports, func.vaddr, func_end);
+            if let MipsOp::Jal { target } = &instrs[i] {
+                let external = *target < func.vaddr || *target >= func_end;
+                if external
+                    && func.ra_adjust_calls.contains(target)
+                    && !imports.contains_key(target)
+                {
+                    let ret = instr_vaddr.wrapping_add(4);
+                    gen.emit_raw(&format!(
+                        "ctx->r[31] = (int32_t)0x{ret:08X}u; /* callee may edit its return address */"
+                    ));
+                    gen.emit_call_lookup(*target);
+                    gen.emit_raw(&format!(
+                        "if ((uint32_t)ctx->r[31] != 0x{ret:08X}u) goto L_RA_REDIRECT;"
+                    ));
+                    ra_redirect_used = true;
+                } else {
+                    emit_op(&instrs[i], gen, imports, func.vaddr, func_end);
+                }
+            } else {
+                emit_op(&instrs[i], gen, imports, func.vaddr, func_end);
+            }
 
             // Terminal-`jal` epilogue reconstruction (recompiler LINK/RA class):
             // if this is the function's last op and an EXTERNAL `jal`, and the
@@ -626,6 +651,21 @@ pub fn emit_function(func: &DecodedFunction, gen: &mut dyn Generator, imports: &
         gen.emit_raw("/* fall-through past function end (no terminal control flow) */");
         gen.emit_call_lookup(func_end);
         gen.emit_return();
+    }
+
+    if ra_redirect_used {
+        ra_redirect_labels.sort_unstable();
+        ra_redirect_labels.dedup();
+        gen.emit_return();
+        gen.emit_label("L_RA_REDIRECT");
+        gen.emit_raw("switch ((uint32_t)ctx->r[31]) {");
+        for addr in &ra_redirect_labels {
+            gen.emit_raw(&format!("    case 0x{addr:08X}u: goto L_{addr:08X};"));
+        }
+        gen.emit_raw(
+            "    default: RECOMP_LOOKUP((uint32_t)ctx->r[31])(rdram, ctx); return;",
+        );
+        gen.emit_raw("}");
     }
 
     gen.emit_function_end();
@@ -2003,6 +2043,7 @@ mod tests {
             mid_entry_addrs: vec![],
             coalesced: false,
             fall_through_dispatchable: false,
+            ra_adjust_calls: vec![],
         }
     }
 
@@ -3046,5 +3087,65 @@ mod tests {
         emit_function(&func, &mut gen, &ImportMap::new());
         let out = gen.output.join("\n");
         assert!(!out.contains("reconstructed epilogue"), "internal jal is not a tail fall-through");
+    }
+
+    #[test]
+    fn ra_adjusting_jal_sets_ra_and_redirects() {
+        let ops = vec![
+            MipsOp::Nop {},
+            MipsOp::Jal { target: 0x08A53424 },
+            MipsOp::Nop {},
+            MipsOp::Nop {},
+        ];
+        let mut func = make_func(ops);
+        func.size = 16;
+        func.ra_adjust_calls = vec![0x08A53424];
+        let mut gen = TestGenerator::new();
+        emit_function(&func, &mut gen, &ImportMap::new());
+        let out = gen.output.join("\n");
+        let needles = [
+            "ctx->r[31] = (int32_t)0x08804008u;",
+            "CALL_LOOKUP:0x08A53424",
+            "if ((uint32_t)ctx->r[31] != 0x08804008u) goto L_RA_REDIRECT;",
+            "LABEL:L_RA_REDIRECT",
+            "case 0x08804008u: goto L_08804008;",
+            "case 0x0880400Cu: goto L_0880400C;",
+            "default: RECOMP_LOOKUP((uint32_t)ctx->r[31])(rdram, ctx); return;",
+        ];
+        let mut from = 0;
+        for n in needles {
+            let rel = out[from..].find(n).unwrap_or_else(|| {
+                panic!("missing `{n}` after byte {from} in {out}");
+            });
+            from += rel + n.len();
+        }
+    }
+
+    #[test]
+    fn plain_jal_has_no_ra_redirect() {
+        let ops = vec![
+            MipsOp::Nop {},
+            MipsOp::Jal { target: 0x08A53424 },
+            MipsOp::Nop {},
+            MipsOp::Nop {},
+        ];
+        let mut func = make_func(ops);
+        func.size = 16;
+        let mut gen = TestGenerator::new();
+        emit_function(&func, &mut gen, &ImportMap::new());
+        let out = gen.output.join("\n");
+        assert!(!out.contains("L_RA_REDIRECT"), "{out}");
+        assert!(!out.contains("ctx->r[31] ="), "{out}");
+    }
+
+    #[test]
+    fn internal_jal_is_never_ra_redirected() {
+        let mut func = make_func(vec![MipsOp::Jal { target: 0x08804008 }]);
+        func.size = 16;
+        func.ra_adjust_calls = vec![0x08804008];
+        let mut gen = TestGenerator::new();
+        emit_function(&func, &mut gen, &ImportMap::new());
+        let out = gen.output.join("\n");
+        assert!(!out.contains("L_RA_REDIRECT"), "{out}");
     }
 }

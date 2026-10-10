@@ -1903,6 +1903,84 @@ fn get_func_bytes<'a>(
     })
 }
 
+/// True if the code reached from `target` edits `$ra` arithmetically before its
+/// `jr ra`: a code cave that returns to a different address than its caller's
+/// `jal` link. Linear scan from `target`, following unconditional `j`, up to 96
+/// instructions, stopping at the first `jr $ra` (its delay slot is NOT checked:
+/// `jr` has already read `$ra`). Flagged writers: I-type ALU ops (opcodes
+/// 0x08..=0x0F: addi, addiu, slti, sltiu, andi, ori, xori, lui) with rt == 31,
+/// and SPECIAL (opcode 0) ops with rd == 31 except jalr (funct 0x09) and the
+/// all-zero word. Branch-likely delay slots count (they are in the linear scan).
+/// Bytes missing from `segments` -> false.
+fn ra_adjusting_target(segments: &[(u32, Vec<u8>)], target: u32) -> bool {
+    fn read_word(segments: &[(u32, Vec<u8>)], addr: u32) -> Option<u32> {
+        segments.iter().find_map(|(seg_vaddr, bytes)| {
+            let end = seg_vaddr.checked_add(bytes.len() as u32)?;
+            if addr >= *seg_vaddr && addr.checked_add(4)? <= end {
+                let off = (addr - seg_vaddr) as usize;
+                Some(u32::from_le_bytes(bytes[off..off + 4].try_into().ok()?))
+            } else {
+                None
+            }
+        })
+    }
+
+    fn writes_ra(w: u32) -> bool {
+        if w == 0 {
+            return false;
+        }
+        let opcode = w >> 26;
+        if (0x08..=0x0F).contains(&opcode) && ((w >> 16) & 0x1F) == 31 {
+            return true;
+        }
+        opcode == 0 && ((w >> 11) & 0x1F) == 31 && (w & 0x3F) != 0x09
+    }
+
+    fn is_jr_ra(w: u32) -> bool {
+        w >> 26 == 0 && (w & 0x3F) == 0x08 && ((w >> 21) & 0x1F) == 31
+    }
+
+    let mut pc = target;
+    let mut seen_j = HashSet::new();
+    let mut seen = 0u32;
+    while seen < 96 {
+        let Some(w) = read_word(segments, pc) else {
+            return false;
+        };
+        seen += 1;
+        if is_jr_ra(w) {
+            return false;
+        }
+        if writes_ra(w) {
+            return true;
+        }
+        if w >> 26 == 2 {
+            if seen >= 96 {
+                return false;
+            }
+            let delay = pc.wrapping_add(4);
+            let Some(dw) = read_word(segments, delay) else {
+                return false;
+            };
+            seen += 1;
+            if is_jr_ra(dw) {
+                return false;
+            }
+            if writes_ra(dw) {
+                return true;
+            }
+            let j_target = ((pc.wrapping_add(4)) & 0xF000_0000) | ((w & 0x03FF_FFFF) << 2);
+            if !seen_j.insert(j_target) {
+                return false;
+            }
+            pc = j_target;
+            continue;
+        }
+        pc = pc.wrapping_add(4);
+    }
+    false
+}
+
 /// Where control goes when a function's decoded body falls off its end, or None when its last
 /// branch/jump (with delay slot) is an unconditional transfer. The decoded body includes a trailing
 /// branch's delay slot (`get_func_bytes`), so the continuation is `start + decoded_len`.
@@ -1992,6 +2070,23 @@ pub fn decode_and_emit_function_with_name(
     let cont = func_vaddr + decoded_size;
     let fall_through_dispatchable = func_map.contains_key(&cont)
         || mid_entry_addr_map.values().any(|addrs| addrs.contains(&cont));
+    let mut ra_adjust_calls: Vec<u32> = ops
+        .iter()
+        .filter_map(|op| match op {
+            MipsOp::Jal { target }
+                if *target < func_vaddr || *target >= func_vaddr + decoded_size =>
+            {
+                if !import_map.contains_key(target) && ra_adjusting_target(segments, *target) {
+                    Some(*target)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
+        .collect();
+    ra_adjust_calls.sort_unstable();
+    ra_adjust_calls.dedup();
     let decoded = DecodedFunction {
         vaddr: func_vaddr,
         name: func.name.clone(),
@@ -2002,6 +2097,7 @@ pub fn decode_and_emit_function_with_name(
         mid_entry_addrs: mid_entry_addr_map.get(&func_vaddr).cloned().unwrap_or_default(),
         coalesced,
         fall_through_dispatchable,
+        ra_adjust_calls,
     };
 
     let mut gen = CppGenerator::new();
@@ -2872,5 +2968,63 @@ mod tests {
             diag.static_lookup_targets,
         );
         assert!(cpp.contains("RECOMP_LOOKUP(0x08900000)"));
+    }
+
+    #[test]
+    fn ra_adjusting_target_flags_dxd_cave() {
+        let segs = words_at(
+            0x08A5_3424,
+            &[
+                0x3C01_08AC,
+                0x9021_B1A3,
+                0x2421_FFBF,
+                0x5020_0001,
+                0x4480_0800,
+                0x5462_0001,
+                0x27FF_0028,
+                0x03E0_0008,
+                0x0000_0000,
+            ],
+        );
+        assert!(ra_adjusting_target(&segs, 0x08A5_3424));
+    }
+
+    #[test]
+    fn ra_adjusting_target_ignores_normal_function() {
+        let segs = words_at(
+            0x0890_0000,
+            &[
+                0x27BD_FFF0,
+                0xAFBF_0000,
+                0x0E24_0100,
+                0x0000_0000,
+                0x8FBF_0000,
+                0x03E0_0008,
+                0x27BD_0010,
+            ],
+        );
+        assert!(!ra_adjusting_target(&segs, 0x0890_0000));
+    }
+
+    #[test]
+    fn ra_adjusting_target_follows_j() {
+        let mut segs = words_at(0x0890_0000, &[0x0A24_0010, 0x0000_0000]);
+        segs.extend(words_at(
+            0x0890_0040,
+            &[0x27FF_0008, 0x03E0_0008, 0x0000_0000],
+        ));
+        assert!(ra_adjusting_target(&segs, 0x0890_0000));
+    }
+
+    #[test]
+    fn ra_adjusting_target_ignores_jr_delay_slot() {
+        let segs = words_at(0x0890_0000, &[0x03E0_0008, 0x27FF_0008]);
+        assert!(!ra_adjusting_target(&segs, 0x0890_0000));
+    }
+
+    #[test]
+    fn ra_adjusting_target_missing_bytes() {
+        let segs = words_at(0x0890_0000, &[0x27FF_0008]);
+        assert!(!ra_adjusting_target(&segs, 0x08A0_0000));
     }
 }
