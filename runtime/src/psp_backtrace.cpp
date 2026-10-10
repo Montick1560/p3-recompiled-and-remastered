@@ -25,3 +25,32 @@ void psp_print_host_backtrace(const char* tag) {
     (void)tag;
 #endif
 }
+
+// Store watch (recomp.h MEM_W_WRITE): PSPRECOMP_STORE_WATCH=<hex value>.
+#include <atomic>
+#include <cstdlib>
+#include <cstring>
+
+uint32_t g_psp_store_watch = [] {
+    const char* e = std::getenv("PSPRECOMP_STORE_WATCH");
+    return e ? static_cast<uint32_t>(std::strtoul(e, nullptr, 16)) : 0u;
+}();
+
+// PSPRECOMP_STORE_WATCH_RANGE=<lo>-<hi> (hex) keeps only stores into [lo, hi);
+// a backtrace is printed for word +4 of 16-byte-aligned blocks (object vtable
+// slots), the address alone for the rest.
+void psp_store_watch_hit(uint32_t addr, uint32_t val) {
+    static const uint32_t lo_hi[2] = {
+        [] { const char* e = std::getenv("PSPRECOMP_STORE_WATCH_RANGE");
+             return e ? static_cast<uint32_t>(std::strtoul(e, nullptr, 16)) : 0u; }(),
+        [] { const char* e = std::getenv("PSPRECOMP_STORE_WATCH_RANGE");
+             const char* d = e ? std::strchr(e, '-') : nullptr;
+             return d ? static_cast<uint32_t>(std::strtoul(d + 1, nullptr, 16)) : 0xFFFFFFFFu; }(),
+    };
+    if (addr < lo_hi[0] || addr >= lo_hi[1]) return;
+    static std::atomic<int> hits{0};
+    const int n = hits.fetch_add(1);
+    if (n >= 5000) return;
+    std::fprintf(stderr, "[STORE-WATCH] store of 0x%08X to 0x%08X\n", val, addr);
+    if ((addr & 0xF) == 4 && n < 400) psp_print_host_backtrace("store-watch");
+}

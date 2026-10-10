@@ -152,7 +152,18 @@ inline void psp_mem_write(uint8_t* rdram, uint32_t addr, T val) {
 #define MEM_HU(rdram, addr) psp_mem_read<uint16_t>(rdram, addr)
 #define MEM_W(rdram, addr)  psp_mem_read<int32_t>(rdram, addr)
 #define MEM_WU(rdram, addr) psp_mem_read<uint32_t>(rdram, addr)
-#define MEM_W_WRITE(rdram, addr, val) psp_mem_write<int32_t>(rdram, addr, val)
+// Store watch (diagnostics, PSPRECOMP_STORE_WATCH=<hex value>): every 32-bit
+// guest store of that exact value reports its address and guest backtrace.
+// 0 = off; the check is one compare on a value already in a register.
+extern uint32_t g_psp_store_watch;
+void psp_store_watch_hit(uint32_t addr, uint32_t val);
+inline void psp_mem_write_w(uint8_t* rdram, uint32_t addr, int32_t val) {
+    if (__builtin_expect(g_psp_store_watch != 0 && (uint32_t)val == g_psp_store_watch, 0)) {
+        psp_store_watch_hit(addr, (uint32_t)val);
+    }
+    psp_mem_write<int32_t>(rdram, addr, val);
+}
+#define MEM_W_WRITE(rdram, addr, val) psp_mem_write_w(rdram, addr, (int32_t)(val))
 #define MEM_H_WRITE(rdram, addr, val) psp_mem_write<int16_t>(rdram, addr, val)
 #define MEM_B_WRITE(rdram, addr, val) psp_mem_write<int8_t>(rdram, addr, val)
 
