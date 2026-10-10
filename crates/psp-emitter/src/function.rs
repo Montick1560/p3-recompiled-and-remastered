@@ -444,6 +444,13 @@ pub fn emit_function(func: &DecodedFunction, gen: &mut dyn Generator, imports: &
         // label so the mid-entry / internal gotos may legally cross them.
         gen.emit_raw("uint32_t _ra_saved;");
         gen.emit_raw("bool _ra_active;");
+        // Saved/restored at every EXIT `jr ra` so the function never leaks an
+        // internal link to its C++ caller. Set before the mid-entry dispatch
+        // below: a mid-entry jumps past everything after it, and its `jr ra`
+        // must see defined link state (an absorbed vtable setter otherwise
+        // dispatched on garbage and overwrote a widget vtable).
+        gen.emit_raw("_ra_saved = (uint32_t)ctx->r[31];");
+        gen.emit_raw("_ra_active = false;");
     }
 
     // Mid-entry dispatch (faithful, re-entrant — see 19H).
@@ -479,19 +486,6 @@ pub fn emit_function(func: &DecodedFunction, gen: &mut dyn Generator, imports: &
         gen.emit_raw("        default: break;");
         gen.emit_raw("    }");
         gen.emit_raw("}");
-    }
-
-    // For a self-contained RA-modeled function, save the incoming `ctx->r[31]`
-    // and restore it at every EXIT `jr ra`. This makes the function transparent
-    // to its external C++ caller's link register: it never leaks its own internal
-    // link-return to the outside, so a later RA-modeled function cannot observe a
-    // stale internal link from THIS one and mis-dispatch its INTERNAL `jr ra`
-    // switch by a coincidental case match. This assignment (separate from the
-    // declaration above) may be legally crossed by a mid-entry / internal goto;
-    // EXIT restore is emitted by `emit_coalesced_link_ra` / the switch default.
-    if ra_ctx.is_some() {
-        gen.emit_raw("_ra_saved = (uint32_t)ctx->r[31];");
-        gen.emit_raw("_ra_active = false;");
     }
 
     // A function with NO `jr ra` whose terminal op is an EXTERNAL `jal` is a
@@ -2524,6 +2518,32 @@ mod tests {
         let rc = build_ra_ctx(&seq, start, start + 0x40);
         // jal at idx 0 -> 0x08804004 ; bltzal at idx 2 -> 0x0880400C
         assert_eq!(rc.link_returns, vec![0x08804004, 0x0880400C]);
+    }
+
+    #[test]
+    fn coalesced_ra_state_initialized_before_mid_entry_dispatch() {
+        // A mid-entry into an RA-modeled owner (FUN_089669D8's absorbed setter
+        // at 0x08966ACC) jumps past everything after the entry switch: the
+        // link state must already be set, or its `jr ra` dispatches on garbage.
+        let ops = vec![
+            MipsOp::Jal { target: 0x08804010 },          // 0x4000 internal
+            MipsOp::Jal { target: 0x08804014 },          // 0x4004 internal
+            MipsOp::Lw { rt: Reg::Gpr(31), rs: Reg::Gpr(29), offset: 0x10 }, // 0x4008
+            MipsOp::Addiu { rt: Reg::Gpr(29), rs: Reg::Gpr(29), imm: 16 },   // 0x400C
+            MipsOp::Jr { rs: Reg::Gpr(31) },             // 0x4010 EXIT
+            MipsOp::Jr { rs: Reg::Gpr(31) },             // 0x4014 INTERNAL / mid-entry
+        ];
+        let mut func = make_func(ops);
+        func.size = 0x18;
+        func.coalesced = true;
+        func.is_mid_entry_parent = true;
+        func.mid_entry_addrs = vec![0x08804014];
+        let mut gen = TestGenerator::new();
+        emit_function(&func, &mut gen, &ImportMap::new());
+        let out = gen.output.join("\n");
+        let init = out.find("_ra_active = false;").expect("RA state init");
+        let dispatch = out.find("switch (_ep)").expect("mid-entry dispatch");
+        assert!(init < dispatch, "RA state must be set before the mid-entry switch:\n{out}");
     }
 
     #[test]
