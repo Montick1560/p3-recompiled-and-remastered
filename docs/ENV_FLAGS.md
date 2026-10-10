@@ -150,6 +150,17 @@ Read by the runtime binary at start-up or during execution.
 - **Set it when:** a texture (e.g. a movie frame from `sceMpegAvcCsc`) is
   written but never appears on screen.
 
+### `PSPRECOMP_TEX_FILTER`
+- **Read in:** `runtime/src/psp_ge_texture.cpp`
+- **Type:** env (string: `auto`, `nearest`, `linear`).
+- **Default:** `auto`.
+- **Effect:** `auto` follows the game's `TEXFILTER` bits (bit 0 minify, bit 8
+  magnify). `nearest` forces both filters off, `linear` forces both on; the
+  `TEXWRAP` (U/V clamp vs repeat) choice is never overridden. An unrecognised
+  value is treated as `auto`.
+- **Set it when:** comparing against old nearest-only screenshots or PPSSPP's
+  forced filter modes.
+
 ### `PSPRECOMP_SAVEDATA`
 - **Read in:** `runtime/src/hle/psp_savedata.cpp` (`default_root()`; used by the
   `sceUtilitySavedata*` handlers in `runtime/src/hle/psp_hle_utility.cpp`)

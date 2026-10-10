@@ -1,5 +1,6 @@
 #include "psp_ge_texture.h"
 #include "psp_ge.h"
+#include "psp_ge_sampler.h"
 #include "psp_ge_texdecode.h"
 #include "psp_ge_constants.h"
 #include "psp_memory.h"
@@ -63,6 +64,27 @@ static int find_or_evict(
     }
     evict.valid = false;
     return best_slot;
+}
+
+// ---- Sampler ----
+
+/// Set the GL_TEXTURE_2D sampler from the draw's TEXFILTER / TEXWRAP. The same
+/// cached texture can be drawn with different registers, so this runs on every
+/// bind. PSPRECOMP_TEX_FILTER=nearest|linear overrides the filter bits; wrap is
+/// always taken from the registers.
+static void apply_sampler(const GeState& state) {
+    static const GeFilterOverride ov = ge_filter_override_parse(
+        std::getenv("PSPRECOMP_TEX_FILTER"));
+    const GeSampler s =
+        ge_sampler_from_regs(state.tex_filter, state.tex_wrap, ov);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                    s.min_linear ? GL_LINEAR : GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+                    s.mag_linear ? GL_LINEAR : GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,
+                    s.clamp_s ? GL_CLAMP_TO_EDGE : GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,
+                    s.clamp_t ? GL_CLAMP_TO_EDGE : GL_REPEAT);
 }
 
 // ---- Public API ----
@@ -189,6 +211,7 @@ GLuint ge_texture_bind(
         // Cache hit
         entry.last_frame = frame_num;
         glBindTexture(GL_TEXTURE_2D, entry.gl_tex);
+        apply_sampler(state);
         return entry.gl_tex;
     }
 
@@ -214,18 +237,7 @@ GLuint ge_texture_bind(
         width, height, 0,
         GL_RGBA, GL_UNSIGNED_BYTE,
         rgba.data());
-    glTexParameteri(
-        GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
-        GL_NEAREST);
-    glTexParameteri(
-        GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
-        GL_NEAREST);
-    glTexParameteri(
-        GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,
-        GL_CLAMP_TO_EDGE);
-    glTexParameteri(
-        GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,
-        GL_CLAMP_TO_EDGE);
+    apply_sampler(state);
 
     // Store entry
     entry.psp_addr = psp_addr;

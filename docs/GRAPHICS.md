@@ -316,8 +316,10 @@ swizzle, width×height) and, for CLUT formats, the first 1024 palette bytes. On 
    evicted and its GL texture deleted; the texture is then decoded and uploaded with
    `glTexImage2D(GL_RGBA8, ...)`.
 
-Sampler state is fixed: `GL_NEAREST` min/mag filter and `GL_CLAMP_TO_EDGE` wrap, regardless of
-the game's `TEXFILTER`/`TEXWRAP` registers (which are stored but unused). The palette contents
+The sampler follows `TEXFILTER` (bit 0 minify, bit 8 magnify; mipmap
+bits ignored, only level 0 is uploaded) and `TEXWRAP` (bit 0 / bit 8 = clamp U / V,
+else repeat), like PPSSPP's default; `PSPRECOMP_TEX_FILTER=nearest|linear` overrides
+the filters. The palette contents
 *are* part of the cache key for CLUT formats, so a palette swap over identical texel data forces
 a re-decode.
 
@@ -481,7 +483,6 @@ consequence of each. "Tracked" means the register value is stored in `GeState`.
 | `BJUMP` (bounding-box conditional jump) | treated as a no-op — never jumps | conservative: everything is processed, minor overdraw |
 | DXT1/3/5 textures | `ge_decode_texture` returns false → opaque magenta | compressed textures are visually loud |
 | Mipmaps (levels 1–7) | only `TEXADDR0`/`TEXSIZE0` used (`TEXLEVEL` ignored) | no minification chain; just level 0 with NEAREST |
-| `TEXFILTER` / `TEXWRAP` | tracked, sampler fixed at NEAREST + CLAMP_TO_EDGE | no bilinear filtering, no UV repeat/mirror |
 | Stencil (`STENCILTEST`/`STENCILOP`) | tracked, no GL stencil calls; the clear's stencil bit is a no-op | stencil-masked effects missing; the FBO has no stencil attachment |
 | Region (`REGION1`/`REGION2`) | tracked, never applied | region clipping missing (scissor *is* applied) |
 | Color test, logic op, dither | ignored | corresponding per-fragment effects missing |

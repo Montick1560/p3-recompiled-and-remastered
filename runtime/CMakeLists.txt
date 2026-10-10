@@ -137,6 +137,7 @@ set(RUNTIME_SOURCES
     src/psp_event_loop.cpp
     src/psp_ge.cpp
     src/psp_ge_transfer.cpp
+    src/psp_ge_sampler.cpp
     src/psp_ge_vertex.cpp
     src/psp_ge_lighting.cpp
     src/psp_ge_texture.cpp
@@ -517,6 +518,12 @@ add_executable(test_ge_transfer tests/test_ge_transfer.cpp src/psp_ge_transfer.c
 target_include_directories(test_ge_transfer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_ge_transfer PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME ge_transfer_tests COMMAND test_ge_transfer)
+
+# GE sampler choice (TEXFILTER / TEXWRAP -> GL filter and wrap).
+add_executable(test_ge_sampler tests/test_ge_sampler.cpp src/psp_ge_sampler.cpp)
+target_include_directories(test_ge_sampler PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_ge_sampler PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME ge_sampler_tests COMMAND test_ge_sampler)
 
 add_executable(test_vblank_clock tests/test_vblank_clock.cpp)
 
