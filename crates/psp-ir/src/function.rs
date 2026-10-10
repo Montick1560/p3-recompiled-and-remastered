@@ -44,4 +44,8 @@ pub struct DecodedFunction {
     /// target (a function start or a mid-entry), so falling off the end can
     /// dispatch there instead of reconstructing a terminal-jal epilogue.
     pub fall_through_dispatchable: bool,
+    /// Static `jal` targets called from this function whose code edits `$ra`
+    /// before returning (code caves that return elsewhere). The emitter sets
+    /// `ctx->r[31]` before those calls and continues at the edited address.
+    pub ra_adjust_calls: Vec<u32>,
 }
