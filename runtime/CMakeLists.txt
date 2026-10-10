@@ -138,6 +138,7 @@ set(RUNTIME_SOURCES
     src/psp_ge.cpp
     src/psp_ge_transfer.cpp
     src/psp_present.cpp
+    src/psp_fpu.cpp
     src/psp_ge_sampler.cpp
     src/psp_ge_vertex.cpp
     src/psp_ge_lighting.cpp
@@ -525,6 +526,12 @@ add_executable(test_present tests/test_present.cpp src/psp_present.cpp)
 target_include_directories(test_present PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_present PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME present_tests COMMAND test_present)
+
+# Host FPU mode from FCR31 (flush-to-zero).
+add_executable(test_fpu tests/test_fpu.cpp src/psp_fpu.cpp)
+target_include_directories(test_fpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_fpu PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME fpu_tests COMMAND test_fpu)
 
 # GE sampler choice (TEXFILTER / TEXWRAP -> GL filter and wrap).
 add_executable(test_ge_sampler tests/test_ge_sampler.cpp src/psp_ge_sampler.cpp)

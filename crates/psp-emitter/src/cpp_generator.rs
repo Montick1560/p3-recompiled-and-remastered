@@ -157,6 +157,9 @@ inline void psp_mem_write(uint8_t* rdram, uint32_t addr, T val) {
 // 0 = off; the check is one compare on a value already in a register.
 extern uint32_t g_psp_store_watch;
 void psp_store_watch_hit(uint32_t addr, uint32_t val);
+// FCR31 written by `ctc1`: applies the FS (flush-to-zero, bit 24) mode to the
+// host FPU of the calling thread, as the Allegrex FPU flushes denormal results.
+void psp_fpu_apply_fcr31(uint32_t fcr31);
 inline void psp_mem_write_w(uint8_t* rdram, uint32_t addr, int32_t val) {
     if (__builtin_expect(g_psp_store_watch != 0 && (uint32_t)val == g_psp_store_watch, 0)) {
         psp_store_watch_hit(addr, (uint32_t)val);

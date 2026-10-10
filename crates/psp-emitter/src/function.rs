@@ -1896,6 +1896,8 @@ fn emit_op(
             if *fs == 31 {
                 gen.emit_raw(&format!("ctx->fcr31 = (uint32_t)({rt_s}) & 0x0181FFFFu;"));
                 gen.emit_fpu_cc_write(&format!("(((uint32_t)({rt_s}) >> 23) & 1u) != 0"));
+                // FS bit (24): flush denormal results to zero on the host FPU too.
+                gen.emit_raw("psp_fpu_apply_fcr31(ctx->fcr31);");
             }
         }
         MipsOp::Lwc1 { ft, rs, offset } => {
@@ -2136,6 +2138,7 @@ mod tests {
         let ctc = emit_one(MipsOp::Ctc1 { rt: Reg::Gpr(2), fs: 31 });
         assert!(ctc.contains("fcr31"), "{ctc}");
         assert!(ctc.contains("fpu_cc"), "{ctc}");
+        assert!(ctc.contains("psp_fpu_apply_fcr31(ctx->fcr31);"), "{ctc}");
     }
 
     #[test]
