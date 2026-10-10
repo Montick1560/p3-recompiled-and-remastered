@@ -413,6 +413,10 @@ fn emit_internal_ra_switch(gen: &mut dyn Generator, link_returns: &[u32]) {
 /// * `func`    - Decoded function with basic blocks and metadata.
 /// * `gen`     - Generator to receive emission calls.
 /// * `imports` - HLE import map: vaddr → stub name.
+/// Largest forward return-address skip honoured after a call to an
+/// ra-adjusting callee (the DxD caves skip 4..0xB0 bytes).
+const RA_REDIRECT_MAX_SKIP: u32 = 0x100;
+
 pub fn emit_function(func: &DecodedFunction, gen: &mut dyn Generator, imports: &ImportMap) {
     gen.emit_function_start(&func.cpp_name, func.vaddr);
     let func_end = func.vaddr.saturating_add(func.size);
@@ -501,7 +505,7 @@ pub fn emit_function(func: &DecodedFunction, gen: &mut dyn Generator, imports: &
     // Reconstruction is only the fallback when the continuation is not a
     // dispatch target.
     let mut epilogue_reconstructed = false;
-    let mut ra_redirect_used = false;
+    let mut ra_redirect_sites: Vec<u32> = Vec::new();
     let mut ra_redirect_labels: Vec<u32> = Vec::new();
 
     for block in &func.blocks {
@@ -601,9 +605,9 @@ pub fn emit_function(func: &DecodedFunction, gen: &mut dyn Generator, imports: &
                     ));
                     gen.emit_call_lookup(*target);
                     gen.emit_raw(&format!(
-                        "if ((uint32_t)ctx->r[31] != 0x{ret:08X}u) goto L_RA_REDIRECT;"
+                        "if ((uint32_t)ctx->r[31] != 0x{ret:08X}u) goto L_RA_REDIRECT_{ret:08X};"
                     ));
-                    ra_redirect_used = true;
+                    ra_redirect_sites.push(ret);
                 } else {
                     emit_op(&instrs[i], gen, imports, func.vaddr, func_end);
                 }
@@ -653,19 +657,27 @@ pub fn emit_function(func: &DecodedFunction, gen: &mut dyn Generator, imports: &
         gen.emit_return();
     }
 
-    if ra_redirect_used {
+    // Return-address redirects (DxD code caves end `addiu ra,ra,N; jr ra` to
+    // skip N bytes of their caller). Only a SHORT FORWARD skip inside this
+    // function is honoured; any other edited `ra` (the mod's anti-tamper
+    // checks deliberately load garbage such as `sp - 0x4321` or `ra + 0x1337`)
+    // continues at the normal return address, as before this mechanism.
+    if !ra_redirect_sites.is_empty() {
         ra_redirect_labels.sort_unstable();
         ra_redirect_labels.dedup();
         gen.emit_return();
-        gen.emit_label("L_RA_REDIRECT");
-        gen.emit_raw("switch ((uint32_t)ctx->r[31]) {");
-        for addr in &ra_redirect_labels {
-            gen.emit_raw(&format!("    case 0x{addr:08X}u: goto L_{addr:08X};"));
+        for ret in &ra_redirect_sites {
+            gen.emit_label(&format!("L_RA_REDIRECT_{ret:08X}"));
+            gen.emit_raw("switch ((uint32_t)ctx->r[31]) {");
+            for addr in ra_redirect_labels
+                .iter()
+                .filter(|a| **a > *ret && **a - *ret <= RA_REDIRECT_MAX_SKIP)
+            {
+                gen.emit_raw(&format!("    case 0x{addr:08X}u: goto L_{addr:08X};"));
+            }
+            gen.emit_raw(&format!("    default: goto L_{ret:08X};"));
+            gen.emit_raw("}");
         }
-        gen.emit_raw(
-            "    default: RECOMP_LOOKUP((uint32_t)ctx->r[31])(rdram, ctx); return;",
-        );
-        gen.emit_raw("}");
     }
 
     gen.emit_function_end();
@@ -3106,11 +3118,10 @@ mod tests {
         let needles = [
             "ctx->r[31] = (int32_t)0x08804008u;",
             "CALL_LOOKUP:0x08A53424",
-            "if ((uint32_t)ctx->r[31] != 0x08804008u) goto L_RA_REDIRECT;",
-            "LABEL:L_RA_REDIRECT",
-            "case 0x08804008u: goto L_08804008;",
+            "if ((uint32_t)ctx->r[31] != 0x08804008u) goto L_RA_REDIRECT_08804008;",
+            "LABEL:L_RA_REDIRECT_08804008",
             "case 0x0880400Cu: goto L_0880400C;",
-            "default: RECOMP_LOOKUP((uint32_t)ctx->r[31])(rdram, ctx); return;",
+            "default: goto L_08804008;",
         ];
         let mut from = 0;
         for n in needles {
@@ -3119,6 +3130,25 @@ mod tests {
             });
             from += rel + n.len();
         }
+    }
+
+    #[test]
+    fn ra_redirect_ignores_backward_and_far_targets() {
+        // 70 ops: the call returns to 0x08804008; only labels in
+        // (ret, ret + 0x100] may be redirect targets.
+        let mut ops = vec![MipsOp::Nop {}, MipsOp::Jal { target: 0x08A53424 }];
+        ops.extend(std::iter::repeat_with(|| MipsOp::Nop {}).take(68));
+        let mut func = make_func(ops);
+        func.size = 70 * 4;
+        func.ra_adjust_calls = vec![0x08A53424];
+        let mut gen = TestGenerator::new();
+        emit_function(&func, &mut gen, &ImportMap::new());
+        let out = gen.output.join("\n");
+        assert!(out.contains("case 0x08804108u: goto L_08804108;"), "{out}"); // ret + 0x100
+        assert!(!out.contains("case 0x0880410Cu:"), "{out}"); // ret + 0x104: too far
+        assert!(!out.contains("case 0x08804000u:"), "{out}"); // backward
+        assert!(!out.contains("case 0x08804008u:"), "{out}"); // ret itself = default
+        assert!(!out.contains("RECOMP_LOOKUP((uint32_t)ctx->r[31])"), "{out}");
     }
 
     #[test]
