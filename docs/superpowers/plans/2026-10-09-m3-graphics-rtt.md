@@ -396,7 +396,16 @@ After this plan, ask the user for three more side-by-side pairs (PPSSPP vs runti
 1. **M3a+ (small, right after RTT):** honour `TEXFILTER` (bilinear) and `TEXWRAP` (repeat/clamp). Both are stored but ignored today; the sampler is fixed at NEAREST + CLAMP. Also make the window resizable, add fullscreen, and offer a linear present filter. The user compares against PPSSPP, which renders at window resolution with bilinear filtering, so part of the "looks worse" impression comes from these.
 2. **M3b internal resolution (2x–4x, configurable, default from config):** scale the FBOs, viewport (`ge_compute_viewport_depth`), scissor, RTT blit rects, clears and screenshot readback. Watch for atlas seams on 2D sprites (PPSSPP has texture-coordinate snapping for this) and keep scale 1 for oracle diffs.
 3. **Remaining graphics bugs** from the user's next screenshot pairs, all written scale-aware.
-4. **Late, optional, HD textures:**
-   - Mechanism: dump decoded textures plus a replacement lookup keyed by the texture-cache hash. Prefer PPSSPP's `textures.ini` + hash format so a pack works in both.
-   - Content: no Patapon 3 pack is known to exist, so it would mean AI-upscaling dumped textures. That is a large content job and needs care with alpha edges, CLUT variants and the DxD mod's own textures.
+4. **HD textures, using an existing pack (found by the user 2026-10-09):**
+   - The pack is <https://github.com/Lin-zl522/Patapon-3-HD-Texture-Pack> (claims about 99% coverage, over 70% hand-remastered, AI upscaling by efonte). It lists `INFN00001` (the DxD mod, our build) as supported. The files are PNGs named by a 24-hex key in `textures.ini`, and its options are `hash = xxh64`, `ignoreAddress = True`, `ignoreMipmap = True`, `reduceHash = True`.
+   - The work is a PPSSPP-compatible loader, so the content already exists. Port from `DECO/tools/ppsspp-src/GPU/Common/TextureReplacer.cpp`:
+     - `ComputeHash`: XXH64 seed `0xBACD7814` truncated to u32; reduceHash factor 0.5 unless `[reducehashranges]`; row-wise hash when `bufw > w`; the `h == 512` maxSeenV rule.
+     - The `%016llx%08x` key: the cache key `(addr << 32) | dim`, xor `cluthash ^ clutformat` for CLUT formats, with the address zeroed when `ignoreAddress` is set.
+     - `TextureCacheCommon::UpdateCurrentClut`, for the CLUT hash.
+     - INI `[options]`/`[hashes]`/`[hashranges]`/`[filtering]`/`[ignore]`.
+     - PNG decode (stb_image), on demand, later in the background.
+   - The UVs are normalised, so larger replacements need no UV change.
+   - Gate: dump the hashes the runtime computes on a UI screen and check that most of them appear in the pack's `textures.ini` before writing the loader.
+   - The pack is useful only with M3a+ (bilinear) and M3b (resolution); at 480x272 the HD art is downsampled.
+   - The pack's licence is not stated. Do not vendor it: the user installs it in a folder the runtime reads (e.g. `PSPRECOMP_TEXTURES`). Add the pack's contributors to the README credits when the loader lands.
    - Textures sampled from render targets cannot be replaced.
