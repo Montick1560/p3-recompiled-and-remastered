@@ -243,6 +243,79 @@ pub fn decode_function(
     reorder_delay_slots(&raw_ops, base_vaddr, func_end)
 }
 
+/// Length in bytes of the prefix of `bytes` that holds every instruction the
+/// control flow can reach from `base_vaddr` and the extra `roots` (mid-entries),
+/// or `None` when a reachable word does not decode or reachability is unknown.
+///
+/// Lets a function whose range runs past its code into data (a mod code cave
+/// followed by encrypted bytes) be cut to its code instead of becoming an
+/// empty stub. Conservative: an indirect `jr` other than `jr $ra` (a possible
+/// switch whose cases follow it) gives `None`.
+pub fn reachable_len(bytes: &[u8], base_vaddr: u32, roots: &[u32]) -> Option<usize> {
+    if bytes.len() % 4 != 0 || bytes.is_empty() {
+        return None;
+    }
+    let end = base_vaddr + bytes.len() as u32;
+    let in_range = |a: u32| a >= base_vaddr && a < end && a % 4 == 0;
+    let decode_at = |a: u32| {
+        let i = (a - base_vaddr) as usize;
+        let w = u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
+        decode_word(w, a).ok()
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut work: Vec<u32> = std::iter::once(base_vaddr)
+        .chain(roots.iter().copied().filter(|&r| in_range(r)))
+        .collect();
+    let mut last = base_vaddr;
+    while let Some(pc) = work.pop() {
+        if !in_range(pc) || !seen.insert(pc) {
+            continue;
+        }
+        let op = decode_at(pc)?;
+        last = last.max(pc);
+        if !is_branch_or_jump(&op) {
+            work.push(pc + 4);
+            continue;
+        }
+        // The delay slot executes (or is skipped, for a not-taken likely
+        // branch) but it never redirects control flow itself.
+        let slot = pc + 4;
+        if !in_range(slot) {
+            return None;
+        }
+        decode_at(slot)?;
+        last = last.max(slot);
+        let (target, falls_through) = match op {
+            MipsOp::J { target } => (Some(target), false),
+            MipsOp::Jr { rs } if rs == Reg::Gpr(31) => (None, false),
+            MipsOp::Jr { .. } | MipsOp::JumpTable { .. } => return None,
+            MipsOp::Jal { .. } | MipsOp::Jalr { .. } => (None, true),
+            MipsOp::Beq { rs: Reg::Zero, rt: Reg::Zero, target, .. }
+            | MipsOp::Bgez { rs: Reg::Zero, target, .. } => (Some(target), false),
+            MipsOp::Beq { target, .. }
+            | MipsOp::Bne { target, .. }
+            | MipsOp::Blez { target, .. }
+            | MipsOp::Bgtz { target, .. }
+            | MipsOp::Bltz { target, .. }
+            | MipsOp::Bgez { target, .. }
+            | MipsOp::Bltzal { target, .. }
+            | MipsOp::Bgezal { target, .. }
+            | MipsOp::Bc1t { target, .. }
+            | MipsOp::Bc1f { target, .. }
+            | MipsOp::VfpuBvf { target, .. }
+            | MipsOp::VfpuBvt { target, .. } => (Some(target), true),
+            _ => return None,
+        };
+        if let Some(t) = target {
+            work.push(t);
+        }
+        if falls_through {
+            work.push(pc + 8);
+        }
+    }
+    Some((last - base_vaddr + 4) as usize)
+}
+
 /// Collect every in-function static control-flow target: conditional branch
 /// targets, `j`/`jal` targets, and resolved jump-table cases, restricted to
 /// `[func_start, func_end)`. Used for branch-into-delay-slot (BIDS, issue #56)

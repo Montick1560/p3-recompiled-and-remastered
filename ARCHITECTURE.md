@@ -278,7 +278,10 @@ These are load-bearing; violating them causes real bugs.
    start function is named `entry`.
 8. Float registers are written as `ctx->f[N]` (array notation); the `f[]`/`fi[]` union keeps
    integer and float views coherent.
-9. Decode errors emit empty stubs with error comments rather than aborting the pipeline.
+9. Decode errors emit empty stubs with error comments rather than aborting the pipeline. Before
+   stubbing, a function whose undecodable words are unreachable from its entry and mid-entries
+   (code followed by data, e.g. a mod code cave) is cut to its reachable prefix
+   (`psp_decoder::reachable_len`); an indirect `jr` other than `jr $ra` disables the cut.
 10. Optimizer passes stay disabled until the project's correctness bar is met.
 11. `PSPRECOMP_CROSS_MID=1` enables cross-function mid-jump injection in the recompiler
     (`crates/psp-cli/src/recompile.rs`); the project's standard workflow sets it for both the

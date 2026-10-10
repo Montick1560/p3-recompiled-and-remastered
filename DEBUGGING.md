@@ -243,7 +243,8 @@ the socket for scripted/agent input.
 - `PSPRECOMP_FUNC_WATCH=<hex>[,<hex>...]`: log each entry of those guest functions with the caller
   (previous checkpoint), first 200 hits each.
 - `PSPRECOMP_FUNC_ARGS=<hex>[,<hex>...]` (max 8): wrap those functions in the dispatch table and log
-  a0-a3 and v0 per call (first 400). Only calls that go through RECOMP_LOOKUP are seen.
+  a0-a3 and v0 per call (first 400, `PSPRECOMP_FUNC_ARGS_MAX` overrides). Only calls that go through RECOMP_LOOKUP are seen.
+- `PSPRECOMP_FUNC_ARGS_MAX=<n>`: per-function log budget of `PSPRECOMP_FUNC_ARGS` (default 400).
 - `PSPRECOMP_FUNC_ARGS_DUMP=<bytes>`: with `PSPRECOMP_FUNC_ARGS`, also hex-dump that many bytes of
   guest memory at v0 after each logged call (catches a returned block before it is reused).
 
@@ -806,6 +807,10 @@ doc-comment that drifts.
 4. `decode_errors`: cluster the addresses. A contiguous run of entries with ASCII-looking
    words (e.g. `0x44555453` = "STUD") is data misdetected as code by heuristic discovery —
    harmless stubs. A decode error in a *Ghidra-sourced* function is a real decoder gap.
+   Functions whose bad words are unreachable from the entry are no longer listed: they are cut
+   to their reachable code (`reachable_len`). Patapon 3 DxD: the label-op cave 0x08BC428C
+   (`jr ra; lw s0,16(s0)` then encrypted bytes) was a stub, the caller then wrote a menu entry
+   over a script handler object and the SQUARE settings menu froze.
 5. `dispatch_audit.missing_targets`: targets **inside** the loaded segment range are real —
    each is a guaranteed LOOKUP_MISS if reached (cross-check against runtime LOOKUP_MISS
    logs). Targets outside the segment range are artifacts of data words misdecoded as `j`

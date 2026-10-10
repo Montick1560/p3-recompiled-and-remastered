@@ -63,7 +63,7 @@ These decisions are accumulated from 18+ completed plans. Violating them causes 
 - Mid-entry dispatch: wrapper sets `ctx->entry_point`, parent switch dispatches to label, clears before goto
 - Branch/jump IR stores absolute u32 target addresses (not raw offsets)
 - Cross-function branches use `RECOMP_LOOKUP` (not goto -- C++ goto cannot cross function boundaries)
-- Decode errors produce empty stubs with error comments (not propagate)
+- Decode errors produce empty stubs with error comments (not propagate); unreachable undecodable tails are cut first (`reachable_len`)
 - Deduplicated function names use `_ADDR` hex suffix for ODR safety
 - JAL fallback uses `FUN_` prefix (Ghidra convention); module start is named "entry" (not FUN_089ACCD0)
 - `ctx->f[N]` array notation for float registers (not `ctx->fN.fl`)

@@ -2054,7 +2054,28 @@ pub fn decode_and_emit_function_with_name(
     let mut patched = raw_bytes.to_vec();
     apply_patches(&mut patched, func_vaddr, &config.patches);
 
-    let ops = match psp_decoder::decode_function(&patched, func_vaddr, data_xrefs) {
+    // A range that runs past the function's code into data (a mod code cave
+    // followed by encrypted bytes) is cut to what its control flow reaches
+    // from the entry and its mid-entries, instead of becoming a stub.
+    let decoded = match psp_decoder::decode_function(&patched, func_vaddr, data_xrefs) {
+        Err(psp_decoder::DecodeError::Unknown(..)) => {
+            let roots = mid_entry_addr_map.get(&func_vaddr).map(Vec::as_slice).unwrap_or(&[]);
+            match psp_decoder::reachable_len(&patched, func_vaddr, roots) {
+                Some(len) if len < patched.len() => {
+                    tracing::info!(
+                        "{} @ 0x{:08X}: cut to its 0x{len:X} reachable bytes (data follows)",
+                        func.name,
+                        func_vaddr
+                    );
+                    patched.truncate(len);
+                    psp_decoder::decode_function(&patched, func_vaddr, data_xrefs)
+                }
+                _ => psp_decoder::decode_function(&patched, func_vaddr, data_xrefs),
+            }
+        }
+        other => other,
+    };
+    let ops = match decoded {
         Ok(ops) => ops,
         Err(e) => {
             tracing::warn!("Decode error in {} @ 0x{:08X}: {e}", func.name, func_vaddr);
@@ -2953,6 +2974,15 @@ mod tests {
         let err = diag.decode_error.expect("decoder must report an error");
         assert!(cpp.contains("decode error"), "stub body must carry the error comment");
         assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn unreachable_undecodable_tail_is_cut_not_stubbed() {
+        // DxD cave shape: `jr ra; lw s0,16(s0)` then data that does not decode.
+        let (cpp, diag) = emit_with_words(&[0x03E0_0008, 0x8E10_0010, 0x9F60_ED6D]);
+        assert!(diag.decode_error.is_none(), "{:?}", diag.decode_error);
+        assert!(!cpp.contains("decode error"), "{cpp}");
+        assert!(cpp.contains("ctx->r[16]"), "the s0 load must be emitted: {cpp}");
     }
 
     #[test]
