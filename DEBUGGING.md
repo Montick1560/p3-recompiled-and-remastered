@@ -740,6 +740,9 @@ address-keyed hooks, compiled in via the CMake cache var `PSPRECOMP_GAME` (defau
 
 Debugging handles:
 
+- **Game controllers**: `[RT] controller connected: <name>` / `[RT] controller disconnected (id N)`
+  log hotplug; `[RT] game controllers unavailable: <SDL error>` means keyboard-only. Pad buttons
+  (`g_pad_buttons`) and the left stick (`g_pad_analog`) are ORed into every sceCtrl sample.
 - **Boot banner**: `[RT] game module: <id>` is the second log line; a
   `game-module mismatch` WARNING means the compiled-in module id differs from the
   output dir's manifest id (`RECOMP_GAME_ID`) — wrong-game hooks silently corrupt, so

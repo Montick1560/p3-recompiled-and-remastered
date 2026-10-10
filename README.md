@@ -235,6 +235,18 @@ windows and fullscreen. `PSPRECOMP_TEXTURES=<dir>` loads a PPSSPP-format texture
 pack (`textures.ini` + PNGs, `xxh64`/`xxh32` hashes) from that folder; packs are not part of
 this repository.
 
+Input: keyboard (arrows = D-pad, X/Enter = CROSS, Z = CIRCLE, A = SQUARE, S = TRIANGLE,
+Q/W = L/R, Space = START, Tab = SELECT) and any SDL game controller (XInput-style layout,
+hot-pluggable; keyboard and pads can be used together):
+
+| Controller | PSP |
+|------------|-----|
+| A / B / X / Y (bottom / right / left / top) | CROSS / CIRCLE / SQUARE / TRIANGLE |
+| LB or LT / RB or RT | L / R |
+| Start / Back | START / SELECT |
+| D-pad | D-pad |
+| Left stick | analog stick (dead zone 8000 of 32767) |
+
 ### Prerequisites
 
 Build toolchain (macOS / Homebrew):

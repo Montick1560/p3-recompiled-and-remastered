@@ -4,6 +4,7 @@
 #include "psp_scheduler.h"
 #include "psp_ge_draw.h"
 #include "psp_present.h"
+#include "psp_pad.h"
 
 #include <SDL.h>
 #include <glad/glad.h>
@@ -13,6 +14,7 @@
 #include <cstring>
 #include <atomic>
 #include <chrono>
+#include <map>
 #include <thread>
 
 // --- Global state definitions (declared extern in psp_runtime.h) ---
@@ -20,6 +22,8 @@ std::atomic<bool> g_should_exit{false};
 std::atomic<int>  g_alive_threads{0};
 std::thread::id   g_main_thread_id;
 std::atomic<uint32_t> g_host_buttons{0};
+std::atomic<uint32_t> g_pad_buttons{0};
+std::atomic<uint16_t> g_pad_analog{0x8080};
 
 // ---------------------------------------------------------------------------
 // Keyboard -> PSP button mapping
@@ -57,8 +61,87 @@ static void toggle_fullscreen() {
     SDL_SetWindowFullscreen(g_window, full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
 }
 
-// Handle one SDL event: window close + keyboard button state.
+// --- Game controllers (SDL GameController API) ---
+// Keyed by joystick instance id (what button/axis/removed events carry).
+static PadSet g_pads;
+static std::map<SDL_JoystickID, SDL_GameController*> g_controllers;
+static constexpr int kStickDeadzone = 8000;
+
+static void publish_pads() {
+    g_pad_buttons.store(g_pads.buttons(), std::memory_order_relaxed);
+    g_pad_analog.store(static_cast<uint16_t>(g_pads.analog_x() | (g_pads.analog_y() << 8)),
+                       std::memory_order_relaxed);
+}
+
+// Returns true when the event was a controller event.
+static bool handle_controller_event(const SDL_Event& ev) {
+    switch (ev.type) {
+    case SDL_CONTROLLERDEVICEADDED: {
+        SDL_GameController* c = SDL_GameControllerOpen(ev.cdevice.which);
+        if (!c) {
+            std::fprintf(stderr, "[RT] controller open failed: %s\n", SDL_GetError());
+            return true;
+        }
+        const SDL_JoystickID id = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(c));
+        if (g_controllers.count(id)) {  // already open (startup + hotplug event)
+            SDL_GameControllerClose(c);
+            return true;
+        }
+        g_controllers[id] = c;
+        const char* name = SDL_GameControllerName(c);
+        std::fprintf(stderr, "[RT] controller connected: %s\n", name ? name : "(unnamed)");
+        return true;
+    }
+    case SDL_CONTROLLERDEVICEREMOVED: {
+        const SDL_JoystickID id = ev.cdevice.which;
+        g_pads.remove(id);
+        auto it = g_controllers.find(id);
+        if (it != g_controllers.end()) {
+            SDL_GameControllerClose(it->second);
+            g_controllers.erase(it);
+        }
+        std::fprintf(stderr, "[RT] controller disconnected (id %d)\n", static_cast<int>(id));
+        publish_pads();
+        return true;
+    }
+    case SDL_CONTROLLERBUTTONDOWN:
+    case SDL_CONTROLLERBUTTONUP: {
+        const uint32_t mask = pad_button_to_psp(ev.cbutton.button);
+        if (mask) {
+            g_pads.set_button(ev.cbutton.which, mask, ev.type == SDL_CONTROLLERBUTTONDOWN);
+            publish_pads();
+        }
+        return true;
+    }
+    case SDL_CONTROLLERAXISMOTION: {
+        const SDL_JoystickID id = ev.caxis.which;
+        const int v = ev.caxis.value;
+        switch (ev.caxis.axis) {
+        case SDL_CONTROLLER_AXIS_TRIGGERLEFT:
+        case SDL_CONTROLLER_AXIS_TRIGGERRIGHT:
+            g_pads.set_trigger(id, ev.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT,
+                               pad_trigger_pressed(v));
+            break;
+        case SDL_CONTROLLER_AXIS_LEFTX:
+            g_pads.set_stick(id, pad_axis_to_psp(v, kStickDeadzone), g_pads.stick_y(id));
+            break;
+        case SDL_CONTROLLER_AXIS_LEFTY:
+            g_pads.set_stick(id, g_pads.stick_x(id), pad_axis_to_psp(v, kStickDeadzone));
+            break;
+        default:
+            return true;
+        }
+        publish_pads();
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+// Handle one SDL event: window close + keyboard button state + controllers.
 static void handle_sdl_event(const SDL_Event& ev) {
+    if (handle_controller_event(ev)) return;
     if (ev.type == SDL_QUIT) {
         g_should_exit.store(true);
     } else if (ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP) {
@@ -78,8 +161,8 @@ static void handle_sdl_event(const SDL_Event& ev) {
         }
     } else if (ev.type == SDL_WINDOWEVENT &&
                ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
-        // KEYUP is not delivered after focus loss; release everything
-        // so no button sticks.
+        // KEYUP is not delivered after focus loss; release every key so
+        // none sticks. Controllers keep delivering events without focus.
         g_host_buttons.store(0, std::memory_order_relaxed);
     }
 }
@@ -97,6 +180,11 @@ int psp_runtime_init_sdl() {
         std::fprintf(stderr,
             "[RT] SDL_Init failed: %s\n", SDL_GetError());
         return 1;
+    }
+    // 1b. Game controllers are optional: keyboard-only when unavailable.
+    //     Already-connected pads arrive as SDL_CONTROLLERDEVICEADDED events.
+    if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) {
+        std::fprintf(stderr, "[RT] game controllers unavailable: %s\n", SDL_GetError());
     }
 
     // 2. Set GL attributes: OpenGL 3.3 core profile, double-buffered
@@ -259,6 +347,10 @@ void psp_runtime_shutdown() {
 
     // 3. Final render queue drain
     render_queue_process();
+
+    // 3b. Close game controllers
+    for (auto& [id, c] : g_controllers) SDL_GameControllerClose(c);
+    g_controllers.clear();
 
     // 4. Destroy GL context
     if (g_gl_context) {

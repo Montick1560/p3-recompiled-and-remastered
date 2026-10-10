@@ -26,10 +26,11 @@ static void write_ctrl_data(
     psp_mem_write<uint32_t>(rdram, ptr,
         static_cast<uint32_t>(us & 0xFFFFFFFF));
 
-    // Buttons: host keyboard mask OR debug-socket injected mask
-    // (injected mask only while its deadline has not expired).
+    // Buttons: host keyboard mask OR game controllers OR debug-socket
+    // injected mask (injected mask only while its deadline has not expired).
     uint32_t buttons =
-        g_host_buttons.load(std::memory_order_relaxed);
+        g_host_buttons.load(std::memory_order_relaxed) |
+        g_pad_buttons.load(std::memory_order_relaxed);
     auto now_ms = std::chrono::duration_cast<
         std::chrono::milliseconds>(
             now.time_since_epoch()).count();
@@ -40,9 +41,10 @@ static void write_ctrl_data(
     }
     psp_mem_write<uint32_t>(rdram, ptr + 4, buttons);
 
-    // Analog stick: center (128, 128)
-    psp_mem_write<uint8_t>(rdram, ptr + 8, 128);
-    psp_mem_write<uint8_t>(rdram, ptr + 9, 128);
+    // Analog stick: game controller left stick (128, 128 = centre)
+    const uint16_t analog = g_pad_analog.load(std::memory_order_relaxed);
+    psp_mem_write<uint8_t>(rdram, ptr + 8, static_cast<uint8_t>(analog & 0xFF));
+    psp_mem_write<uint8_t>(rdram, ptr + 9, static_cast<uint8_t>(analog >> 8));
 
     // Reserved bytes: zero
     for (uint32_t i = 10; i < 16; i++) {
