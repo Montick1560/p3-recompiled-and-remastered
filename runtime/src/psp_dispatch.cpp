@@ -451,7 +451,12 @@ void psp_dispatch_trace_rearm() {
 }
 
 static void func_args_call(int slot, uint8_t* rdram, recomp_context* ctx) {
-    const bool log = g_func_args_calls[slot].fetch_add(1, std::memory_order_relaxed) < 400;
+    // PSPRECOMP_FUNC_ARGS_MAX=<n>: per-function log budget (default 400).
+    static const int budget = [] {
+        const char* e = std::getenv("PSPRECOMP_FUNC_ARGS_MAX");
+        return e ? static_cast<int>(std::strtol(e, nullptr, 0)) : 400;
+    }();
+    const bool log = g_func_args_calls[slot].fetch_add(1, std::memory_order_relaxed) < budget;
     const uint32_t a[4] = {(uint32_t)ctx->r[4], (uint32_t)ctx->r[5],
                            (uint32_t)ctx->r[6], (uint32_t)ctx->r[7]};
     const uint32_t ra = (uint32_t)ctx->r[31];
