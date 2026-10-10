@@ -73,7 +73,7 @@ static int find_or_evict(
 /// cached texture can be drawn with different registers, so this runs on every
 /// bind. PSPRECOMP_TEX_FILTER=nearest|linear overrides the filter bits; wrap is
 /// always taken from the registers.
-static void apply_sampler(const GeState& state) {
+static void apply_sampler(const GeState& state, int forced_filter) {
     static const GeFilterOverride ov = ge_filter_override_parse(
         std::getenv("PSPRECOMP_TEX_FILTER"));
     const GeSampler s =
@@ -86,6 +86,11 @@ static void apply_sampler(const GeState& state) {
                     s.clamp_s ? GL_CLAMP_TO_EDGE : GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,
                     s.clamp_t ? GL_CLAMP_TO_EDGE : GL_REPEAT);
+    if (forced_filter != 0) {  // texture pack [filtering]: 1 nearest, 2 linear
+        const GLint f = forced_filter == 1 ? GL_NEAREST : GL_LINEAR;
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, f);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, f);
+    }
 }
 
 // ---- Public API ----
@@ -214,37 +219,43 @@ GLuint ge_texture_bind(
         // Cache hit
         entry.last_frame = frame_num;
         glBindTexture(GL_TEXTURE_2D, entry.gl_tex);
-        apply_sampler(state);
+        apply_sampler(state, entry.forced_filter);
         return entry.gl_tex;
     }
 
-    if (ge_texrep_enabled()) {
-        (void)ge_texrep_lookup(rdram, state, draw_max_v, nullptr);  // Task 5 uses the result
-    }
-
-    // Cache miss -- decode texture (stride, swizzle and CLUT transform in
-    // psp_ge_texdecode.cpp). Unsupported formats: magenta placeholder.
-    std::vector<uint8_t> rgba;
-    if (!ge_decode_texture(rdram, params, rgba)) {
-        for (int i = 0; i < width * height; i++) {
-            rgba[i * 4 + 0] = 0xFF;
-            rgba[i * 4 + 1] = 0x00;
-            rgba[i * 4 + 2] = 0xFF;
-            rgba[i * 4 + 3] = 0xFF;
-        }
-    }
-
-    // Upload to GL
+    // Cache miss. Texture replacement (PSPRECOMP_TEXTURES): a pack PNG
+    // replaces the decoded texture at its own size; UVs are normalised, so
+    // nothing else changes. Otherwise decode from guest RAM (stride, swizzle
+    // and CLUT transform in psp_ge_texdecode.cpp; unsupported formats:
+    // magenta placeholder).
+    GeTexrepImage rep;
+    const bool replaced =
+        ge_texrep_enabled() && ge_texrep_replacement(rdram, state, draw_max_v, &rep);
     if (entry.gl_tex == 0) {
         glGenTextures(1, &entry.gl_tex);
     }
     glBindTexture(GL_TEXTURE_2D, entry.gl_tex);
-    glTexImage2D(
-        GL_TEXTURE_2D, 0, GL_RGBA8,
-        width, height, 0,
-        GL_RGBA, GL_UNSIGNED_BYTE,
-        rgba.data());
-    apply_sampler(state);
+    if (replaced) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, rep.w, rep.h, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, rep.rgba);
+    } else {
+        std::vector<uint8_t> rgba;
+        if (!ge_decode_texture(rdram, params, rgba)) {
+            for (int i = 0; i < width * height; i++) {
+                rgba[i * 4 + 0] = 0xFF;
+                rgba[i * 4 + 1] = 0x00;
+                rgba[i * 4 + 2] = 0xFF;
+                rgba[i * 4 + 3] = 0xFF;
+            }
+        }
+        glTexImage2D(
+            GL_TEXTURE_2D, 0, GL_RGBA8,
+            width, height, 0,
+            GL_RGBA, GL_UNSIGNED_BYTE,
+            rgba.data());
+    }
+    entry.forced_filter = replaced ? static_cast<int>(rep.filter) : 0;
+    apply_sampler(state, entry.forced_filter);
 
     // Store entry
     entry.psp_addr = psp_addr;

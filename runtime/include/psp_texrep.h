@@ -29,3 +29,17 @@ GeTexrepKey ge_texrep_key(const uint8_t* rdram, const GeState& s, uint16_t draw_
 /// once: "[TEXREP] key=<24 hex> WxH fmt=N hit|miss|ignored".
 TexrepFind ge_texrep_lookup(const uint8_t* rdram, const GeState& s, uint16_t draw_max_v,
                             GeTexrepKey* key_out);
+
+/// A pack image for the live texture: RGBA8 rows, top row first.
+struct GeTexrepImage {
+    int w = 0, h = 0;
+    const uint8_t* rgba = nullptr;  // owned by the texrep image cache
+    TexrepFilter filter = TexrepFilter::None;
+};
+
+/// On a texture-cache miss: if the pack replaces the live texture, fill `out`
+/// (pointer valid until the next call) and return true. PNGs are decoded once
+/// and kept in a CPU cache (256 MiB, least recently used evicted); a file that
+/// fails to load is logged once and the original texture is used.
+bool ge_texrep_replacement(const uint8_t* rdram, const GeState& s, uint16_t draw_max_v,
+                           GeTexrepImage* out);

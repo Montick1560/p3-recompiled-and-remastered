@@ -1,14 +1,18 @@
 #include "psp_texrep.h"
 
 #include "psp_memory.h"
+#include "psp_texrep_png.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -19,6 +23,54 @@ bool g_enabled = false;
 bool g_dump = false;
 std::string g_dir;
 std::unordered_set<std::string> g_logged;  // DUMP: keys already printed
+
+// Decoded pack images by relative path. An empty rgba marks a file that failed
+// to load, so it is not retried.
+struct CachedImage {
+    int w = 0, h = 0;
+    std::vector<uint8_t> rgba;
+    uint64_t last_use = 0;
+};
+std::unordered_map<std::string, CachedImage> g_images;
+size_t g_image_bytes = 0;
+uint64_t g_use_clock = 0;
+constexpr size_t kImageBudget = 256u << 20;
+
+const CachedImage* load_image(const std::string& rel) {
+    auto it = g_images.find(rel);
+    if (it == g_images.end()) {
+        CachedImage img;
+        const auto t0 = std::chrono::steady_clock::now();
+        std::ifstream f(std::filesystem::u8path(g_dir + "/" + rel), std::ios::binary);
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        if (bytes.empty() || !ge_texrep_decode_png(bytes.data(), bytes.size(), &img.w, &img.h, &img.rgba)) {
+            img.rgba.clear();
+            std::fprintf(stderr, "[TEXREP] cannot load %s (keeping the original texture)\n", rel.c_str());
+        }
+        if (g_dump) {
+            const double ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0).count();
+            std::fprintf(stderr, "[TEXREP] loaded %s %dx%d in %.1f ms\n", rel.c_str(), img.w, img.h, ms);
+        }
+        g_image_bytes += img.rgba.size();
+        g_images.emplace(rel, std::move(img));
+        while (g_image_bytes > kImageBudget && g_images.size() > 1) {  // LRU, never the new one
+            auto victim = g_images.end();
+            for (auto j = g_images.begin(); j != g_images.end(); ++j) {
+                if (j->first != rel &&
+                    (victim == g_images.end() || j->second.last_use < victim->second.last_use)) {
+                    victim = j;
+                }
+            }
+            if (victim == g_images.end()) break;
+            g_image_bytes -= victim->second.rgba.size();
+            g_images.erase(victim);
+        }
+        it = g_images.find(rel);
+    }
+    it->second.last_use = ++g_use_clock;
+    return it->second.rgba.empty() ? nullptr : &it->second;
+}
 }  // namespace
 
 void ge_texrep_on_loadclut(const uint8_t* rdram, uint32_t clut_addr, uint32_t loadclut_data) {
@@ -98,4 +150,19 @@ TexrepFind ge_texrep_lookup(const uint8_t* rdram, const GeState& s, uint16_t dra
         }
     }
     return f;
+}
+
+bool ge_texrep_replacement(const uint8_t* rdram, const GeState& s, uint16_t draw_max_v,
+                           GeTexrepImage* out) {
+    if (!g_enabled) return false;
+    GeTexrepKey key{};
+    const TexrepFind f = ge_texrep_lookup(rdram, s, draw_max_v, &key);
+    if (!f.found || f.ignored) return false;
+    const CachedImage* img = load_image(f.path);
+    if (!img) return false;
+    out->w = img->w;
+    out->h = img->h;
+    out->rgba = img->rgba.data();
+    out->filter = g_pack.filter(key);
+    return true;
 }
