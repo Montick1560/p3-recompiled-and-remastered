@@ -465,6 +465,20 @@ static void func_args_call(int slot, uint8_t* rdram, recomp_context* ctx) {
         std::fprintf(stderr,
                      "[FUNC-ARGS-IN] 0x%08X(a0=0x%08X a1=0x%08X a2=0x%08X a3=0x%08X) ra=0x%08X\n",
                      g_func_args_addr[slot], a[0], a[1], a[2], a[3], ra);
+        // PSPRECOMP_FUNC_ARGS_SAVE=<dir>: also save guest memory [a1, a1 + a2)
+        // (a buffer + its size, a2 <= 1 MiB) at entry to <dir>/<func>_<n>.bin,
+        // e.g. to diff a decompressed asset between a good and a bad run.
+        static const char* save_dir = std::getenv("PSPRECOMP_FUNC_ARGS_SAVE");
+        if (save_dir && a[2] > 0 && a[2] <= (1u << 20)) {
+            static std::atomic<int> seq{0};
+            char path[512];
+            std::snprintf(path, sizeof(path), "%s/%08X_%04d.bin", save_dir, g_func_args_addr[slot],
+                          seq.fetch_add(1));
+            if (FILE* f = std::fopen(path, "wb")) {
+                for (uint32_t k = 0; k < a[2]; k++) std::fputc(psp_mem_read<uint8_t>(rdram, a[1] + k), f);
+                std::fclose(f);
+            }
+        }
     }
     g_func_args_orig[slot](rdram, ctx);
     if (log) {
