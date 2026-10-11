@@ -3,6 +3,8 @@
 #include "hle/psp_hle_intr.h"
 #include "hle/psp_hle_kernel.h"
 #include "psp_audio_out.h"
+#include "psp_osk_session.h"
+#include "psp_event_loop.h"
 #include "psp_audio_volume.h"
 #include "psp_memory.h"
 #include "psp_runtime.h"
@@ -1579,10 +1581,19 @@ static void hle_sceUtilityGamedataInstallAbort(
 }
 
 // ---- On-screen keyboard (sceUtilityOsk) ----
-// Same status machine as the savedata/msg dialogs. There is no keyboard UI:
-// the RUNNING poll completes field 0 with $PSPRECOMP_OSK_TEXT (default
-// "Hero"), like PPSSPP's native input-box path. Pure back end: psp_osk.
+// Same status machine as the savedata/msg dialogs. With a window, RUNNING
+// opens a text box over the game (psp_osk_session.h + psp_osk_overlay.cpp)
+// and stays RUNNING until the player accepts (typed text) or cancels (the
+// initial text, like PPSSPP's input box). Without a window, or when
+// $PSPRECOMP_OSK_TEXT is set (scripted runs), field 0 is completed at once
+// with that text (default "Hero"). Pure back end: psp_osk.
 static UtilityDialogState g_osk_dialog;
+static bool g_osk_ui_open = false;
+
+static bool osk_use_ui() {
+    static const bool env_text = std::getenv("PSPRECOMP_OSK_TEXT") != nullptr;
+    return !env_text && psp_get_sdl_window() != nullptr;
+}
 
 static void osk_complete(UtilityDialogState& dlg, uint8_t* rdram) {
     if (dlg.param_addr == 0) {
@@ -1605,7 +1616,33 @@ static void hle_sceUtilityOskInitStart(
 static void hle_sceUtilityOskGetStatus(
     uint8_t* rdram, recomp_context* ctx
 ) {
-    utility_dialog_get_status(g_osk_dialog, rdram, ctx, osk_complete);
+    UtilityDialogState& dlg = g_osk_dialog;
+    if (dlg.status == PSP_UTILITY_STATUS_RUNNING && osk_use_ui()) {
+        ctx->r[2] = PSP_UTILITY_STATUS_RUNNING;
+        if (!g_osk_ui_open) {
+            psp_osk::Request req;
+            if (!psp_osk::read_request(rdram, PSP_MEM_SIZE, dlg.param_addr, &req)) {
+                dlg.status = PSP_UTILITY_STATUS_FINISHED;  // bad params: nothing to edit
+                return;
+            }
+            fprintf(stderr, "[HLE] sceUtilityOsk: keyboard open \"%s\" (max %u)\n",
+                    req.desc.c_str(), req.max_len);
+            osk_session().open(req.desc, req.intext, req.max_len);
+            g_osk_ui_open = true;
+            return;
+        }
+        std::string text;
+        if (!osk_session().poll(&text)) {
+            return;  // still typing
+        }
+        g_osk_ui_open = false;
+        const std::string summary =
+            psp_osk::complete(rdram, PSP_MEM_SIZE, dlg.param_addr, text);
+        fprintf(stderr, "[HLE] sceUtilityOsk: %s\n", summary.c_str());
+        dlg.status = PSP_UTILITY_STATUS_FINISHED;
+        return;
+    }
+    utility_dialog_get_status(dlg, rdram, ctx, osk_complete);
 }
 
 static void hle_sceUtilityOskShutdownStart(

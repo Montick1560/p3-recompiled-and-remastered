@@ -275,15 +275,22 @@ Read by the runtime binary at start-up or during execution.
 - **Set it when:** checking whether a failure depends on the single-core token.
 
 ### `PSPRECOMP_OSK_TEXT`
-- **Read in:** `runtime/src/hle/psp_hle_utility.cpp` (via
+- **Read in:** `runtime/src/hle/psp_hle_utility.cpp` (`osk_use_ui`, and
   `psp_osk::resolve_text` in `runtime/src/hle/psp_osk.h`).
-- **Type:** env (UTF-8 string). Empty or unset falls back to `Hero`.
-- **Default:** `Hero` (Patapon 3 rejects names shorter than 2 characters).
-- **Effect:** There is no on-screen keyboard UI. When the OSK dialog's RUNNING
-  poll completes, field 0's output buffer is filled with this text (UTF-8
-  converted to UTF-16LE, truncated to the field limit) and the field result
-  is `CHANGED`. Logged as `[HLE] sceUtilityOsk: ...`.
-- **Set it when:** the game asks for a name and the default is wrong.
+- **Type:** env (UTF-8 string). Empty falls back to `Hero`.
+- **Default:** unset: the on-screen keyboard text box is shown.
+- **Effect:** When set (scripted/automated runs), no text box is shown: the OSK
+  dialog's RUNNING poll completes field 0 at once with this text (UTF-8 converted
+  to UTF-16LE, truncated to the field limit, field result `CHANGED`). Without a
+  window the same fallback is used with `Hero`. Logged as `[HLE] sceUtilityOsk: ...`.
+- **Set it when:** driving the game with scripts (tools/to_square.py, flow.py).
+
+### `PSPRECOMP_OSK_FONT`
+- **Read in:** `runtime/src/psp_osk_overlay.cpp` (first time the text box is drawn).
+- **Type:** env (path to a .ttf file).
+- **Default:** `C:/Windows/Fonts/segoeui.ttf`, then `arial.ttf` (and common macOS/Linux paths).
+- **Effect:** Font of the on-screen keyboard text box. Logged as `[OSK] font <path>`;
+  `[OSK] no font found` means the box draws without text.
 
 ---
 

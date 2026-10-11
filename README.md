@@ -148,7 +148,7 @@ PPSSPP — not "should work."
 |------|--------|-------|
 | **Patapon (USA)** — `BOOT.BIN`, UCUS-98643 | Boots + renders title screen (verified, macOS) | The reference title. Recompiles to 14,104 functions / 2,022 mid-entries; reaches the PATAPON logo + NEW GAME/CONTINUE menu. Gameplay beyond the title screen is unexplored. |
 | **.hack//Link** — ULJS-00266 | Boots + draws its loading screen (in progress) | A second commercial binary, recompiled against the generic runtime (`-DPSPRECOMP_GAME=none`) with no per-game runtime code. Boots through `module_start`, runs its main thread, and reaches the GE render loop — drawing its in-game loading panel (shown below). The real menu/scene is still gated behind a loading-progression wall (#63), and boots are not yet deterministic. Config-only so far (`games/dothack/game.toml`). |
-| **Patapon 3 DxD** — UCES-01421 (`games/patapon3`) | Boots on Windows, loads saves, reaches the hideout and plays complete missions (verified 2026-10-09) | EBOOT + code overlays recompiled with `-DPSPRECOMP_GAME=patapon3`. Movies (H.264/ATRAC3plus via FFmpeg), title screen, menus, savedata, data install, music (ATRAC3) and SAS sound effects work. The hero-name keyboard has no UI: the name comes from `PSPRECOMP_OSK_TEXT` (default `Hero`). Graphics bugs remain (render-to-texture is not implemented). Known gaps: speech-bubble bodies are not drawn yet (text is), the install prompt shows `????MB`. Pipeline: `games/patapon3/scripts/p3.sh`. |
+| **Patapon 3 DxD** — UCES-01421 (`games/patapon3`) | Boots on Windows, loads saves, reaches the hideout and plays complete missions (verified 2026-10-09) | EBOOT + code overlays recompiled with `-DPSPRECOMP_GAME=patapon3`. Movies (H.264/ATRAC3plus via FFmpeg), title screen, menus, savedata, data install, music (ATRAC3) and SAS sound effects work. When the game asks for text (hero name, team name...), a text box over the game takes keyboard input (Enter accepts, Esc cancels). Graphics bugs remain (render-to-texture is not implemented). Known gaps: speech-bubble bodies are not drawn yet (text is), the install prompt shows `????MB`. Pipeline: `games/patapon3/scripts/p3.sh`. |
 
 ![.hack//Link (ULJS-00266) loading screen rendered by psprecomp_runtime](docs/dothack-render.png)
 
@@ -246,6 +246,10 @@ hot-pluggable; keyboard and pads can be used together):
 | Start / Back | START / SELECT |
 | D-pad | D-pad |
 | Left stick | analog stick (dead zone 8000 of 32767) |
+
+Text entry: when the game opens the PSP on-screen keyboard (`sceUtilityOsk`), a text box is drawn over
+the game. Type with the PC keyboard (accents and IME work); Backspace deletes, Enter (or a controller's
+Start) accepts, Esc (or B) cancels and keeps the previous text.
 
 ### Prerequisites
 

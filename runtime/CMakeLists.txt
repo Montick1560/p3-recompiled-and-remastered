@@ -155,6 +155,9 @@ set(RUNTIME_SOURCES
     src/psp_texrep_queue.cpp
     src/psp_pad.cpp
     src/psp_wheel.cpp
+    src/psp_text_edit.cpp
+    src/psp_osk_session.cpp
+    src/psp_osk_overlay.cpp
     src/psp_ge_texmemo.cpp
     src/psp_ge_test.cpp
     src/hle/psp_hle_dispatch.cpp
@@ -585,6 +588,17 @@ add_executable(test_wheel tests/test_wheel.cpp src/psp_wheel.cpp)
 target_include_directories(test_wheel PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_wheel PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME wheel_tests COMMAND test_wheel)
+
+add_executable(test_text_edit tests/test_text_edit.cpp src/psp_text_edit.cpp)
+target_include_directories(test_text_edit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_text_edit PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME text_edit_tests COMMAND test_text_edit)
+
+add_executable(test_osk_session tests/test_osk_session.cpp src/psp_osk_session.cpp src/psp_text_edit.cpp)
+target_include_directories(test_osk_session PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_osk_session PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(test_osk_session PRIVATE pthread)
+add_test(NAME osk_session_tests COMMAND test_osk_session)
 
 # Host FPU mode from FCR31 (flush-to-zero).
 add_executable(test_fpu tests/test_fpu.cpp src/psp_fpu.cpp)

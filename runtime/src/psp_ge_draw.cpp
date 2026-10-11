@@ -1,3 +1,4 @@
+#include "psp_osk_overlay.h"
 #include "psp_ge_draw.h"
 #include "psp_perf.h"
 #include "psp_ge_blend.h"
@@ -1029,6 +1030,7 @@ static void present_blit(GLuint fbo) {
     glBlitFramebuffer(0, 0, fb_w(), fb_h(), r.x, r.y, r.x + r.w, r.y + r.h,
                       GL_COLOR_BUFFER_BIT, present_filter());
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    psp_osk_overlay_draw(win_w, win_h, r.x, r.y, r.w, r.h);  // text box while the game asks for text
     SDL_GL_SwapWindow(window);
     g_present_dirty = false;
     g_last_present = std::chrono::steady_clock::now();

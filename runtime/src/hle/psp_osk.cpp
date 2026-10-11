@@ -98,6 +98,23 @@ std::string utf16_to_utf8(const std::u16string& s) {
 
 }  // namespace
 
+bool read_request(const uint8_t* rdram, size_t ram_size, uint32_t params_addr,
+                  Request* out) {
+    const Mem mem{const_cast<uint8_t*>(rdram), ram_size};
+    if (out == nullptr || !mem.valid(params_addr, off::kParamsSizeV1)) {
+        return false;
+    }
+    const uint32_t field = mem.rd32(params_addr + off::kFields);  // field 0
+    if (!mem.valid(field, off::kDataSize)) {
+        return false;
+    }
+    out->desc = ucs2_to_utf8(mem, mem.rd32(field + off::kDataDesc));
+    out->intext = ucs2_to_utf8(mem, mem.rd32(field + off::kDataIntext));
+    out->max_len = field_max_length(mem.rd32(field + off::kDataOuttextLength),
+                                    mem.rd32(field + off::kDataOuttextLimit));
+    return true;
+}
+
 std::string resolve_text(const char* env) {
     if (env != nullptr && env[0] != '\0') {
         return env;

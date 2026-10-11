@@ -6,6 +6,7 @@
 #include "psp_present.h"
 #include "psp_pad.h"
 #include "psp_wheel.h"
+#include "psp_osk_session.h"
 #include "psp_perf.h"
 
 #include <SDL.h>
@@ -154,8 +155,58 @@ static void publish_wheel() {
     g_wheel_buttons.store(g_wheel.buttons(steady_ms()), std::memory_order_relaxed);
 }
 
+// While the game waits on the on-screen keyboard (sceUtilityOsk), keyboard
+// input edits the text instead of pressing PSP buttons: typed characters
+// (SDL_TEXTINPUT, accents and IME included), Backspace, Enter = accept,
+// Esc = cancel. A controller's Start accepts and B cancels. Returns true
+// when the event was consumed.
+static bool handle_osk_event(const SDL_Event& ev) {
+    OskSession& osk = osk_session();
+    if (!osk.active()) return false;
+    switch (ev.type) {
+    case SDL_TEXTINPUT:
+        osk.type(ev.text.text);
+        return true;
+    case SDL_KEYDOWN:
+        if (ev.key.keysym.sym == SDLK_F11 ||
+            (ev.key.keysym.sym == SDLK_RETURN && (ev.key.keysym.mod & KMOD_ALT))) {
+            return false;  // fullscreen toggle still works
+        }
+        if (ev.key.keysym.sym == SDLK_BACKSPACE) osk.backspace();
+        else if (ev.key.keysym.sym == SDLK_RETURN || ev.key.keysym.sym == SDLK_KP_ENTER) osk.confirm();
+        else if (ev.key.keysym.sym == SDLK_ESCAPE) osk.cancel();
+        return true;
+    case SDL_KEYUP:
+        return true;
+    case SDL_CONTROLLERBUTTONDOWN:
+        if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_START) osk.confirm();
+        else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_B) osk.cancel();
+        return true;
+    case SDL_CONTROLLERBUTTONUP:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// Start/stop SDL text input as the keyboard box opens and closes, and drop
+// held PSP buttons so nothing stays pressed underneath it.
+static void sync_osk_text_input() {
+    static bool was_active = false;
+    const bool active = osk_session().active();
+    if (active == was_active) return;
+    was_active = active;
+    if (active) {
+        g_host_buttons.store(0, std::memory_order_relaxed);
+        SDL_StartTextInput();
+    } else {
+        SDL_StopTextInput();
+    }
+}
+
 // Handle one SDL event: window close + keyboard button state + controllers.
 static void handle_sdl_event(const SDL_Event& ev) {
+    if (handle_osk_event(ev)) return;
     if (handle_controller_event(ev)) return;
     if (ev.type == SDL_MOUSEWHEEL) {
         int y = ev.wheel.y;
@@ -255,6 +306,7 @@ int psp_runtime_init_sdl() {
     }
 
     SDL_SetWindowMinimumSize(g_window, 480, 272);
+    SDL_StopTextInput();  // on only while the on-screen keyboard is open
     {
         const char* fs = std::getenv("PSPRECOMP_FULLSCREEN");
         if (fs && std::strcmp(fs, "1") == 0) {
@@ -287,6 +339,7 @@ void psp_event_loop(uint8_t* rdram) {
             handle_sdl_event(ev);
         }
         publish_wheel();  // timed wheel presses advance even without events
+        sync_osk_text_input();
 
         // 2. Drain render queue — execute pending GL work from game threads
         render_queue_process();

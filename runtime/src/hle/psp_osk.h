@@ -106,4 +106,15 @@ uint32_t field_max_length(uint32_t outtextlength, uint32_t outtextlimit);
 std::string complete(uint8_t* rdram, size_t ram_size, uint32_t params_addr,
                      const std::string& text);
 
+// What a keyboard UI shows for field 0: its title (desc), the current text
+// (intext, also the result of a cancel, PPSSPP) and the character limit of
+// the output field. False when the params/fields pointers are invalid.
+struct Request {
+    std::string desc;
+    std::string intext;
+    uint32_t max_len = 0;
+};
+bool read_request(const uint8_t* rdram, size_t ram_size, uint32_t params_addr,
+                  Request* out);
+
 }  // namespace psp_osk

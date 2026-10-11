@@ -313,6 +313,21 @@ static void test_null_desc() {
     std::string s = osk::complete(g.ram.data(), g.ram.size(), kParams, "Hero");
     ASSERT_STR(s, "field0 desc=\"\" -> \"Hero\"", "null desc logs empty");
 }
+// read_request: what the keyboard UI shows -- the field title (desc), the
+// current text (intext) and the character limit the output field allows.
+static void test_read_request() {
+    Guest g;
+    make_params(g, 17, 10);
+    g.ucs2(kIntext, u"Pata\u00f1");
+    osk::Request req;
+    ASSERT_TRUE(osk::read_request(g.ram.data(), g.ram.size(), kParams, &req), "request read");
+    ASSERT_STR(req.desc, "Hero name", "desc as utf8");
+    ASSERT_STR(req.intext, u8"Pata\u00f1", "intext as utf8");
+    ASSERT_EQ(req.max_len, 10, "limit = field_max_length(17, 10)");
+    osk::Request bad;
+    ASSERT_TRUE(!osk::read_request(g.ram.data(), g.ram.size(), 0x0BFF0000u, &bad), "bad params pointer -> false");
+}
+
 int main() {
     test_layout_offsets();
     test_utf8_to_utf16();
@@ -328,6 +343,7 @@ int main() {
     test_bad_fields_pointer();
     test_bad_outtext_pointer();
     test_null_desc();
+    test_read_request();
 
     std::printf("%d tests run, %d failures\n", tests_run, failures);
     return failures == 0 ? 0 : 1;
