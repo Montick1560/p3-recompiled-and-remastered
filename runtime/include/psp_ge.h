@@ -101,6 +101,9 @@ struct GeState {
 
     bool cull_enable;
     uint32_t cull_face;       // GE_CMD_CULL: 0=CW, 1=CCW
+    uint32_t patch_div = 0;   // GE_CMD_PATCHDIVISION: s | t << 8
+    uint32_t patch_prim = 0;  // GE_CMD_PATCHPRIMITIVE: 0 tris, 1 lines, 2 points
+    bool patch_facing = false;  // GE_CMD_PATCHFACING: reverse bezier winding
 
     bool clear_mode;          // GE_CMD_CLEARMODE bit 0
     uint32_t clear_flags;     // GE_CMD_CLEARMODE bits [10:8]

@@ -539,8 +539,10 @@ static void drawlog_prim(const GeState& s, int index, int prim_type, int count) 
 void ge_draw_prim(
     uint8_t* rdram,
     int prim_type,
-    int count
+    int count,
+    std::vector<DecodedVertex>* predecoded
 ) {
+    if (predecoded) count = static_cast<int>(predecoded->size());
     if (perf_enabled()) g_perf.prims.fetch_add(1, std::memory_order_relaxed);
     // Phase 11.4 / Plan 02 Task 2 — alternate-path GE PRIM investigation.
     //
@@ -768,8 +770,12 @@ void ge_draw_prim(
 
     // Decode vertices
     std::vector<DecodedVertex> decoded;
-    ge_decode_vertices(
-        rdram, state, prim_type, count, decoded);
+    if (predecoded) {
+        decoded.swap(*predecoded);
+    } else {
+        ge_decode_vertices(
+            rdram, state, prim_type, count, decoded);
+    }
     if (decoded.empty()) return;
 
     // PSPRECOMP_VTX_WATCH=<hex vtype>: log the first draws of that vertex

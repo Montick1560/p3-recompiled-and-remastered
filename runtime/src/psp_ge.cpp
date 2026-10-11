@@ -1,6 +1,7 @@
 #include "psp_cpu.h"
 #include "psp_perf.h"
 #include "psp_ge.h"
+#include "psp_ge_patch.h"
 #include "psp_texrep.h"
 #include "psp_ge_vertex.h"
 #include "psp_ge_constants.h"
@@ -809,9 +810,41 @@ GeListResult ge_process_display_list(
             break;
 
         // ---- Misc ignored for Phase 5 ----
-        case GE_CMD_PATCHDIVISION: case GE_CMD_PATCHPRIMITIVE:
+        case GE_CMD_PATCHDIVISION:
+            g_ge_state.patch_div = data;
+            break;
+        case GE_CMD_PATCHPRIMITIVE:
+            g_ge_state.patch_prim = data & 3u;
+            break;
         case GE_CMD_PATCHFACING:
-        case GE_CMD_BEZIER: case GE_CMD_SPLINE:
+            g_ge_state.patch_facing = (data & 1u) != 0;
+            break;
+        case GE_CMD_BEZIER: {
+            // Cubic bezier surface (Patapon 3 weather wind gusts): decode the
+            // count_u x count_v control points, tessellate, draw as a plain
+            // primitive. The vertex address does not advance (PPSSPP).
+            const int cu = static_cast<int>(data & 0xFFu);
+            const int cv = static_cast<int>((data >> 8) & 0xFFu);
+            std::vector<DecodedVertex> ctrl;
+            ge_decode_vertices(rdram, g_ge_state, GE_PRIM_TRIANGLES, cu * cv, ctrl);
+            std::vector<DecodedVertex> tess;
+            int prim = GE_PRIM_TRIANGLES;
+            if (ge_tessellate_bezier(ctrl, cu, cv, static_cast<int>(g_ge_state.patch_div & 0x7Fu),
+                                     static_cast<int>((g_ge_state.patch_div >> 8) & 0x7Fu),
+                                     static_cast<int>(g_ge_state.patch_prim),
+                                     g_ge_state.patch_facing, prim, tess)) {
+                ge_draw_prim(rdram, prim, static_cast<int>(tess.size()), &tess);
+            }
+            break;
+        }
+        case GE_CMD_SPLINE: {
+            static bool spline_logged = false;
+            if (!spline_logged) {
+                spline_logged = true;
+                std::fprintf(stderr, "[GE] SPLINE surface not implemented (data=0x%06X), skipped\n", data);
+            }
+            break;
+        }
         case GE_CMD_BOUNDINGBOX:
         case GE_CMD_TEXMAPMODE: case GE_CMD_TEXSHADELS:
         case GE_CMD_TEXLEVEL: case GE_CMD_TEXLODSLOPE:

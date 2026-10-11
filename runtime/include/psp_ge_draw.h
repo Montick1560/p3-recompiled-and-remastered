@@ -1,4 +1,6 @@
 #pragma once
+
+#include <vector>
 #include <cstdint>
 
 /// Computed GL viewport rectangle (FBO pixels, GL bottom-left origin) and
@@ -72,10 +74,15 @@ void ge_draw_present_if_stale(uint8_t* rdram);
 
 /// Full draw pipeline for a GE PRIM command:
 /// decode vertices -> transform -> upload VBO -> set GL state -> draw.
+///
+/// predecoded: vertices already decoded (and expanded) by the caller, e.g. a
+/// tessellated GE_CMD_BEZIER surface; consumed (moved from), count ignored.
+struct DecodedVertex;
 void ge_draw_prim(
     uint8_t* rdram,
     int prim_type,
-    int count
+    int count,
+    std::vector<DecodedVertex>* predecoded = nullptr
 );
 
 /// Present the FBO to the SDL2 window via glBlitFramebuffer.

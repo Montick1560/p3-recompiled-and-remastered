@@ -142,6 +142,7 @@ set(RUNTIME_SOURCES
     src/psp_fpu.cpp
     src/psp_ge_sampler.cpp
     src/psp_ge_vertex.cpp
+    src/psp_ge_patch.cpp
     src/psp_ge_lighting.cpp
     src/psp_ge_texture.cpp
     src/psp_ge_texdecode.cpp
@@ -1000,6 +1001,18 @@ target_compile_options(test_ge_vertex PRIVATE
 )
 
 add_test(NAME ge_vertex_tests COMMAND test_ge_vertex)
+
+# GE BEZIER patch tessellation (Patapon 3 weather wind gusts).
+add_executable(test_ge_patch
+    tests/test_ge_patch.cpp
+    src/psp_ge_patch.cpp
+)
+target_include_directories(test_ge_patch PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${PSPRECOMP_OUTPUT_DIR}/include
+)
+target_compile_options(test_ge_patch PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME ge_patch_tests COMMAND test_ge_patch)
 
 # GE per-vertex lighting unit test (pure: links psp_ge_lighting.cpp only --
 # no SDL2/GL/scheduler deps).
