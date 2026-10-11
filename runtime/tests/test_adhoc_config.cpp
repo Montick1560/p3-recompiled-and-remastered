@@ -99,8 +99,25 @@ static void port_offset_parsed() {
     CHECK(adhoc_config_load(env_of(zero), "", 1).bind_ip.empty(), "no bind address by default");
 }
 
+static void relay_parsed() {
+    Env none{};
+    const AdhocConfig d = adhoc_config_load(env_of(none), "", 1);
+    CHECK(!d.relay && d.relay_port == 27313, "relay off by default, port 27313");
+    for (const char* on : {"1", "on", "true", "yes"}) {
+        Env env{{"PSPRECOMP_ADHOC_RELAY", on}};
+        CHECK(adhoc_config_load(env_of(env), "", 1).relay, "relay switched on");
+    }
+    Env off{{"PSPRECOMP_ADHOC_RELAY", "0"}};
+    CHECK(!adhoc_config_load(env_of(off), "", 1).relay, "relay 0 stays off");
+    Env port{{"PSPRECOMP_ADHOC_RELAY_PORT", "27400"}};
+    CHECK(adhoc_config_load(env_of(port), "", 1).relay_port == 27400, "relay port from env");
+    Env bad{{"PSPRECOMP_ADHOC_RELAY_PORT", "0"}};
+    CHECK(adhoc_config_load(env_of(bad), "", 1).relay_port == 27313, "invalid relay port keeps default");
+}
+
 int main() {
     defaults();
+    relay_parsed();
     server_with_port();
     mac_env_override();
     mac_persisted_once();

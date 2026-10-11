@@ -12,6 +12,7 @@ Screenshots go to $P3_SHOT, or `_beat.tga` in the current directory.
 import os, socket, struct, sys, time
 
 SHOT = os.environ.get('P3_SHOT', '_beat.tga')
+PORT = int(os.environ.get('DRUM_PORT', '9999'))  # debug socket of the instance to drive
 KEYS = {'P': 0x8000, 'O': 0x2000, 'C': 0x1000, 'D': 0x4000}
 
 
@@ -19,7 +20,7 @@ def send(line, tries=4):
     # Loading hitches can stall the socket for seconds: retry instead of dying.
     for i in range(tries):
         try:
-            s = socket.create_connection(('127.0.0.1', 9999), timeout=20)
+            s = socket.create_connection(('127.0.0.1', PORT), timeout=20)
             s.sendall((line + '\n').encode())
             r = s.makefile('rb').readline()
             s.close()
@@ -46,14 +47,21 @@ def outline_level():
 
 def sync(seconds=4.0):
     """Return (period, t_downbeat) in perf_counter time, or None."""
-    onsets, prev, last = [], 0, None
+    samples = []
     t0 = time.perf_counter()
     while time.perf_counter() - t0 < seconds:
-        t = time.perf_counter()
-        v = outline_level()
+        samples.append((time.perf_counter(), outline_level()))
+    # The outline is brighter on the beat; how bright the column is between
+    # beats depends on the scene, so the threshold sits between the extremes.
+    lo, hi = min(v for _, v in samples), max(v for _, v in samples)
+    if hi - lo < 3:
+        return None
+    thr = (lo + hi) / 2
+    onsets, prev, last = [], hi, None
+    for t, v in samples:
         # An onset right after a sampling stall (the game hitches ~250 ms
         # now and then) is late by an unknown amount: skip it.
-        if v >= 5 and prev < 5 and last is not None and t - last < 0.06:
+        if v >= thr and prev < thr and last is not None and t - last < 0.06:
             onsets.append((t, v))
         prev, last = v, t
     if len(onsets) < 4:

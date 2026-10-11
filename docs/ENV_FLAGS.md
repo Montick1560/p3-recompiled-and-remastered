@@ -307,6 +307,18 @@ Read by the runtime binary at start-up or during execution.
 - **Set it when:** running two instances on one PC (each needs its own `MAC`, `BIND` such as
   127.0.0.1 / 127.0.0.2, and `PSPRECOMP_DEBUG_PORT`), or playing through another server.
 
+### `PSPRECOMP_ADHOC_RELAY`, `PSPRECOMP_ADHOC_RELAY_PORT`
+- **Read in:** `runtime/src/net/adhoc_config.cpp` (`adhoc_config_load`); used by
+  `psp_net_wire_pdp()` (`runtime/src/hle/psp_hle_net.cpp`) for `pdp::Sockets` / `ptp::Sockets`.
+- **Type:** env. `RELAY` = `1`/`on`/`true`/`yes`; `RELAY_PORT` = 1..65535.
+- **Default:** off (peer to peer UDP/TCP, PPSSPP's default data mode); relay port 27313.
+- **Effect:** PDP and PTP traffic goes through the aemu_postoffice relay on the ad hoc server host
+  (PPSSPP's "server-provided packet relay") instead of peer to peer: one TCP session per PSP socket
+  (`net/relay_protocol`, `net/relay_conn`). Needed to play with PPSSPP players on servers whose data
+  mode is the relay (Paragate/patapon.net) and behind NAT. `tools/postoffice_server.py` is a local
+  relay for tests. Logged as `[ADHOC] relay: ...` on connection problems.
+- **Set it when:** the server uses the relay; every player of the session must use the same mode.
+
 ### `PSPRECOMP_DEBUG_PORT`
 - **Read in:** `runtime/src/main.cpp` (debug socket start).
 - **Type:** env (TCP port).

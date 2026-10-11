@@ -3,6 +3,8 @@
 // socket bound to PSP port + port offset on this instance's address; a peer
 // MAC is sent to the IP the PRO server reported for it, and a datagram is
 // only accepted from an IP that belongs to a peer (others are dropped).
+// In relay mode each socket is instead a TCP session to the aemu_postoffice
+// relay, which forwards datagrams by (MAC, port).
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -12,6 +14,7 @@
 #include <vector>
 
 #include "net/pro_protocol.h"
+#include "net/relay_protocol.h"
 
 namespace pdp {
 
@@ -37,6 +40,12 @@ struct Resolver {
     std::function<std::vector<Peer>()> peers;
     std::string bind_ip;      // empty = any address
     uint16_t port_offset = 10000;
+    // Relay mode (aemu_postoffice): every socket is a TCP session to
+    // relay_host:relay_port that registers this console's MAC and the port.
+    bool relay = false;
+    std::string relay_host;
+    uint16_t relay_port = 27313;
+    pro::Mac self_mac{};
 };
 
 class Sockets {
@@ -61,11 +70,19 @@ private:
     struct Slot {
         int fd = -1;
         uint16_t port = 0;
+        bool relay = false;  // fd is a relay session
+        bool dead = false;   // the relay closed it
+        relay::PdpFrames rx;
     };
     int fd_of(int id) const;
     bool peer_of_ip(uint32_t ip, pro::Mac* mac) const;
+    int create_relay(uint16_t port, const Resolver& r);
+    int send_relay(int fd, const pro::Mac& to, uint16_t port, const uint8_t* data, int len);
+    int recv_relay(int id, pro::Mac* from, uint16_t* from_port, uint8_t* buf, int* len,
+                   uint32_t timeout_us, bool nonblock);
 
     mutable std::mutex mu_;
+    std::mutex relay_send_mu_;  // one frame at a time on a relay session
     Resolver resolver_;
     std::array<Slot, kMaxSockets> slots_{};
 };

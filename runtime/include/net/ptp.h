@@ -3,9 +3,13 @@
 // style: a socket is bound to PSP port + port offset on this instance's
 // address and connects to the peer's IP at its PSP port + offset; an
 // accepted connection is only kept if its source IP belongs to a peer.
+// In relay mode a socket is a TCP session to the aemu_postoffice relay: listen
+// registers (MAC, port), connect asks the relay for the listener and accept
+// opens the session that pairs with it; data travels as relay frames.
 #include <array>
 #include <cstdint>
 #include <mutex>
+#include <vector>
 
 #include "net/pdp.h"  // Resolver, Peer, shared error codes
 
@@ -55,12 +59,24 @@ private:
         pro::Mac peer{};
         uint16_t pport = 0;
         int bufsize = 0;
+        bool relay = false;        // fd is a relay session (or a placeholder before connect)
+        bool relay_waiting = false;  // CONNECT sent, waiting for the relay's ack
+        bool dead = false;         // the relay closed the session
+        std::vector<uint8_t> ctl;  // connect requests / ack bytes not consumed yet
+        relay::PtpFrames rx;
     };
     bool peer_ip(const pro::Mac& mac, uint32_t* ip) const;
+    int listen_relay(uint16_t sport, int bufsize);
+    int connect_relay(int id, uint32_t timeout_us, bool nonblock);
+    int accept_relay(int id, pro::Mac* peer, uint16_t* peer_port, uint32_t timeout_us, bool nonblock);
+    int send_relay(int id, const uint8_t* data, int* len, uint32_t timeout_us, bool nonblock);
+    int recv_relay(int id, uint8_t* buf, int* len, uint32_t timeout_us, bool nonblock);
+    bool is_relay(int id) const;
     bool peer_mac(uint32_t ip, pro::Mac* mac) const;
     int new_socket(uint16_t sport, int bufsize, uint16_t* bound_port) const;
 
     mutable std::mutex mu_;
+    std::mutex relay_send_mu_;
     pdp::Resolver resolver_;
     std::array<Slot, pdp::kMaxSockets> slots_{};
 };

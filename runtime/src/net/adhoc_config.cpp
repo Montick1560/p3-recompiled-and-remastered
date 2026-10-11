@@ -94,6 +94,15 @@ AdhocConfig adhoc_config_load(const std::function<const char*(const char*)>& get
         }
     }
     if (const char* bind = getenv_fn("PSPRECOMP_ADHOC_BIND"); bind && *bind) cfg.bind_ip = bind;
+    if (const char* relay = getenv_fn("PSPRECOMP_ADHOC_RELAY"); relay && *relay) {
+        const std::string v = relay;
+        cfg.relay = v == "1" || v == "on" || v == "true" || v == "yes";
+    }
+    if (const char* rport = getenv_fn("PSPRECOMP_ADHOC_RELAY_PORT"); rport && *rport) {
+        char* end = nullptr;
+        const long v = std::strtol(rport, &end, 10);
+        if (end != rport && *end == 0 && v > 0 && v <= 65535) cfg.relay_port = static_cast<uint16_t>(v);
+    }
     const char* env_mac = getenv_fn("PSPRECOMP_ADHOC_MAC");
     if (env_mac && adhoc_parse_mac(env_mac, &cfg.mac)) return cfg;
     if (!mac_file.empty() && read_mac_file(mac_file, &cfg.mac)) return cfg;

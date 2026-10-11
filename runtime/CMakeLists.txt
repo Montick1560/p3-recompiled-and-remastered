@@ -160,6 +160,8 @@ set(RUNTIME_SOURCES
     src/psp_osk_overlay.cpp
     src/net/adhoc_config.cpp
     src/net/pro_protocol.cpp
+    src/net/relay_protocol.cpp
+    src/net/relay_conn.cpp
     src/net/pro_client.cpp
     src/net/adhocctl.cpp
     src/net/guest_callbacks.cpp
@@ -628,6 +630,11 @@ target_include_directories(test_adhoc_config PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 target_compile_options(test_adhoc_config PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME adhoc_config_tests COMMAND test_adhoc_config)
 
+add_executable(test_relay_protocol tests/test_relay_protocol.cpp src/net/relay_protocol.cpp)
+target_include_directories(test_relay_protocol PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_relay_protocol PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME relay_protocol_tests COMMAND test_relay_protocol)
+
 add_executable(test_pro_protocol tests/test_pro_protocol.cpp src/net/pro_protocol.cpp)
 target_include_directories(test_pro_protocol PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_pro_protocol PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
@@ -661,7 +668,7 @@ target_include_directories(test_matching_packet PRIVATE ${CMAKE_CURRENT_SOURCE_D
 target_compile_options(test_matching_packet PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME matching_packet_tests COMMAND test_matching_packet)
 
-add_executable(test_pdp tests/test_pdp.cpp src/net/pdp.cpp)
+add_executable(test_pdp tests/test_pdp.cpp src/net/pdp.cpp src/net/relay_protocol.cpp src/net/relay_conn.cpp)
 target_include_directories(test_pdp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_pdp PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(test_pdp PRIVATE pthread ${PSP_SOCKET_LIBS})
@@ -672,11 +679,17 @@ target_include_directories(test_matching PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/inc
 target_compile_options(test_matching PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME matching_tests COMMAND test_matching)
 
-add_executable(test_ptp tests/test_ptp.cpp src/net/ptp.cpp)
+add_executable(test_ptp tests/test_ptp.cpp src/net/ptp.cpp src/net/relay_protocol.cpp src/net/relay_conn.cpp)
 target_include_directories(test_ptp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_ptp PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(test_ptp PRIVATE pthread ${PSP_SOCKET_LIBS})
 add_test(NAME ptp_tests COMMAND test_ptp)
+
+add_executable(test_relay_sockets tests/test_relay_sockets.cpp src/net/pdp.cpp src/net/ptp.cpp src/net/relay_protocol.cpp src/net/relay_conn.cpp)
+target_include_directories(test_relay_sockets PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_relay_sockets PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(test_relay_sockets PRIVATE pthread ${PSP_SOCKET_LIBS})
+add_test(NAME relay_sockets_tests COMMAND test_relay_sockets)
 
 # Host FPU mode from FCR31 (flush-to-zero).
 add_executable(test_fpu tests/test_fpu.cpp src/psp_fpu.cpp)
@@ -877,6 +890,8 @@ add_executable(test_hle_net
     src/net/matching_packet.cpp
     src/net/pro_client.cpp
     src/net/pro_protocol.cpp
+    src/net/relay_protocol.cpp
+    src/net/relay_conn.cpp
 )
 target_include_directories(test_hle_net PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include

@@ -261,8 +261,9 @@ a PRO ad hoc server, the protocol PPSSPP uses, so the server can be PPSSPP's bui
 `tools/adhoc_server.py` (`python tools/adhoc_server.py`, TCP 27312). The default server is
 `127.0.0.1`; `PSPRECOMP_ADHOC_SERVER`, `PSPRECOMP_ADHOC_NICK`, `PSPRECOMP_ADHOC_MAC`,
 `PSPRECOMP_ADHOC_BIND` and `PSPRECOMP_ADHOC_PORT_OFFSET` configure it ([docs/ENV_FLAGS.md](docs/ENV_FLAGS.md)).
-Implemented: adhocctl, the netconf ad hoc dialog, PDP (UDP), PTP (TCP) and matching; no relay for
-players behind NAT yet.
+Implemented: adhocctl, the netconf ad hoc dialog, PDP (UDP), PTP (TCP), matching, and the
+aemu_postoffice relay that PPSSPP uses for "server-provided packet relay" (`PSPRECOMP_ADHOC_RELAY=1`;
+verified between two runtime instances through `tools/postoffice_server.py`).
 
 ### Prerequisites
 

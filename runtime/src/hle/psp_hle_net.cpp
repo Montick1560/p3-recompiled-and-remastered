@@ -219,6 +219,10 @@ void psp_net_wire_pdp() {
     };
     r.bind_ip = ac.inited() ? ac.bind_ip() : psp_net_config().bind_ip;
     r.port_offset = ac.inited() ? ac.port_offset() : psp_net_config().port_offset;
+    r.relay = psp_net_config().relay;
+    r.relay_host = psp_net_config().server_host;
+    r.relay_port = psp_net_config().relay_port;
+    r.self_mac = psp_net_config().mac;
     ptp::instance().set_resolver(r);
     pdp::instance().set_resolver(std::move(r));
 }
