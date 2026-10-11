@@ -147,8 +147,21 @@ static void matching_hle() {
     CHECK(call7("sceNetAdhocMatchingCreate", 3, 1, 31400, 4096, 0) == (int32_t)0x80410803, "maxnum 1");
     CHECK(call7("sceNetAdhocMatchingCreate", 3, 2, 31400, 0, 0) == (int32_t)0x80410804, "rxbuf 0");
     CHECK(call7("sceNetAdhocMatchingCreate", 4, 2, 31400, 4096, 0) == (int32_t)0x80410806, "mode 4");
-    const int id = call7("sceNetAdhocMatchingCreate", 3, 2, 31400, 4096, 200000, 300000, 3);
+    // The 9th argument (handler) is on the stack at sp+0, not in $t4.
+    const uint32_t sp = 0x08815F00u;
+    *reinterpret_cast<uint32_t*>(guest(sp)) = 0x089BC808u;
+    int id = 0;
+    {
+        recomp_context ctx{};
+        const int32_t args[8] = {3, 2, 31400, 4096, 200000, 300000, 3, 0};
+        for (int i = 0; i < 8; i++) ctx.r[4 + i] = args[i];
+        ctx.r[12] = 0x1234;
+        ctx.r[29] = static_cast<int32_t>(sp);
+        registry()["sceNetAdhocMatchingCreate"](g_ram, &ctx);
+        id = ctx.r[2];
+    }
     CHECK(id >= 1, "Create P2P");
+    CHECK(psp_net_matching_handler(id) == 0x089BC808u, "handler read from the stack");
     CHECK(call7("sceNetAdhocMatchingCreate", 1, 4, 31400, 4096, 0) == (int32_t)0x80410814, "same port twice");
     const uint32_t mac = 0x08815000u, size = 0x08815100u, buf = 0x08815200u;
     std::memset(guest(mac), 0x11, 6);

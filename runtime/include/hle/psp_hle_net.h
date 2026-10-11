@@ -7,3 +7,5 @@ const AdhocConfig& psp_net_config();
 void psp_net_wire_pdp();
 void psp_hle_register_net();
 void psp_hle_register_net_matching();
+// Guest event handler of a matching context (0 if none): diagnostics/tests.
+uint32_t psp_net_matching_handler(int id);

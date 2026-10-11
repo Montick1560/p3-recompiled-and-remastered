@@ -142,7 +142,6 @@ static void hle_sceNetAdhocMatchingTerm(uint8_t* rdram, recomp_context* ctx) {
 
 // Create(mode, maxnum, port, rxbuflen, hello_int, keepalive_int, init_count, rexmt_int, callback)
 static void hle_sceNetAdhocMatchingCreate(uint8_t* rdram, recomp_context* ctx) {
-    (void)rdram;
     const int mode = ctx->r[4], maxnum = ctx->r[5];
     const auto port = static_cast<uint16_t>(ctx->r[6]);
     const int rxbuflen = ctx->r[7];
@@ -150,7 +149,10 @@ static void hle_sceNetAdhocMatchingCreate(uint8_t* rdram, recomp_context* ctx) {
     const int32_t keepalive = ctx->r[9];
     const int init_count = ctx->r[10];
     const auto rexmt = static_cast<uint32_t>(ctx->r[11]);
-    const auto callback = static_cast<uint32_t>(ctx->r[12]);  // 9th argument (PPSSPP PARAM(8))
+    // 9th argument: past a0..a3/t0..t3 it is on the stack at sp+0 (PPSSPP
+    // WrapI_IIIIIIIIU); $t4 holds garbage in Patapon 3.
+    const auto sp = static_cast<uint32_t>(ctx->r[29]);
+    const uint32_t callback = valid_range(sp, 4) ? psp_mem_read<uint32_t>(rdram, sp) : 0;
     std::lock_guard<std::mutex> lock(g_mu);
     if (!g_inited) { ctx->r[2] = kErrNotInitialized; return; }
     if (maxnum <= 1 || maxnum > 16) { ctx->r[2] = kErrInvalidMaxnum; return; }
@@ -195,8 +197,9 @@ static void hle_sceNetAdhocMatchingCreate(uint8_t* rdram, recomp_context* ctx) {
     slot->ctx = std::make_unique<matching::Context>(static_cast<matching::Mode>(mode), maxnum, port, hello,
                                                      keepalive, init_count, rexmt, psp_net_config().mac, io);
     g_slots[id] = slot;
-    std::fprintf(stderr, "[ADHOC] sceNetAdhocMatchingCreate(mode=%d max=%d port=%u hello=%u keepalive=%d) -> %d\n",
-                 mode, maxnum, port, hello, keepalive, id);
+    std::fprintf(stderr,
+                 "[ADHOC] sceNetAdhocMatchingCreate(mode=%d max=%d port=%u hello=%u keepalive=%d handler=0x%08X) -> %d\n",
+                 mode, maxnum, port, hello, keepalive, callback, id);
     ctx->r[2] = id;
 }
 
@@ -331,6 +334,11 @@ static void hle_sceNetAdhocMatchingGetMembers(uint8_t* rdram, recomp_context* ct
     }
     psp_mem_write<int32_t>(rdram, size_addr, n * kEntry);
     ctx->r[2] = 0;
+}
+
+uint32_t psp_net_matching_handler(int id) {
+    auto s = find(id);
+    return s ? s->handler : 0;
 }
 
 void psp_hle_register_net_matching() {

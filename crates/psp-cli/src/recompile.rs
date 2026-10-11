@@ -357,32 +357,9 @@ pub(crate) fn prepare_emission_with(
     // synthesize table-entry -> case xrefs from the standard MIPS idiom so the
     // decoder promotes their `jr` to a C++ switch instead of a dispatch miss.
     {
-        let known: HashSet<(u32, u32)> = analysis
-            .xrefs
-            .iter()
-            .filter(|x| x.ref_type == "DATA")
-            .filter_map(|x| Some((parse_hex_u32(&x.from_addr)?, parse_hex_u32(&x.to_addr)?)))
-            .collect();
-        let mut added = 0usize;
-        let mut synthesized = Vec::new();
-        for f in &analysis.functions {
-            let Some(start) = parse_hex_u32(&f.address) else { continue };
-            let end = start.saturating_add(f.size as u32);
-            for (from, to) in
-                crate::jump_tables::discover_jump_table_xrefs(&segment_bytes, start, end)
-            {
-                if !known.contains(&(from, to)) {
-                    synthesized.push(psp_parser::analysis_json::JsonXref {
-                        from_addr: format!("0x{from:08X}"),
-                        to_addr: format!("0x{to:08X}"),
-                        ref_type: "DATA".to_string(),
-                    });
-                    added += 1;
-                }
-            }
-        }
+        let synthesized = synthesize_jump_table_xrefs(&analysis.functions, &analysis.xrefs, &segment_bytes);
+        tracing::info!("Jump-table scan: {} synthesized DATA xrefs", synthesized.len());
         analysis.xrefs.extend(synthesized);
-        tracing::info!("Jump-table scan: {added} synthesized DATA xrefs");
     }
 
     // PSPRECOMP_CROSS_MID=1: coalesce Ghidra-over-split shared-frame siblings,
@@ -407,6 +384,12 @@ pub(crate) fn prepare_emission_with(
                 coalesce_split_frame_siblings(&mut analysis, &segment_bytes, &data_xrefs_pre);
         }
         inject_cross_function_mid_jumps(&mut analysis, &segment_bytes, &data_xrefs_pre);
+        // A switch whose `jr` ended a Ghidra body had its cases in sibling
+        // pieces; once merged into the owner they are its labels (OL_Mission
+        // FUN_08B52160's case 0x08B52324 was a dispatch miss).
+        let synthesized = synthesize_jump_table_xrefs(&analysis.functions, &analysis.xrefs, &segment_bytes);
+        tracing::info!("Jump-table scan after coalescing: {} synthesized DATA xrefs", synthesized.len());
+        analysis.xrefs.extend(synthesized);
     }
 
     // Final pass on the function set that is emitted (after coalescing merged
@@ -1517,6 +1500,37 @@ fn static_targets_in_gaps(
     found.sort_unstable();
     found.dedup();
     found
+}
+
+/// DATA xrefs (table entry -> case) for the switch tables recognised in
+/// `functions` that `xrefs` does not already hold. Run again whenever the
+/// function set changes: a table only counts once its cases are inside the
+/// body that holds the `jr`.
+fn synthesize_jump_table_xrefs(
+    functions: &[JsonFunction],
+    xrefs: &[psp_parser::analysis_json::JsonXref],
+    segment_bytes: &[(u32, Vec<u8>)],
+) -> Vec<psp_parser::analysis_json::JsonXref> {
+    let mut known: HashSet<(u32, u32)> = xrefs
+        .iter()
+        .filter(|x| x.ref_type == "DATA")
+        .filter_map(|x| Some((parse_hex_u32(&x.from_addr)?, parse_hex_u32(&x.to_addr)?)))
+        .collect();
+    let mut synthesized = Vec::new();
+    for f in functions {
+        let Some(start) = parse_hex_u32(&f.address) else { continue };
+        let end = start.saturating_add(f.size as u32);
+        for (from, to) in crate::jump_tables::discover_jump_table_xrefs(segment_bytes, start, end) {
+            if known.insert((from, to)) {
+                synthesized.push(psp_parser::analysis_json::JsonXref {
+                    from_addr: format!("0x{from:08X}"),
+                    to_addr: format!("0x{to:08X}"),
+                    ref_type: "DATA".to_string(),
+                });
+            }
+        }
+    }
+    synthesized
 }
 
 fn static_targets_needing_mid_entries(
@@ -2701,6 +2715,51 @@ mod tests {
         assert!(
             static_targets_needing_mid_entries(&[f], &[wmid(0x1018, 0x1000)], &segs, &[]).is_empty()
         );
+    }
+
+    #[test]
+    fn jump_table_found_once_the_function_grows_over_its_cases() {
+        // OL_Mission FUN_08B52160: Ghidra stopped the body at the switch's
+        // `jr`, so its cases were other pieces until coalescing merged them;
+        // the scan must run again on the merged function (0x08B52324 missed).
+        let f0 = 0x1000u32;
+        let mut words = vec![
+            0x2C41_0003, // sltiu at, v0, 3
+            0x1020_000A, // beq at, zero, default
+            0x0000_0000,
+            0x3C03_0000, // lui v1, 0
+            0x0002_1080, // sll v0, v0, 2
+            0x2463_1040, // addiu v1, v1, 0x1040 -> table
+            0x0043_1021, // addu v0, v0, v1
+            0x8C42_0000, // lw v0, 0(v0)
+            0x0040_0008, // jr v0
+            0x0000_0000,
+            0x2402_0003, // 0x1028 case A: li v0, 3 (falls into B)
+            0x0000_0000, // 0x102C case B
+            0x03E0_0008, // 0x1030 case C: jr ra
+            0x0000_0000,
+            0x0000_0000,
+            0x0000_0000,
+        ];
+        words.extend([f0 + 0x2C, f0 + 0x28, f0 + 0x30]); // table @0x1040
+        let segs = words_at(f0, &words);
+        let mut f = wfn(f0);
+        f.size = 0x28; // up to the jr's delay slot
+        assert!(synthesize_jump_table_xrefs(&[f.clone()], &[], &segs).is_empty());
+        f.size = 0x40; // after coalescing
+        let x = synthesize_jump_table_xrefs(&[f.clone()], &[], &segs);
+        let pairs: Vec<(String, String)> = x.iter().map(|x| (x.from_addr.clone(), x.to_addr.clone())).collect();
+        assert_eq!(
+            pairs,
+            vec![
+                ("0x00001040".to_string(), "0x0000102C".to_string()),
+                ("0x00001044".to_string(), "0x00001028".to_string()),
+                ("0x00001048".to_string(), "0x00001030".to_string()),
+            ]
+        );
+        assert!(x.iter().all(|x| x.ref_type == "DATA"));
+        // Already-known xrefs are not added twice.
+        assert!(synthesize_jump_table_xrefs(&[f], &x, &segs).is_empty());
     }
 
     #[test]
