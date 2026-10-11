@@ -50,3 +50,21 @@ report. It finds unknown bugs and later serves as a regression check for every g
 - Never run the tour while the user plays (it kills psprecomp_runtime.exe).
 - Time-dependent scenes (animations, beat flash) will never match pixel-exactly: compare
   structure (missing elements) more than exact values.
+
+## Triage (2026-10-11, tour run7: 32 checkpoints, hideout + Campo de entrenamiento)
+
+Hideout menus (Tótem, Armería, Cuartel, equip, DxD menu, world map, mission info) match PPSSPP
+almost pixel-exactly (MAD < 0.4). Differences cluster in the mission scene:
+
+1. **Missing: mission command list** on the bottom bar ("Avanzar: □□□○ Atacar: ○○□○ ...") is never
+   drawn by the runtime (PPSSPP shows it from the first command on). Every mission frame.
+2. **Missing: wind streaks** (thin white arcs across the sky / over the ground) in the mission.
+3. **Offset: beat outline** drawn 1 px left in the runtime (x=4 and 473 vs PPSSPP 5 and 474; top/bottom
+   rows match) -> line/rect rasterization rule.
+4. Functional, not graphics: once the runtime's timer froze at 0:11 with the opening bubble shown
+   while PPSSPP went on (run3; not reproduced in run7).
+5. Known open items not on this route: `rojito.png` (red marks under HUD chest icons, prologue),
+   `combate.png` (combat-gate tower that sometimes disappears), barracks preview light box.
+
+Not bugs: random loading tips / chest items, pulsing building glow, the few seconds the drum lock
+puts between the two sides.
