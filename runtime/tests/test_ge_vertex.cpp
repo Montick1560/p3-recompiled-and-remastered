@@ -99,19 +99,19 @@ static void test_through_untextured_unchanged() {
         "through untextured v: scale/offset only, no divide");
 }
 
-// Normalization is applied AFTER tex_scale/offset (matches the measured
-// poke that divided the post-scale UV).
-static void test_through_scale_offset_then_normalize() {
+// Through mode ignores TEXSCALE/TEXOFFSET (PPSSPP VertexDecoder only picks
+// the prescale texcoord steps when !throughmode). Patapon 3 leaves a 0.75
+// scale from a 3D draw, and applying it to the 2D command list sampled the
+// wrong glyphs.
+static void test_through_ignores_scale_offset() {
     GeState s = make_through_state(true);
-    s.tex_scale_u = 2.0f;
-    s.tex_offset_u = 0.0f;
+    s.tex_scale_u = 0.75f;
+    s.tex_scale_v = 0.75f;
+    s.tex_offset_u = 3.0f;
     std::vector<DecodedVertex> verts = {make_vertex(32.0f, 64.0f)};
     ge_transform_vertices(verts, s);
-    // u: 32*2 = 64, then /128 = 0.5
-    ASSERT_NEAR(verts[0].uv[0], 0.5f,
-        "through textured u: (32*2)/128 -> 0.5");
-    ASSERT_NEAR(verts[0].uv[1], 0.5f,
-        "through textured v: 64/128 -> 0.5");
+    ASSERT_NEAR(verts[0].uv[0], 0.25f, "through u: 32/128, scale/offset ignored");
+    ASSERT_NEAR(verts[0].uv[1], 0.5f, "through v: 64/128, scale ignored");
 }
 
 // ---- Clip-space output (near-plane clipping + perspective-correct UVs) ----
@@ -730,7 +730,7 @@ int main() {
     test_range_culling();
     test_through_textured_normalizes();
     test_through_untextured_unchanged();
-    test_through_scale_offset_then_normalize();
+    test_through_ignores_scale_offset();
     test_transform_front_keeps_clip();
     test_transform_behind_keeps_negative_w();
     test_through_w_is_one();

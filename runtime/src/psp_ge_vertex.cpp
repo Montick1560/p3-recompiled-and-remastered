@@ -636,12 +636,10 @@ void ge_transform_vertices(
             v.pos[2] = v.pos[2] / 65535.0f;
             v.w = 1.0f;  // screen-space: already NDC
 
-            // Apply tex scale/offset, then texel -> [0,1] normalize.
+            // Texel -> [0,1] normalize. TEXSCALE/TEXOFFSET do not apply in
+            // through mode (PPSSPP only uses the prescale texcoord steps when
+            // !throughmode); a scale left by a 3D draw scrambled 2D text.
             if (v.has_uv) {
-                v.uv[0] = v.uv[0] * state.tex_scale_u
-                          + state.tex_offset_u;
-                v.uv[1] = v.uv[1] * state.tex_scale_v
-                          + state.tex_offset_v;
                 if (state.texture_enable) {
                     if (texw > 0.0f) v.uv[0] /= texw;
                     if (texh > 0.0f) v.uv[1] /= texh;
