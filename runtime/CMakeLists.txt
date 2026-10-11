@@ -881,6 +881,7 @@ add_test(NAME hle_misc COMMAND test_hle_misc)
 
 add_executable(test_hle_net
     tests/test_hle_net.cpp
+    src/hle/psp_hle_misc.cpp
     src/hle/psp_hle_net.cpp
     src/hle/psp_hle_net_matching.cpp
     src/net/adhoc_config.cpp

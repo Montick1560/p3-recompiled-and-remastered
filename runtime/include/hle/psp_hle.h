@@ -182,6 +182,9 @@ void psp_hle_register_display();
 void psp_hle_register_ge();
 void psp_hle_register_power();
 void psp_hle_register_misc();
+/// sceOpenPSIDGetOpenPSID puts the local ad hoc MAC in the PSID's first 6 bytes (PPSSPP #13231:
+/// a fixed ID made every Patapon 3 multiplayer peer Player 1). nullptr = fixed PSID.
+void psp_hle_misc_set_mac_source(const uint8_t* (*mac)());
 void psp_hle_register_ctrl();
 void psp_hle_register_utility();
 

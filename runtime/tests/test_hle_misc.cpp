@@ -109,6 +109,22 @@ static void test_openpsid() {
     CHECK(std::memcmp(guest(addr), kOpenPsid, 16) == 0, "OpenPSID bytes");
 }
 
+// Patapon 3 identifies multiplayer players by their OpenPSID: a fixed ID made
+// every remote player Player 1 (PPSSPP #13231 fix: the first 6 bytes are the
+// local ad hoc MAC, so each instance differs).
+static const uint8_t kTestMac[6] = {0x02, 0x11, 0x22, 0x33, 0x44, 0x55};
+static const uint8_t* test_mac() { return kTestMac; }
+
+static void test_openpsid_uses_local_mac() {
+    psp_hle_misc_set_mac_source(test_mac);
+    const uint32_t addr = 0x08820040u;
+    std::memset(guest(addr), 0xA5, 16);
+    CHECK_EQ(callHle("sceOpenPSIDGetOpenPSID", (int32_t)addr), 0, "OpenPSID with MAC valid");
+    CHECK(std::memcmp(guest(addr), kTestMac, 6) == 0, "OpenPSID starts with the local MAC");
+    CHECK(std::memcmp(guest(addr) + 6, kOpenPsid + 6, 10) == 0, "OpenPSID tail unchanged");
+    psp_hle_misc_set_mac_source(nullptr);
+}
+
 static void test_power_callback() {
     const int32_t s0 = callHle("scePowerRegisterCallback", -1, 1);
     const int32_t s1 = callHle("scePowerRegisterCallback", -1, 2);
@@ -152,6 +168,7 @@ int main() {
     psp_hle_register_power();
     test_registered();
     test_openpsid();
+    test_openpsid_uses_local_mac();
     test_power_callback();
     test_returns();
     std::free(g_ram);

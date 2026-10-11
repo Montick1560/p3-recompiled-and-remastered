@@ -446,6 +446,7 @@ void psp_hle_register_net() {
     psp_hle_register("sceNetAdhocctlAddHandler", hle_sceNetAdhocctlAddHandler);
     psp_hle_register("sceNetAdhocctlDelHandler", hle_sceNetAdhocctlDelHandler);
     psp_hle_register("sceWlanGetSwitchState", hle_sceWlanGetSwitchState);
+    psp_hle_misc_set_mac_source([]() -> const uint8_t* { return psp_net_config().mac.data(); });
     psp_hle_register("sceWlanGetEtherAddr", hle_sceWlanGetEtherAddr);
     psp_hle_register("sceNetEtherNtostr", hle_sceNetEtherNtostr);
     psp_hle_register("sceNetEtherStrton", hle_sceNetEtherStrton);

@@ -32,10 +32,20 @@ static void write_bytes(uint8_t* rdram, uint32_t addr, const void* src,
     std::memcpy(rdram + (addr & kAddrMask), src, len);
 }
 
+// Local ad hoc MAC (set by the net module): Patapon 3 tells multiplayer
+// players apart by OpenPSID, so a fixed ID made every peer Player 1. PPSSPP
+// #13231 overwrites the first 6 bytes with the local MAC.
+static const uint8_t* (*g_mac_source)() = nullptr;
+
+void psp_hle_misc_set_mac_source(const uint8_t* (*mac)()) { g_mac_source = mac; }
+
 static void hle_sceOpenPSIDGetOpenPSID(uint8_t* rdram, recomp_context* ctx) {
     const uint32_t addr = static_cast<uint32_t>(ctx->r[4]);
     if (valid_range(addr, 16)) {
-        write_bytes(rdram, addr, kOpenPsid, 16);
+        uint8_t psid[16];
+        std::memcpy(psid, kOpenPsid, 16);
+        if (g_mac_source) std::memcpy(psid, g_mac_source(), 6);
+        write_bytes(rdram, addr, psid, 16);
     }
     ctx->r[2] = 0;
 }
