@@ -93,6 +93,7 @@ AdhocConfig adhoc_config_load(const std::function<const char*(const char*)>& get
             cfg.port_offset = static_cast<uint16_t>(v);
         }
     }
+    if (const char* bind = getenv_fn("PSPRECOMP_ADHOC_BIND"); bind && *bind) cfg.bind_ip = bind;
     const char* env_mac = getenv_fn("PSPRECOMP_ADHOC_MAC");
     if (env_mac && adhoc_parse_mac(env_mac, &cfg.mac)) return cfg;
     if (!mac_file.empty() && read_mac_file(mac_file, &cfg.mac)) return cfg;

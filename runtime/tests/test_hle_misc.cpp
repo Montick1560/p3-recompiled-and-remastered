@@ -1,6 +1,6 @@
 // Small HLE import tests. Handlers run through a stub registry against a
 // fake guest RAM, the same way test_hle_psmf.cpp drives psp_hle_psmf.cpp.
-// Oracle: PPSSPP Core/HLE (sceNet, sceOpenPSID, sceHprm, sceUmd, scePower,
+// Oracle: PPSSPP Core/HLE (sceOpenPSID, sceHprm, sceUmd, scePower,
 // scePspNpDrm_user, sceKernel).
 
 #include "hle/psp_hle.h"
@@ -42,13 +42,11 @@ static int tests_run = 0;
     } while (0)
 
 // PPSSPP Core/HLE/ErrorCodes.h
-static constexpr int32_t ERR_ILLEGAL_ADDR = (int32_t)0x800200D3;
 static constexpr int32_t ERR_INVALID_SIZE = (int32_t)0x80000104;
 static constexpr int32_t ERR_PRIV_REQUIRED = (int32_t)0x80000023;
 static constexpr int32_t ERR_TAKEN_SLOT = (int32_t)0x80000020;
 static constexpr int32_t ERR_NPDRM_INVALID_FILE = (int32_t)0x80550902;
 
-static const uint8_t kMac[6] = {0x00, 0x1D, 0xD9, 0x50, 0x33, 0x03};
 static const uint8_t kOpenPsid[16] = {
     0x10, 0x02, 0xA3, 0x44, 0x13, 0xF5, 0x93, 0xB0,
     0xCC, 0x6E, 0xD1, 0x32, 0x27, 0x85, 0x0F, 0x9D};
@@ -88,7 +86,6 @@ static uint8_t* guest(uint32_t addr) {
 
 static void test_registered() {
     const char* names[] = {
-        "sceWlanGetEtherAddr",
         "sceOpenPSIDGetOpenPSID",
         "sceHprmIsHeadphoneExist",
         "sceUmdCancelWaitDriveStat",
@@ -102,23 +99,6 @@ static void test_registered() {
     for (const char* n : names) {
         CHECK(registry().count(n) == 1, n);
     }
-}
-
-static void test_wlan() {
-    const uint32_t addr = 0x08810000u;
-    std::memset(guest(addr), 0xA5, 6);
-    CHECK_EQ(callHle("sceWlanGetEtherAddr", (int32_t)addr), 0,
-             "WlanGetEtherAddr valid");
-    CHECK(std::memcmp(guest(addr), kMac, 6) == 0, "Wlan MAC bytes");
-
-    std::memset(g_ram, 0x5A, 16);
-    CHECK_EQ(callHle("sceWlanGetEtherAddr", 0), ERR_ILLEGAL_ADDR,
-             "WlanGetEtherAddr null");
-    bool untouched = true;
-    for (int i = 0; i < 6; i++) {
-        if (g_ram[i] != 0x5A) untouched = false;
-    }
-    CHECK(untouched, "Wlan null wrote nothing");
 }
 
 static void test_openpsid() {
@@ -171,7 +151,6 @@ int main() {
     psp_hle_register_misc();
     psp_hle_register_power();
     test_registered();
-    test_wlan();
     test_openpsid();
     test_power_callback();
     test_returns();

@@ -155,7 +155,13 @@ int main(int argc, char* argv[]) {
     //     reads/writes, info queries, button injection, and screenshots.
     //     The hooks give the I and S commands read-only views into the GE,
     //     dispatch, and scheduler subsystems (issue #35).
-    psp_debug_socket_start(rdram, PSP_MEM_SIZE, 9999);
+    // PSPRECOMP_DEBUG_PORT moves it (a second instance for ad hoc tests).
+    int debug_port = 9999;
+    if (const char* p = std::getenv("PSPRECOMP_DEBUG_PORT")) {
+        const int v = std::atoi(p);
+        if (v > 0 && v < 65536) debug_port = v;
+    }
+    psp_debug_socket_start(rdram, PSP_MEM_SIZE, debug_port);
     {
         PspDebugHooks hooks;
         hooks.ge_stats           = ge_draw_get_stats;

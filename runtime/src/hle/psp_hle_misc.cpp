@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <cstring>
 
-// Small Patapon 3 imports. Return values and pointer checks follow PPSSPP
+// Small Patapon 3 imports (sceWlan/sceNet live in psp_hle_net.cpp). Return values and pointer checks follow PPSSPP
 // Core/HLE (sceNet, sceOpenPSID, sceHprm, sceUmd, scePspNpDrm_user, sceKernel).
 
 static constexpr uint32_t kAddrMask = 0x07FFFFFFU;
@@ -14,7 +14,6 @@ static constexpr int32_t kInvalidSize = (int32_t)0x80000104;
 static constexpr int32_t kNpDrmInvalidFile = (int32_t)0x80550902;
 static constexpr int kNpDrmKeyLen = 16;
 
-static const uint8_t kWlanMac[6] = {0x00, 0x1D, 0xD9, 0x50, 0x33, 0x03};
 static const uint8_t kOpenPsid[16] = {
     0x10, 0x02, 0xA3, 0x44, 0x13, 0xF5, 0x93, 0xB0,
     0xCC, 0x6E, 0xD1, 0x32, 0x27, 0x85, 0x0F, 0x9D};
@@ -31,16 +30,6 @@ static bool valid_range(uint32_t addr, uint32_t len) {
 static void write_bytes(uint8_t* rdram, uint32_t addr, const void* src,
                         uint32_t len) {
     std::memcpy(rdram + (addr & kAddrMask), src, len);
-}
-
-static void hle_sceWlanGetEtherAddr(uint8_t* rdram, recomp_context* ctx) {
-    const uint32_t addr = static_cast<uint32_t>(ctx->r[4]);
-    if (!valid_range(addr, 6)) {
-        ctx->r[2] = SCE_KERNEL_ERROR_ILLEGAL_ADDR;
-        return;
-    }
-    write_bytes(rdram, addr, kWlanMac, 6);
-    ctx->r[2] = 0;
 }
 
 static void hle_sceOpenPSIDGetOpenPSID(uint8_t* rdram, recomp_context* ctx) {
@@ -99,7 +88,6 @@ static void hle_sceKernelDcacheWritebackInvalidateRange(uint8_t* rdram,
 }
 
 void psp_hle_register_misc() {
-    psp_hle_register("sceWlanGetEtherAddr", hle_sceWlanGetEtherAddr);
     psp_hle_register("sceOpenPSIDGetOpenPSID", hle_sceOpenPSIDGetOpenPSID);
     psp_hle_register("sceHprmIsHeadphoneExist", hle_sceHprmIsHeadphoneExist);
     psp_hle_register("sceUmdCancelWaitDriveStat",

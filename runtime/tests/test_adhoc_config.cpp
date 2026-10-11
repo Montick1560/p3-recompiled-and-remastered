@@ -94,6 +94,9 @@ static void port_offset_parsed() {
     CHECK(adhoc_config_load(env_of(bad), "", 1).port_offset == 10000, "out of range keeps default");
     Env zero{{"PSPRECOMP_ADHOC_PORT_OFFSET", "0"}};
     CHECK(adhoc_config_load(env_of(zero), "", 1).port_offset == 0, "zero offset allowed");
+    Env bind{{"PSPRECOMP_ADHOC_BIND", "127.0.0.2"}};
+    CHECK(adhoc_config_load(env_of(bind), "", 1).bind_ip == "127.0.0.2", "bind address from env");
+    CHECK(adhoc_config_load(env_of(zero), "", 1).bind_ip.empty(), "no bind address by default");
 }
 
 int main() {

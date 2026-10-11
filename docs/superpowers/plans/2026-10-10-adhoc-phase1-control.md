@@ -206,4 +206,16 @@ Behaviour (PPSSPP `PSPNetconfDialog.cpp` 217–360): `netAction` 2 (CONNECT_ADHO
 
 ## Probe evidence
 
-(filled by Task 0)
+Static probe (generated code, `build/p3_output`), 2026-10-10:
+
+- `FUN_0886bff8(obj, action, group)` is the game's netconf wrapper: memset 68-byte param at
+  obj+4, `netAction` = action at obj+52, group copied (max 8) to obj+72, `NetconfData` = obj+72 at
+  obj+56, `timeout` = 60 at obj+80, then `sceUtilityNetconfInitStart(obj+4)`.
+- Callers (`batch_0184.cpp`, FUN at 0x089B9xxx/0x089BAxxx): one passes **action 2
+  (CONNECT_ADHOC)** with a group name, the other **action 0 (CONNECT_APNET, infrastructure)**.
+  So ad hoc = `Mode::Connect`; JOIN/CREATE are not used by Patapon 3.
+- adhocctl imports are only Init/Term/AddHandler/DelHandler: group state reaches the game through
+  handler events (CONNECT/DISCONNECT/SCAN/ERROR), and the lobby itself is sceNetAdhocMatching
+  (phase 2).
+- The live probe (HLE trace in the game's multiplayer menu) still needs the menu path from the
+  user; to_square.py's SQUARE opens "Cambio de clase" in the barracks, not a network menu.

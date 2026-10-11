@@ -161,6 +161,13 @@ set(RUNTIME_SOURCES
     src/net/adhoc_config.cpp
     src/net/pro_protocol.cpp
     src/net/pro_client.cpp
+    src/net/adhocctl.cpp
+    src/net/guest_callbacks.cpp
+    src/net/netconf_adhoc.cpp
+    src/net/matching_packet.cpp
+    src/net/pdp.cpp
+    src/net/matching.cpp
+    src/net/ptp.cpp
     src/psp_ge_texmemo.cpp
     src/psp_ge_test.cpp
     src/hle/psp_hle_dispatch.cpp
@@ -176,6 +183,8 @@ set(RUNTIME_SOURCES
     src/hle/psp_hle_ge.cpp
     src/hle/psp_hle_power.cpp
     src/hle/psp_hle_misc.cpp
+    src/hle/psp_hle_net.cpp
+    src/hle/psp_hle_net_matching.cpp
     src/hle/psp_hle_ctrl.cpp
     src/hle/psp_hle_utility.cpp
     src/hle/psp_hle_sas.cpp
@@ -624,6 +633,45 @@ target_compile_options(test_pro_client PRIVATE -O2 -Wall -Wextra -Wno-unused-par
 target_link_libraries(test_pro_client PRIVATE pthread ${PSP_SOCKET_LIBS})
 add_test(NAME pro_client_tests COMMAND test_pro_client)
 
+add_executable(test_adhocctl tests/test_adhocctl.cpp src/net/adhocctl.cpp src/net/pro_client.cpp src/net/pro_protocol.cpp)
+target_include_directories(test_adhocctl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_adhocctl PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(test_adhocctl PRIVATE pthread ${PSP_SOCKET_LIBS})
+add_test(NAME adhocctl_tests COMMAND test_adhocctl)
+
+add_executable(test_guest_callback_queue tests/test_guest_callback_queue.cpp)
+target_include_directories(test_guest_callback_queue PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_guest_callback_queue PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(test_guest_callback_queue PRIVATE pthread)
+add_test(NAME guest_callback_queue_tests COMMAND test_guest_callback_queue)
+
+add_executable(test_netconf_adhoc tests/test_netconf_adhoc.cpp src/net/netconf_adhoc.cpp)
+target_include_directories(test_netconf_adhoc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_netconf_adhoc PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME netconf_adhoc_tests COMMAND test_netconf_adhoc)
+
+add_executable(test_matching_packet tests/test_matching_packet.cpp src/net/matching_packet.cpp)
+target_include_directories(test_matching_packet PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_matching_packet PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME matching_packet_tests COMMAND test_matching_packet)
+
+add_executable(test_pdp tests/test_pdp.cpp src/net/pdp.cpp)
+target_include_directories(test_pdp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_pdp PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(test_pdp PRIVATE pthread ${PSP_SOCKET_LIBS})
+add_test(NAME pdp_tests COMMAND test_pdp)
+
+add_executable(test_matching tests/test_matching.cpp src/net/matching.cpp src/net/matching_packet.cpp)
+target_include_directories(test_matching PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_matching PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME matching_tests COMMAND test_matching)
+
+add_executable(test_ptp tests/test_ptp.cpp src/net/ptp.cpp)
+target_include_directories(test_ptp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_ptp PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(test_ptp PRIVATE pthread ${PSP_SOCKET_LIBS})
+add_test(NAME ptp_tests COMMAND test_ptp)
+
 # Host FPU mode from FCR31 (flush-to-zero).
 add_executable(test_fpu tests/test_fpu.cpp src/psp_fpu.cpp)
 target_include_directories(test_fpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -810,6 +858,27 @@ target_compile_options(test_hle_misc PRIVATE
 )
 
 add_test(NAME hle_misc COMMAND test_hle_misc)
+
+add_executable(test_hle_net
+    tests/test_hle_net.cpp
+    src/hle/psp_hle_net.cpp
+    src/hle/psp_hle_net_matching.cpp
+    src/net/adhoc_config.cpp
+    src/net/adhocctl.cpp
+    src/net/pdp.cpp
+    src/net/ptp.cpp
+    src/net/matching.cpp
+    src/net/matching_packet.cpp
+    src/net/pro_client.cpp
+    src/net/pro_protocol.cpp
+)
+target_include_directories(test_hle_net PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${PSPRECOMP_OUTPUT_DIR}/include
+)
+target_compile_options(test_hle_net PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(test_hle_net PRIVATE pthread ${PSP_SOCKET_LIBS})
+add_test(NAME hle_net COMMAND test_hle_net)
 
 # MPEG-PS demuxer unit test (pure: byte queue, H.264 AU splitter, PES/pack
 # parsing, ATRAC3plus frames; the real-data case streams the user's

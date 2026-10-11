@@ -292,6 +292,27 @@ Read by the runtime binary at start-up or during execution.
 - **Effect:** Font of the on-screen keyboard text box. Logged as `[OSK] font <path>`;
   `[OSK] no font found` means the box draws without text.
 
+### `PSPRECOMP_ADHOC_SERVER`, `PSPRECOMP_ADHOC_NICK`, `PSPRECOMP_ADHOC_MAC`, `PSPRECOMP_ADHOC_PORT_OFFSET`, `PSPRECOMP_ADHOC_BIND`, `PSPRECOMP_ADHOC_MAC_FILE`
+- **Read in:** `runtime/src/net/adhoc_config.cpp` (`adhoc_config_load`), once, from
+  `psp_net_config()` in `runtime/src/hle/psp_hle_net.cpp` (first sceWlan/sceNetAdhocctl call).
+- **Type:** env. `SERVER` = `host` or `host:port`; `MAC` = `aa:bb:cc:dd:ee:ff`; `PORT_OFFSET`
+  = 0..65535; `BIND` = local IPv4 address; `MAC_FILE` = path.
+- **Default:** server `127.0.0.1:27312` (a local PRO ad hoc server, e.g. PPSSPP's built-in one or
+  `tools/adhoc_server.py`), nickname `Patapon`, port offset 10000 (PPSSPP's), no bind address,
+  MAC read from `psprecomp_adhoc_mac.txt` in the working directory or generated once and written
+  there (first byte's two low bits clear, like PPSSPP).
+- **Effect:** Ad hoc multiplayer identity and server. The game sees the MAC through
+  `sceWlanGetEtherAddr`; `sceNetAdhocctlInit` logs in to the server with MAC, nickname and the
+  game's product code. Logged as `[ADHOC] config: ...`, `[ADHOC] logged in ...`.
+- **Set it when:** running two instances on one PC (each needs its own `MAC`, `BIND` such as
+  127.0.0.1 / 127.0.0.2, and `PSPRECOMP_DEBUG_PORT`), or playing through another server.
+
+### `PSPRECOMP_DEBUG_PORT`
+- **Read in:** `runtime/src/main.cpp` (debug socket start).
+- **Type:** env (TCP port).
+- **Default:** 9999.
+- **Effect:** Port of the debug socket (DEBUGGING.md §6). A second instance needs another port.
+
 ---
 
 ## Scheduler (#66)

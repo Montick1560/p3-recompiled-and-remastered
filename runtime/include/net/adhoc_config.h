@@ -16,6 +16,7 @@ struct AdhocConfig {
     std::string nickname = "Patapon";  // at most 127 bytes (PRO field is 128)
     AdhocMac mac{};
     uint16_t port_offset = 10000;
+    std::string bind_ip;  // local address for this instance (e.g. 127.0.0.2), empty = any
 };
 
 // Environment variables read through getenv_fn:
@@ -23,6 +24,7 @@ struct AdhocConfig {
 //   PSPRECOMP_ADHOC_NICK         nickname
 //   PSPRECOMP_ADHOC_MAC          aa:bb:cc:dd:ee:ff (wins over mac_file)
 //   PSPRECOMP_ADHOC_PORT_OFFSET  0..65535
+//   PSPRECOMP_ADHOC_BIND         local IPv4 address to use (several instances on one PC)
 // Without a valid PSPRECOMP_ADHOC_MAC the MAC is read from mac_file; if that
 // is missing or invalid a MAC is generated from random_seed and written there.
 AdhocConfig adhoc_config_load(const std::function<const char*(const char*)>& getenv_fn,

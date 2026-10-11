@@ -4,6 +4,8 @@
 #include "hle/psp_hle_kernel.h"
 #include "psp_audio_out.h"
 #include "psp_osk_session.h"
+#include "net/adhocctl.h"
+#include "net/netconf_adhoc.h"
 #include "psp_event_loop.h"
 #include "psp_audio_volume.h"
 #include "psp_memory.h"
@@ -834,20 +836,6 @@ static void hle_sceUmdUnRegisterUMDCallBack(
 
 // ---- Networking (all init/term no-ops) ----
 
-static void hle_sceNetInit(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    ctx->r[2] = SCE_OK;
-    (void)rdram;
-}
-
-static void hle_sceNetTerm(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    ctx->r[2] = SCE_OK;
-    (void)rdram;
-}
-
 static void hle_sceNetInetInit(
     uint8_t* rdram, recomp_context* ctx
 ) {
@@ -1659,6 +1647,111 @@ static void hle_sceUtilityOskUpdate(
     (void)rdram;
 }
 
+// ---- Network configuration dialog (sceUtilityNetconf) ----
+// Ad hoc actions drive adhocctl (runtime/src/net) until the group is
+// joined; decisions in netconf_adhoc.cpp. Param layout (PPSSPP
+// SceUtilityNetconfParam): common header (result at +28), netAction at
+// +48, pointer to {char groupName[8]; int timeout} at +52.
+static UtilityDialogState g_netconf_dialog;
+static struct {
+    bool requested = false;
+    bool scanning = false;
+    std::chrono::steady_clock::time_point start{}, last_scan{};
+} g_netconf;
+
+static std::string netconf_group(uint8_t* rdram, uint32_t param, bool* valid) {
+    const uint32_t data = psp_mem_read<uint32_t>(rdram, param + 52);
+    *valid = (data & 0x07FFFFFFU) >= 0x00010000U && (data & 0x07FFFFFFU) + 12 <= PSP_MEM_SIZE;
+    if (!*valid) return {};
+    const char* g = reinterpret_cast<const char*>(rdram + (data & 0x07FFFFFFU));
+    return std::string(g, strnlen(g, 8));
+}
+
+static void hle_sceUtilityNetconfInitStart(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    utility_dialog_init_start(g_netconf_dialog, ctx);
+    if (ctx->r[2] == SCE_OK) {
+        g_netconf.requested = false;
+        g_netconf.scanning = false;
+        g_netconf.start = std::chrono::steady_clock::now();
+        g_netconf.last_scan = {};
+        const uint32_t p = g_netconf_dialog.param_addr;
+        bool valid = false;
+        const std::string group = netconf_group(rdram, p, &valid);
+        fprintf(stderr, "[HLE] sceUtilityNetconfInitStart(action=%d group=\"%s\")\n",
+                psp_mem_read<int32_t>(rdram, p + 48), group.c_str());
+    }
+}
+
+static void hle_sceUtilityNetconfGetStatus(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    UtilityDialogState& dlg = g_netconf_dialog;
+    const int32_t ret = dlg.status;
+    if (dlg.status == PSP_UTILITY_STATUS_RUNNING) {
+        const uint32_t p = dlg.param_addr;
+        const auto now = std::chrono::steady_clock::now();
+        auto ms = [](auto d) { return std::chrono::duration_cast<std::chrono::milliseconds>(d).count(); };
+        adhocctl::Adhocctl& ac = adhocctl::instance();
+        netconf::Input in;
+        in.action = psp_mem_read<int32_t>(rdram, p + 48);
+        const std::string group = netconf_group(rdram, p, &in.have_group);
+        in.adhocctl_state = ac.state();
+        in.requested = g_netconf.requested;
+        in.elapsed_ms = ms(now - g_netconf.start);
+        in.since_scan_ms = g_netconf.last_scan == std::chrono::steady_clock::time_point{}
+                               ? (int64_t)1 << 30 : ms(now - g_netconf.last_scan);
+        for (const auto& r : ac.scan_results()) in.group_seen |= r.group == group;
+        const netconf::Step st = netconf::step(in);
+        int rc = 0;
+        auto connect = [&](adhocctl::Mode m) {
+            PspCpuReleaseScope release;  // may log in to the server again
+            return ac.connect(group, m);
+        };
+        switch (st.command) {
+            case netconf::Command::Create: rc = connect(adhocctl::Mode::Create); break;
+            case netconf::Command::Connect: rc = connect(adhocctl::Mode::Connect); break;
+            case netconf::Command::Join: rc = connect(adhocctl::Mode::Join); break;
+            case netconf::Command::Scan:
+                ac.scan();
+                g_netconf.last_scan = now;
+                break;
+            case netconf::Command::None: break;
+        }
+        if (st.command == netconf::Command::Create || st.command == netconf::Command::Connect ||
+            st.command == netconf::Command::Join) {
+            g_netconf.requested = rc >= 0;
+        }
+        if (st.finished) {
+            psp_mem_write<int32_t>(rdram, p + 28, st.result);
+            dlg.status = PSP_UTILITY_STATUS_FINISHED;
+            fprintf(stderr, "[HLE] sceUtilityNetconf: finished result=%d group=\"%s\"\n",
+                    st.result, group.c_str());
+        }
+    } else if (dlg.status == PSP_UTILITY_STATUS_INITIALIZE) {
+        dlg.status = PSP_UTILITY_STATUS_RUNNING;
+    } else if (dlg.status == PSP_UTILITY_STATUS_SHUTDOWN) {
+        dlg.status = PSP_UTILITY_STATUS_NONE;
+        dlg.param_addr = 0;
+    }
+    ctx->r[2] = ret;
+}
+
+static void hle_sceUtilityNetconfShutdownStart(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    utility_dialog_shutdown_start(g_netconf_dialog, ctx);
+    (void)rdram;
+}
+
+static void hle_sceUtilityNetconfUpdate(
+    uint8_t* rdram, recomp_context* ctx
+) {
+    utility_dialog_update(g_netconf_dialog, ctx);
+    (void)rdram;
+}
+
 static void hle_sceUtilityHtmlViewerInitStart(
     uint8_t* rdram, recomp_context* ctx
 ) {
@@ -1921,8 +2014,6 @@ void psp_hle_register_utility() {
                       hle_sceUmdUnRegisterUMDCallBack);
 
     // Networking
-    psp_hle_register("sceNetInit", hle_sceNetInit);
-    psp_hle_register("sceNetTerm", hle_sceNetTerm);
     psp_hle_register("sceNetInetInit", hle_sceNetInetInit);
     psp_hle_register("sceNetInetTerm", hle_sceNetInetTerm);
     psp_hle_register("sceNetApctlInit", hle_sceNetApctlInit);
@@ -2029,6 +2120,10 @@ void psp_hle_register_utility() {
                       hle_sceUtilityOskShutdownStart);
     psp_hle_register("sceUtilityOskUpdate",
                       hle_sceUtilityOskUpdate);
+    psp_hle_register("sceUtilityNetconfInitStart", hle_sceUtilityNetconfInitStart);
+    psp_hle_register("sceUtilityNetconfGetStatus", hle_sceUtilityNetconfGetStatus);
+    psp_hle_register("sceUtilityNetconfShutdownStart", hle_sceUtilityNetconfShutdownStart);
+    psp_hle_register("sceUtilityNetconfUpdate", hle_sceUtilityNetconfUpdate);
     psp_hle_register("sceUtilityHtmlViewerInitStart",
                       hle_sceUtilityHtmlViewerInitStart);
     psp_hle_register("sceUtilityHtmlViewerGetStatus",
