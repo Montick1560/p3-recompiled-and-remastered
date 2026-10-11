@@ -263,7 +263,8 @@ a PRO ad hoc server, the protocol PPSSPP uses, so the server can be PPSSPP's bui
 `PSPRECOMP_ADHOC_BIND` and `PSPRECOMP_ADHOC_PORT_OFFSET` configure it ([docs/ENV_FLAGS.md](docs/ENV_FLAGS.md)).
 Implemented: adhocctl, the netconf ad hoc dialog, PDP (UDP), PTP (TCP), matching, and the
 aemu_postoffice relay that PPSSPP uses for "server-provided packet relay" (`PSPRECOMP_ADHOC_RELAY=1`;
-verified between two runtime instances through `tools/postoffice_server.py`).
+verified through `tools/postoffice_server.py` between two runtime instances and with PPSSPP 1.20.4 in
+relay mode hosting).
 
 ### Prerequisites
 

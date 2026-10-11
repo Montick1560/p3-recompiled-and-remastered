@@ -1,6 +1,6 @@
 # Ad hoc relay (aemu_postoffice) — plan
 
-Date: 2026-10-11. Status: tasks 1-6a done (two runtime instances through the relay: lobby, chat, co-op quest with FEVER); 6b (PPSSPP in relay mode) next.
+Date: 2026-10-11. Status: DONE except play across machines. Verified through tools/postoffice_server.py: two runtime instances (lobby, co-op quest with FEVER) and PPSSPP 1.20.4 in relay mode (`AdhocServerRelayMode = 1`, server 127.0.0.3) hosting the runtime (lobby, co-op quest, the runtime's hero marching on PPSSPP's screen).
 
 ## Why
 
