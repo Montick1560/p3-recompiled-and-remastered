@@ -2,6 +2,7 @@
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_intr.h"
 #include "hle/psp_hle_kernel.h"
+#include "hle/psp_system_param.h"
 #include "psp_audio_out.h"
 #include "psp_osk_session.h"
 #include "net/adhocctl.h"
@@ -1102,25 +1103,14 @@ static void hle_sceUtilityUnloadModule(
 static void hle_sceUtilityGetSystemParamInt(
     uint8_t* rdram, recomp_context* ctx
 ) {
-    int32_t param_id = ctx->r[4];
-    uint32_t value_ptr = static_cast<uint32_t>(ctx->r[5]);
-
+    const int32_t param_id = ctx->r[4];
+    const uint32_t value_ptr = static_cast<uint32_t>(ctx->r[5]);
     int32_t value = 0;
-    switch (param_id) {
-        case 1: value = 1; break;  // Language = English
-        case 5: value = 0; break;  // Date format = YYYYMMDD
-        case 6: value = 0; break;  // Time format = 24h
-        case 7: value = 0; break;  // Timezone offset
-        case 8: value = 1; break;  // Daylight saving
-        case 9: value = 1; break;  // Nickname (not impl'd via int)
-        default: break;
-    }
-
-    if (value_ptr != 0) {
+    const int32_t ret = psp_system_param_int(param_id, &value);
+    if (ret == 0 && value_ptr != 0) {
         psp_mem_write<int32_t>(rdram, value_ptr, value);
     }
-
-    ctx->r[2] = SCE_OK;
+    ctx->r[2] = ret;
 }
 
 // ---- Utility dialog status protocol (savedata, msg dialog) ----

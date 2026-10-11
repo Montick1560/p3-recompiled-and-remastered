@@ -187,6 +187,7 @@ set(RUNTIME_SOURCES
     src/hle/psp_hle_net_matching.cpp
     src/hle/psp_hle_ctrl.cpp
     src/hle/psp_hle_utility.cpp
+    src/hle/psp_system_param.cpp
     src/hle/psp_hle_sas.cpp
     src/hle/psp_sas_core.cpp
     src/hle/psp_atrac_ctx.cpp
@@ -600,6 +601,11 @@ add_executable(test_wheel tests/test_wheel.cpp src/psp_wheel.cpp)
 target_include_directories(test_wheel PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_wheel PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME wheel_tests COMMAND test_wheel)
+
+add_executable(test_system_param tests/test_system_param.cpp src/hle/psp_system_param.cpp)
+target_include_directories(test_system_param PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_system_param PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME system_param_tests COMMAND test_system_param)
 
 add_executable(test_text_edit tests/test_text_edit.cpp src/psp_text_edit.cpp)
 target_include_directories(test_text_edit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
