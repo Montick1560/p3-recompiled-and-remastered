@@ -160,6 +160,7 @@ set(RUNTIME_SOURCES
     src/psp_osk_overlay.cpp
     src/net/adhoc_config.cpp
     src/net/pro_protocol.cpp
+    src/net/pro_client.cpp
     src/psp_ge_texmemo.cpp
     src/psp_ge_test.cpp
     src/hle/psp_hle_dispatch.cpp
@@ -611,6 +612,12 @@ add_executable(test_pro_protocol tests/test_pro_protocol.cpp src/net/pro_protoco
 target_include_directories(test_pro_protocol PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_pro_protocol PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME pro_protocol_tests COMMAND test_pro_protocol)
+
+add_executable(test_pro_client tests/test_pro_client.cpp src/net/pro_client.cpp src/net/pro_protocol.cpp)
+target_include_directories(test_pro_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_pro_client PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(test_pro_client PRIVATE pthread ${PSP_SOCKET_LIBS})
+add_test(NAME pro_client_tests COMMAND test_pro_client)
 
 # Host FPU mode from FCR31 (flush-to-zero).
 add_executable(test_fpu tests/test_fpu.cpp src/psp_fpu.cpp)
