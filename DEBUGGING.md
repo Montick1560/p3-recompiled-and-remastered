@@ -307,6 +307,21 @@ them (issue #43 tracks a proper registry/channel system).
   delay instruction at the slot's label (`DelaySlotRejoin`); a control transfer in a
   branched-into slot is a loud `BranchInDelaySlot` decode error (stub) — 3 known in
   .hack//Link, all GE-list data misdetected as code.
+- **Random freezes after loading, decompressed data with a few bytes zeroed** (Patapon 3
+  hideout "CARGANDO" hang, fixed 2026-10-10): guest stacks overlapped. `psp_alloc_stack`
+  returned the block base and thread creation used it as the k0/stack top, so every stack
+  ran down into the next block (user_main over the GE callback stack and FileThread). A GE
+  finish callback (fresh zeroed context, carved stack) runs whenever a guest busy loop
+  yields the CPU (`psp_cpu_yield_if_contended` at back-edges), so its prologue stored zero
+  registers into user_main's live frame: here, four entries of the deflate decoder's
+  Huffman table, so every literal 0x8F..0x92 of one block came out as 0x00 and the GMO
+  parser later looped on a zero chunk size. How it was found: save every buffer passed
+  to the consumer (`PSPRECOMP_FUNC_ARGS_SAVE`), repeat the load until it freezes, diff the
+  bad buffer against good runs (identical between good runs; bad = a narrow set of byte
+  values zeroed in one window → corrupted decode table → concurrent writer), then compare
+  thread stack ranges from the log (`sceKernelCreateThread ... stk=`, `[GE] Callback guest
+  stack carved`). Layout now lives in `psp_stack_layout.h` (PPSSPP FillStack: block
+  [base, base+size), k0 = top 256 bytes, sp = k0), pinned by `tests/test_stack_layout.cpp`.
 
 ---
 

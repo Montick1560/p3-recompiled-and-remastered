@@ -603,6 +603,11 @@ target_compile_options(test_osk_session PRIVATE -O2 -Wall -Wextra -Wno-unused-pa
 target_link_libraries(test_osk_session PRIVATE pthread)
 add_test(NAME osk_session_tests COMMAND test_osk_session)
 
+add_executable(test_stack_layout tests/test_stack_layout.cpp)
+target_include_directories(test_stack_layout PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_stack_layout PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME stack_layout_tests COMMAND test_stack_layout)
+
 add_executable(test_adhoc_config tests/test_adhoc_config.cpp src/net/adhoc_config.cpp)
 target_include_directories(test_adhoc_config PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_adhoc_config PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)

@@ -110,8 +110,10 @@ int psp_current_thread_uid();
 uint32_t psp_kernel_compiled_sdk_version();
 
 // ---- Stack Allocator ----
-// Allocates guest stack from top of PSP user memory downward.
-uint32_t psp_alloc_stack(uint8_t* rdram, uint32_t size);
+// Carves a guest stack block from the top of PSP user memory downward
+// (psp_stack_layout.h: the block's k0 area and initial sp are at its top).
+#include "psp_stack_layout.h"
+PspStackBlock psp_alloc_stack(uint32_t size);
 
 // ---- Workaround API ----
 // Signal a semaphore by UID without going through HLE argument parsing.

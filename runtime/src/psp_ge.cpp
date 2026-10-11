@@ -42,7 +42,8 @@ static uint32_t g_ge_cb_stack_top = 0;
 
 static uint32_t ge_cb_stack(uint8_t* rdram) {
     if (g_ge_cb_stack_top == 0) {
-        g_ge_cb_stack_top = psp_alloc_stack(rdram, 0x1000);
+        (void)rdram;
+        g_ge_cb_stack_top = psp_alloc_stack(0x1000).sp;
         std::fprintf(stderr,
             "[GE] Callback guest stack carved: sp=0x%08X\n",
             g_ge_cb_stack_top);

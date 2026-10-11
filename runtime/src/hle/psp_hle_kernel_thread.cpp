@@ -63,15 +63,14 @@ int psp_next_uid() {
 }
 
 // ---- Stack Allocator ----
-// Grows downward from top of PSP user memory
-static uint32_t g_stack_top = PSP_USER_MEM_END - 0x1000;
+// Grows downward from top of PSP user memory (the boot thread keeps the
+// top 4 KB). Each thread runs inside its own block: k0 area at the top, sp
+// below it. Using the block base as k0 (the old layout) ran every stack
+// down into the next thread's block.
+static PspStackCarver g_stacks(PSP_USER_MEM_END - 0x1000);
 
-uint32_t psp_alloc_stack(uint8_t* rdram, uint32_t size) {
-    (void)rdram;
-    // Align to 256 bytes
-    size = (size + 0xFF) & ~0xFFU;
-    g_stack_top -= size;
-    return g_stack_top;
+PspStackBlock psp_alloc_stack(uint32_t size) {
+    return g_stacks.carve(size);
 }
 
 // ---- System Time Base ----
@@ -98,11 +97,11 @@ static void hle_sceKernelCreateThread(
     const char* name = reinterpret_cast<const char*>(
         rdram + (name_ptr & PSP_ADDR_MASK));
 
-    // Allocate guest stack
-    uint32_t stack_top = psp_alloc_stack(rdram, stack_sz);
+    // Allocate guest stack; the scheduler's stack_top is the k0 area.
+    const PspStackBlock stack = psp_alloc_stack(stack_sz);
 
     // Create thread via Phase 3 scheduler
-    int thid = psp_thread_create(name, entry, priority, stack_top, 0);
+    int thid = psp_thread_create(name, entry, priority, stack.k0, 0);
     if (thid < 0) {
         std::fprintf(stderr,
             "[HLE] sceKernelCreateThread(\"%s\") FAILED: no slots\n",
@@ -116,8 +115,8 @@ static void hle_sceKernelCreateThread(
     info.uid = uid;
     info.thid = thid;
     info.entry_addr = entry;
-    info.stack_base = stack_top;
-    info.stack_size = stack_sz;
+    info.stack_base = stack.base;
+    info.stack_size = stack.size;
     info.priority = priority;
     // PSP firmware ORs 0xFF into the attr on create (PPSSPP
     // sceKernelThread.cpp:1745); guest-visible via ReferThreadStatus.
@@ -180,7 +179,7 @@ static void hle_sceKernelStartThread(
     psp_mem_write<int32_t>(
         rdram, stack_top + 0xC0, it->second.uid);
     psp_mem_write<uint32_t>(
-        rdram, stack_top + 0xC8, stack_top);
+        rdram, stack_top + 0xC8, it->second.stack_base);
     psp_mem_write<uint32_t>(
         rdram, stack_top + 0xF8, 0xFFFFFFFFU);
     psp_mem_write<uint32_t>(
@@ -207,8 +206,10 @@ static void hle_sceKernelStartThread(
 
     pt->ctx.r[26] = static_cast<int32_t>(stack_top);
 
-    // 5. Set usable SP below k0 area
-    pt->ctx.r[29] = static_cast<int32_t>(stack_top - 0x100);
+    // 5. The stack grows down from the k0 area (PPSSPP FillStack); the
+    //    block's lowest word holds the thread UID.
+    pt->ctx.r[29] = static_cast<int32_t>(stack_top);
+    psp_mem_write<int32_t>(rdram, it->second.stack_base, it->second.uid);
 
     // 6. Copy thread arguments (Research Fix 3):
     //    PSP convention: copy argPtr data onto thread's stack,
