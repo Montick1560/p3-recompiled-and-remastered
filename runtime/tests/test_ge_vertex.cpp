@@ -555,6 +555,99 @@ static void test_snap_through_positions() {
     ASSERT_NEAR(v[0].uv[1], 1.0f, "v untouched");
 }
 
+// Hardware skinning (PPSSPP VertexDecoder::ComputeSkinMatrix + Step_Pos*Skin):
+// per-vertex weights (u8 / 128) blend the BONEMATRIX 4x3 matrices; the
+// position goes through that blended matrix before the world matrix. Flags
+// and cloth in Patapon 3 are animated this way.
+static void test_skinning_blends_bone_matrices() {
+    const size_t kRam = 0x08000000u;
+    uint8_t* ram = static_cast<uint8_t*>(std::calloc(kRam, 1));
+    const uint32_t vaddr = 0x08800000u;
+    // vtype 0x4380: 2 u8 weights + float position (stride 16: weights at 0, pos at 4).
+    uint8_t v[32] = {};
+    const float p[3] = {1.0f, 2.0f, 3.0f};
+    v[0] = 128; v[1] = 0;                       // vertex 0: bone 0 only
+    std::memcpy(v + 4, p, sizeof(p));
+    v[16] = 64; v[17] = 64;                     // vertex 1: half and half
+    std::memcpy(v + 20, p, sizeof(p));
+    std::memcpy(ram + (vaddr & 0x07FFFFFFu), v, sizeof(v));
+    GeState s;
+    s.reset();
+    s.vertex_type = 0x00004380u;
+    s.vertex_addr = vaddr;
+    for (int b = 0; b < 2; b++) {               // identity rotation
+        s.bone_matrix[b * 12 + 0] = 1.0f;
+        s.bone_matrix[b * 12 + 4] = 1.0f;
+        s.bone_matrix[b * 12 + 8] = 1.0f;
+    }
+    s.bone_matrix[0 * 12 + 9] = 10.0f;          // bone 0: +10 x
+    s.bone_matrix[1 * 12 + 10] = 20.0f;         // bone 1: +20 y
+    std::vector<DecodedVertex> out;
+    ge_decode_vertices(ram, s, 0, 2, out);
+    ASSERT_NEAR(out.size(), 2, "two skinned vertices");
+    if (out.size() == 2) {
+        ASSERT_NEAR(out[0].pos[0], 11.0f, "bone 0 moves x");
+        ASSERT_NEAR(out[0].pos[1], 2.0f, "bone 0 keeps y");
+        ASSERT_NEAR(out[1].pos[0], 6.0f, "blend x = 0.5*11 + 0.5*1");
+        ASSERT_NEAR(out[1].pos[1], 12.0f, "blend y = 0.5*2 + 0.5*22");
+        ASSERT_NEAR(out[1].pos[2], 3.0f, "z unchanged");
+    }
+    std::free(ram);
+}
+
+// Morphing (PPSSPP Step_PosFloatMorph / Step_Color8888Morph): every attribute
+// is the MORPHWEIGHT-weighted sum of the vertex's morph targets.
+static void test_morph_blends_targets() {
+    const size_t kRam = 0x08000000u;
+    uint8_t* ram = static_cast<uint8_t*>(std::calloc(kRam, 1));
+    const uint32_t vaddr = 0x08800000u;
+    // vtype 0x4019C: 2 morph targets of (col8888 + float pos), 16 bytes each.
+    uint8_t v[32] = {};
+    const uint8_t c0[4] = {0, 100, 200, 255}, c1[4] = {200, 100, 0, 255};
+    const float p0[3] = {0.0f, 0.0f, 0.0f}, p1[3] = {10.0f, 20.0f, 30.0f};
+    std::memcpy(v, c0, 4);       std::memcpy(v + 4, p0, 12);
+    std::memcpy(v + 16, c1, 4);  std::memcpy(v + 20, p1, 12);
+    std::memcpy(ram + (vaddr & 0x07FFFFFFu), v, sizeof(v));
+    GeState s;
+    s.reset();
+    s.vertex_type = 0x0004019Cu;
+    s.vertex_addr = vaddr;
+    s.morph_weights[0] = 0.25f;
+    s.morph_weights[1] = 0.75f;
+    ASSERT_NEAR(ge_vertex_stride(s.vertex_type), 32, "morph stride = 2 targets");
+    std::vector<DecodedVertex> out;
+    ge_decode_vertices(ram, s, 0, 1, out);
+    if (out.size() == 1) {
+        ASSERT_NEAR(out[0].pos[0], 7.5f, "morph x");
+        ASSERT_NEAR(out[0].pos[1], 15.0f, "morph y");
+        ASSERT_NEAR(out[0].pos[2], 22.5f, "morph z");
+        ASSERT_NEAR(out[0].color[0], 150, "morph red 0.25*0 + 0.75*200");
+        ASSERT_NEAR(out[0].color[2], 50, "morph blue 0.25*200 + 0.75*0");
+    }
+    std::free(ram);
+}
+
+// Transform-mode 8/16-bit positions are fixed point (PPSSPP Step_PosS8 / S16:
+// / 128 and / 32768); through mode keeps raw screen coordinates.
+static void test_fixed_point_positions_scaled_in_transform_mode() {
+    const size_t kRam = 0x08000000u;
+    uint8_t* ram = static_cast<uint8_t*>(std::calloc(kRam, 1));
+    const uint32_t vaddr = 0x08800000u;
+    const int16_t p[3] = {16384, -32768, 0};
+    std::memcpy(ram + (vaddr & 0x07FFFFFFu), p, sizeof(p));
+    GeState s;
+    s.reset();
+    s.vertex_type = 0x00000100u;  // s16 position, transform mode
+    s.vertex_addr = vaddr;
+    std::vector<DecodedVertex> out;
+    ge_decode_vertices(ram, s, 0, 1, out);
+    if (out.size() == 1) {
+        ASSERT_NEAR(out[0].pos[0], 0.5f, "s16 x / 32768");
+        ASSERT_NEAR(out[0].pos[1], -1.0f, "s16 y / 32768");
+    }
+    std::free(ram);
+}
+
 int main() {
     test_color_write_mask();
     test_blend_setup();
@@ -575,6 +668,9 @@ int main() {
     test_decode_uses_aligned_stride();
     test_relative_address_adds_offset();
     test_snap_through_positions();
+    test_skinning_blends_bone_matrices();
+    test_morph_blends_targets();
+    test_fixed_point_positions_scaled_in_transform_mode();
 
     if (failures == 0) {
         std::printf("test_ge_vertex: %d/%d PASS\n", tests_run, tests_run);

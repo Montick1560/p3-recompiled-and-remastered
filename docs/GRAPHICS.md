@@ -167,9 +167,12 @@ in lock-step with PPSSPP. `sceGeEdramGetAddr`/`GetSize` return `0x04000000` / 2 
 | Texcoord (TC) | u8, s16, float | u8 / 128, s16 / 32768, float as-is |
 | Color (COL) | 565, 5551, 4444, 8888 | expanded to RGBA8 (5551 alpha is 0 or 255) |
 | Normal (NRM) | s8, s16, float | s8 / 127, s16 / 32767 |
-| Position (POS) | s8, s16, float | raw values (no scaling) |
+| Position (POS) | s8, s16, float | transform mode: s8 / 128, s16 / 32768 (PPSSPP `Step_PosS8/S16`); through mode: raw screen units |
 | Index (IDX) | u8, u16, u32 | read from `IADDR` |
-| Weights | u8, u16, float, count 1–8 | **stride accounted for, data skipped** (no skinning) |
+| Weights | u8, u16, float, count 1–8 | u8 / 128, u16 / 32768; blend the `BONEMATRIX` 4x3 matrices into one skin matrix applied to position and normal before the world matrix (transform mode only; PPSSPP `ComputeSkinMatrix`) |
+
+Morph targets (vtype bits 18–20) repeat the whole vertex; every attribute is the
+`MORPHWEIGHT0..7`-weighted sum over the targets (PPSSPP `Step_*Morph`).
 
 `ge_vertex_stride` reproduces the PSP's packing rules, including alignment: 16-bit components
 align the running offset to 2, float components to 4, and the total stride is padded to the
@@ -528,7 +531,6 @@ consequence of each. "Tracked" means the register value is stored in `GeState`.
 | SIGNAL behaviors 0x13–0x18 (relative/offset jump/call/ret) | fall through to the user-callback path | a game using them would corrupt list flow; Patapon uses 0x10–0x12 only |
 | SIGNAL suspend/continue semantics (0x01–0x03) | treated as plain callback signals | no list pause/resume semantics |
 | Texture matrix / texgen (`TGENMATRIX*`, `TEXMAPMODE`, `TEXSHADELS`) | `tgen_matrix` stored, never applied; generation modes ignored | UV generation modes (env mapping etc.) render with raw UVs |
-| Bone matrices / skinning, morph weights | weights skipped in vertex decode (morph count affects stride only) | skinned/morphed meshes render in bind pose |
 | Bezier/spline patches (`BEZIER`, `SPLINE`, `PATCH*`) | ignored | curved-surface geometry never drawn |
 | `BJUMP` (bounding-box conditional jump) | treated as a no-op — never jumps | conservative: everything is processed, minor overdraw |
 | DXT1/3/5 textures | `ge_decode_texture` returns false → opaque magenta | compressed textures are visually loud |

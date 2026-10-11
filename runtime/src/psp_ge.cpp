@@ -464,6 +464,23 @@ GeListResult ge_process_display_list(
         }
 
         // ---- Matrix data ----
+        // Skinning bones: 8 x 4x3 matrices behind one write index (PPSSPP
+        // GPUCommon::Execute_BoneMtxNum / Execute_BoneMtxData).
+        case GE_CMD_BONEMATRIXNUMBER:
+            g_ge_state.bone_mtx_num = data & 0x7F;
+            break;
+        case GE_CMD_BONEMATRIXDATA:
+            if (g_ge_state.bone_mtx_num < 96) {
+                g_ge_state.bone_matrix[g_ge_state.bone_mtx_num] = data_to_float(data);
+            }
+            g_ge_state.bone_mtx_num = (g_ge_state.bone_mtx_num + 1) & 0x7F;
+            break;
+        case GE_CMD_MORPHWEIGHT0: case GE_CMD_MORPHWEIGHT1:
+        case GE_CMD_MORPHWEIGHT2: case GE_CMD_MORPHWEIGHT3:
+        case GE_CMD_MORPHWEIGHT4: case GE_CMD_MORPHWEIGHT5:
+        case GE_CMD_MORPHWEIGHT6: case GE_CMD_MORPHWEIGHT7:
+            g_ge_state.morph_weights[cmd - GE_CMD_MORPHWEIGHT0] = data_to_float(data);
+            break;
         case GE_CMD_WORLDMATRIXNUMBER:
             g_ge_state.world_mtx_num = data & 0xF;
             break;
@@ -791,12 +808,6 @@ GeListResult ge_process_display_list(
             break;
 
         // ---- Misc ignored for Phase 5 ----
-        case GE_CMD_BONEMATRIXNUMBER:
-        case GE_CMD_BONEMATRIXDATA:
-        case GE_CMD_MORPHWEIGHT0: case GE_CMD_MORPHWEIGHT1:
-        case GE_CMD_MORPHWEIGHT2: case GE_CMD_MORPHWEIGHT3:
-        case GE_CMD_MORPHWEIGHT4: case GE_CMD_MORPHWEIGHT5:
-        case GE_CMD_MORPHWEIGHT6: case GE_CMD_MORPHWEIGHT7:
         case GE_CMD_PATCHDIVISION: case GE_CMD_PATCHPRIMITIVE:
         case GE_CMD_PATCHFACING:
         case GE_CMD_BEZIER: case GE_CMD_SPLINE:

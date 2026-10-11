@@ -37,6 +37,9 @@ struct GeState {
     float view_matrix[12];    // 4x3 column-major (view transform)
     float proj_matrix[16];    // 4x4 column-major (projection)
     float tgen_matrix[12];    // 4x3 column-major (texgen)
+    float bone_matrix[96];    // 8 x 4x3 column-major (GE_CMD_BONEMATRIXDATA, skinning)
+    uint32_t bone_mtx_num;    // GE_CMD_BONEMATRIXNUMBER write index (0..95)
+    float morph_weights[8];   // GE_CMD_MORPHWEIGHT0-7 (vertex morph targets)
     int world_mtx_num;        // Current write index for WORLDMATRIXDATA
     int view_mtx_num;         // Current write index for VIEWMATRIXDATA
     int proj_mtx_num;         // Current write index for PROJMATRIXDATA

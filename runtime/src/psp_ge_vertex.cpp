@@ -193,6 +193,84 @@ void ge_decode_vertices(
         }
     }
 
+    const bool through = ge_vtype_through(vtype);
+    const int morphs = static_cast<int>((vtype >> GE_VTYPE_MORPHCOUNT_SHIFT)
+                                        & GE_VTYPE_MORPHCOUNT_MASK) + 1;
+    const uint32_t one = static_cast<uint32_t>(layout.one_vertex);
+    const int wt = ge_vtype_weight(vtype);
+    const int wcount = wt != 0 ? static_cast<int>(((vtype >> GE_VTYPE_WEIGHTCOUNT_SHIFT)
+                                                   & GE_VTYPE_WEIGHTCOUNT_MASK) + 1) : 0;
+    const bool skin = wt != 0 && !through;
+
+    // One morph target's attributes at target base address b.
+    auto read_uv = [&](uint32_t b, float uv[2]) {
+        const uint32_t o = b + static_cast<uint32_t>(layout.tc);
+        if (tc_type == GE_VTYPE_TC_8BIT) {
+            uv[0] = read_u8(rdram, o) / 128.0f;
+            uv[1] = read_u8(rdram, o + 1) / 128.0f;
+        } else if (tc_type == GE_VTYPE_TC_16BIT) {
+            uv[0] = read_s16(rdram, o) / 32768.0f;
+            uv[1] = read_s16(rdram, o + 2) / 32768.0f;
+        } else if (tc_type == GE_VTYPE_TC_FLOAT) {
+            uv[0] = read_float(rdram, o);
+            uv[1] = read_float(rdram, o + 4);
+        } else {
+            uv[0] = uv[1] = 0.0f;
+        }
+    };
+    auto read_color = [&](uint32_t b, float c[4]) {
+        const uint32_t o = b + static_cast<uint32_t>(layout.col);
+        if (col_type == GE_VTYPE_COL_565) {
+            const uint16_t val = read_u16(rdram, o);
+            c[0] = static_cast<float>(((val & 0x1F) * 255) / 31);
+            c[1] = static_cast<float>((((val >> 5) & 0x3F) * 255) / 63);
+            c[2] = static_cast<float>((((val >> 11) & 0x1F) * 255) / 31);
+            c[3] = 255.0f;
+        } else if (col_type == GE_VTYPE_COL_5551) {
+            const uint16_t val = read_u16(rdram, o);
+            c[0] = static_cast<float>(((val & 0x1F) * 255) / 31);
+            c[1] = static_cast<float>((((val >> 5) & 0x1F) * 255) / 31);
+            c[2] = static_cast<float>((((val >> 10) & 0x1F) * 255) / 31);
+            c[3] = (val & 0x8000) ? 255.0f : 0.0f;
+        } else if (col_type == GE_VTYPE_COL_4444) {
+            const uint16_t val = read_u16(rdram, o);
+            c[0] = static_cast<float>(((val & 0xF) * 255) / 15);
+            c[1] = static_cast<float>((((val >> 4) & 0xF) * 255) / 15);
+            c[2] = static_cast<float>((((val >> 8) & 0xF) * 255) / 15);
+            c[3] = static_cast<float>((((val >> 12) & 0xF) * 255) / 15);
+        } else {  // GE_VTYPE_COL_8888
+            for (int k = 0; k < 4; k++) c[k] = read_u8(rdram, o + k);
+        }
+    };
+    auto read_normal = [&](uint32_t b, float n[3]) {
+        const uint32_t o = b + static_cast<uint32_t>(layout.nrm);
+        if (nrm_type == GE_VTYPE_NRM_8BIT) {
+            for (int k = 0; k < 3; k++) n[k] = read_s8(rdram, o + k) / 127.0f;
+        } else if (nrm_type == GE_VTYPE_NRM_16BIT) {
+            for (int k = 0; k < 3; k++) n[k] = read_s16(rdram, o + 2 * k) / 32767.0f;
+        } else if (nrm_type == GE_VTYPE_NRM_FLOAT) {
+            for (int k = 0; k < 3; k++) n[k] = read_float(rdram, o + 4 * k);
+        } else {
+            n[0] = 0.0f; n[1] = 0.0f; n[2] = 1.0f;
+        }
+    };
+    // Transform-mode 8/16-bit positions are fixed point (PPSSPP Step_PosS8 /
+    // Step_PosS16: / 128, / 32768); through mode keeps raw screen units.
+    auto read_pos = [&](uint32_t b, float p[3]) {
+        const uint32_t o = b + static_cast<uint32_t>(layout.pos);
+        if (pos_type == GE_VTYPE_POS_8BIT) {
+            const float sc = through ? 1.0f : 1.0f / 128.0f;
+            for (int k = 0; k < 3; k++) p[k] = read_s8(rdram, o + k) * sc;
+        } else if (pos_type == GE_VTYPE_POS_16BIT) {
+            const float sc = through ? 1.0f : 1.0f / 32768.0f;
+            for (int k = 0; k < 3; k++) p[k] = read_s16(rdram, o + 2 * k) * sc;
+        } else if (pos_type == GE_VTYPE_POS_FLOAT) {
+            for (int k = 0; k < 3; k++) p[k] = read_float(rdram, o + 4 * k);
+        } else {
+            p[0] = p[1] = p[2] = 0.0f;
+        }
+    };
+
     out.resize(count);
     for (int i = 0; i < count; i++) {
         DecodedVertex& v = out[i];
@@ -207,69 +285,64 @@ void ge_decode_vertices(
 
         uint32_t base = state.vertex_addr
                         + vidx * static_cast<uint32_t>(stride);
-        uint32_t offset = 0;
 
-        // Texture coordinates
-        offset = static_cast<uint32_t>(layout.tc);
-        if (tc_type == GE_VTYPE_TC_8BIT) {
-            v.uv[0] = read_u8(rdram, base + offset) / 128.0f;
-            v.uv[1] = read_u8(rdram, base + offset + 1)
-                       / 128.0f;
-            offset += 2;
-        } else if (tc_type == GE_VTYPE_TC_16BIT) {
-            v.uv[0] = read_s16(rdram, base + offset)
-                       / 32768.0f;
-            v.uv[1] = read_s16(rdram, base + offset + 2)
-                       / 32768.0f;
-            offset += 4;
-        } else if (tc_type == GE_VTYPE_TC_FLOAT) {
-            v.uv[0] = read_float(rdram, base + offset);
-            v.uv[1] = read_float(rdram, base + offset + 4);
-            offset += 8;
+        // Attributes; with morph targets (PPSSPP Step_*Morph), each one is
+        // the MORPHWEIGHT-weighted sum over the vertex's targets.
+        float uv[2] = {0, 0}, col[4] = {0, 0, 0, 0}, nrm[3] = {0, 0, 0}, pos[3] = {0, 0, 0};
+        if (morphs == 1) {
+            read_uv(base, uv);
+            if (v.has_color) read_color(base, col);
+            read_normal(base, nrm);
+            read_pos(base, pos);
         } else {
-            v.uv[0] = 0.0f;
-            v.uv[1] = 0.0f;
+            for (int m = 0; m < morphs; m++) {
+                const float w = state.morph_weights[m];
+                const uint32_t b = base + static_cast<uint32_t>(m) * one;
+                float tuv[2], tcol[4] = {0, 0, 0, 0}, tnrm[3], tpos[3];
+                read_uv(b, tuv);
+                if (v.has_color) read_color(b, tcol);
+                read_normal(b, tnrm);
+                read_pos(b, tpos);
+                for (int k = 0; k < 2; k++) uv[k] += tuv[k] * w;
+                for (int k = 0; k < 4; k++) col[k] += tcol[k] * w;
+                for (int k = 0; k < 3; k++) { nrm[k] += tnrm[k] * w; pos[k] += tpos[k] * w; }
+            }
+            if (!v.has_normal) { nrm[0] = 0.0f; nrm[1] = 0.0f; nrm[2] = 1.0f; }
         }
 
-        // Color
-        offset = static_cast<uint32_t>(layout.col);
-        if (col_type == GE_VTYPE_COL_565) {
-            uint16_t val = read_u16(rdram, base + offset);
-            v.color[0] = static_cast<uint8_t>(
-                ((val & 0x1F) * 255) / 31);
-            v.color[1] = static_cast<uint8_t>(
-                (((val >> 5) & 0x3F) * 255) / 63);
-            v.color[2] = static_cast<uint8_t>(
-                (((val >> 11) & 0x1F) * 255) / 31);
-            v.color[3] = 255;
-            offset += 2;
-        } else if (col_type == GE_VTYPE_COL_5551) {
-            uint16_t val = read_u16(rdram, base + offset);
-            v.color[0] = static_cast<uint8_t>(
-                ((val & 0x1F) * 255) / 31);
-            v.color[1] = static_cast<uint8_t>(
-                (((val >> 5) & 0x1F) * 255) / 31);
-            v.color[2] = static_cast<uint8_t>(
-                (((val >> 10) & 0x1F) * 255) / 31);
-            v.color[3] = (val & 0x8000) ? 255 : 0;
-            offset += 2;
-        } else if (col_type == GE_VTYPE_COL_4444) {
-            uint16_t val = read_u16(rdram, base + offset);
-            v.color[0] = static_cast<uint8_t>(
-                ((val & 0xF) * 255) / 15);
-            v.color[1] = static_cast<uint8_t>(
-                (((val >> 4) & 0xF) * 255) / 15);
-            v.color[2] = static_cast<uint8_t>(
-                (((val >> 8) & 0xF) * 255) / 15);
-            v.color[3] = static_cast<uint8_t>(
-                (((val >> 12) & 0xF) * 255) / 15);
-            offset += 2;
-        } else if (col_type == GE_VTYPE_COL_8888) {
-            v.color[0] = read_u8(rdram, base + offset);
-            v.color[1] = read_u8(rdram, base + offset + 1);
-            v.color[2] = read_u8(rdram, base + offset + 2);
-            v.color[3] = read_u8(rdram, base + offset + 3);
-            offset += 4;
+        // Skinning (PPSSPP ComputeSkinMatrix + Step_Pos*Skin / Normal*Skin):
+        // the vertex weights blend the bone matrices; position and normal go
+        // through the blended 4x3 matrix before the world matrix.
+        if (skin) {
+            const uint32_t wo = base + static_cast<uint32_t>(layout.weights);
+            float m[12] = {0};
+            for (int j = 0; j < wcount; j++) {
+                float w;
+                if (wt == 1) w = read_u8(rdram, wo + j) / 128.0f;
+                else if (wt == 2) w = read_u16(rdram, wo + 2 * j) / 32768.0f;
+                else w = read_float(rdram, wo + 4 * j);
+                if (w == 0.0f) continue;
+                const float* bone = &state.bone_matrix[j * 12];
+                for (int k = 0; k < 12; k++) m[k] += w * bone[k];
+            }
+            float sp[3];
+            vec3_by_matrix43(m, pos, sp);
+            pos[0] = sp[0]; pos[1] = sp[1]; pos[2] = sp[2];
+            if (v.has_normal) {
+                const float n0 = nrm[0], n1 = nrm[1], n2 = nrm[2];
+                nrm[0] = n0 * m[0] + n1 * m[3] + n2 * m[6];
+                nrm[1] = n0 * m[1] + n1 * m[4] + n2 * m[7];
+                nrm[2] = n0 * m[2] + n1 * m[5] + n2 * m[8];
+            }
+        }
+
+        v.uv[0] = uv[0];
+        v.uv[1] = uv[1];
+        if (v.has_color) {
+            for (int k = 0; k < 4; k++) {
+                const float c = col[k] < 0.0f ? 0.0f : (col[k] > 255.0f ? 255.0f : col[k]);
+                v.color[k] = static_cast<uint8_t>(c);
+            }
         } else {
             // No vertex color: the material ambient RGB + MATERIALALPHA
             // (PPSSPP gstate.getMaterialAmbientRGBA()).
@@ -278,71 +351,7 @@ void ge_decode_vertices(
             v.color[2] = static_cast<uint8_t>((state.material_ambient >> 16) & 0xFF);
             v.color[3] = static_cast<uint8_t>(state.material_alpha & 0xFF);
         }
-
-        // Normal
-        offset = static_cast<uint32_t>(layout.nrm);
-        if (nrm_type == GE_VTYPE_NRM_8BIT) {
-            v.normal[0] = read_s8(rdram, base + offset)
-                          / 127.0f;
-            v.normal[1] = read_s8(rdram, base + offset + 1)
-                          / 127.0f;
-            v.normal[2] = read_s8(rdram, base + offset + 2)
-                          / 127.0f;
-            offset += 3;
-        } else if (nrm_type == GE_VTYPE_NRM_16BIT) {
-            // Align to 2
-            offset = (offset + 1) & ~1u;
-            v.normal[0] = read_s16(rdram, base + offset)
-                          / 32767.0f;
-            v.normal[1] = read_s16(rdram, base + offset + 2)
-                          / 32767.0f;
-            v.normal[2] = read_s16(rdram, base + offset + 4)
-                          / 32767.0f;
-            offset += 6;
-        } else if (nrm_type == GE_VTYPE_NRM_FLOAT) {
-            v.normal[0] = read_float(rdram, base + offset);
-            v.normal[1] = read_float(rdram,
-                                     base + offset + 4);
-            v.normal[2] = read_float(rdram,
-                                     base + offset + 8);
-            offset += 12;
-        } else {
-            v.normal[0] = 0.0f;
-            v.normal[1] = 0.0f;
-            v.normal[2] = 1.0f;
-        }
-
-        // Position
-        offset = static_cast<uint32_t>(layout.pos);
-        if (pos_type == GE_VTYPE_POS_8BIT) {
-            v.pos[0] = static_cast<float>(
-                read_s8(rdram, base + offset));
-            v.pos[1] = static_cast<float>(
-                read_s8(rdram, base + offset + 1));
-            v.pos[2] = static_cast<float>(
-                read_s8(rdram, base + offset + 2));
-        } else if (pos_type == GE_VTYPE_POS_16BIT) {
-            // Align to 2
-            offset = (offset + 1) & ~1u;
-            v.pos[0] = static_cast<float>(
-                read_s16(rdram, base + offset));
-            v.pos[1] = static_cast<float>(
-                read_s16(rdram, base + offset + 2));
-            v.pos[2] = static_cast<float>(
-                read_s16(rdram, base + offset + 4));
-        } else if (pos_type == GE_VTYPE_POS_FLOAT) {
-            // Align to 4
-            offset = (offset + 3) & ~3u;
-            v.pos[0] = read_float(rdram, base + offset);
-            v.pos[1] = read_float(rdram,
-                                  base + offset + 4);
-            v.pos[2] = read_float(rdram,
-                                  base + offset + 8);
-        } else {
-            v.pos[0] = 0.0f;
-            v.pos[1] = 0.0f;
-            v.pos[2] = 0.0f;
-        }
+        for (int k = 0; k < 3; k++) { v.normal[k] = nrm[k]; v.pos[k] = pos[k]; }
     }
 
     (void)prim_type;  // Used by caller for primitive assembly
