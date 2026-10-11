@@ -8,6 +8,15 @@ struct GeViewportDepth {
     float near_z, far_z;  // glDepthRange args, clamped to [0,1]
 };
 
+/// GL window depth of an NDC z under glDepthRange(vp.near_z, vp.far_z). With
+/// the PSP mapping this equals the PSP window z / 65535 (reversed ZSCALE too),
+/// so PSP depth compares map to the same GL compares, unflipped.
+float ge_gl_window_depth(const GeViewportDepth& vp, float ndc_z);
+
+/// Depth a clear-mode draw writes: its vertex z (PSP 0..65535) / 65535,
+/// clamped (PSP/PPSSPP clear mode writes the vertex depth).
+float ge_clear_depth(float vertex_z);
+
 /// Pure math: PSP viewport scale/offset + depth -> GL viewport + depth range
 /// (issue #23). Mirrors PPSSPP ConvertViewportAndScissor for the 1:1,
 /// non-supersampled, non-accurate-depth FBO case. Separated from the GL call

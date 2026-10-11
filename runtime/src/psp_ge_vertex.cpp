@@ -264,6 +264,7 @@ void ge_decode_vertices(
         } else if (pos_type == GE_VTYPE_POS_16BIT) {
             const float sc = through ? 1.0f : 1.0f / 32768.0f;
             for (int k = 0; k < 3; k++) p[k] = read_s16(rdram, o + 2 * k) * sc;
+            if (through) p[2] = static_cast<float>(read_u16(rdram, o + 4));  // z unsigned (PPSSPP)
         } else if (pos_type == GE_VTYPE_POS_FLOAT) {
             for (int k = 0; k < 3; k++) p[k] = read_float(rdram, o + 4 * k);
         } else {

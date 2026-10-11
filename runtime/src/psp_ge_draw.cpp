@@ -188,12 +188,12 @@ static bool capture_fbo_to_tga(const char* path) {
 
 // ---- GL state mapping ----
 
-// Map the PSP depth-compare to a GL depth func. When the active depth range
-// is reversed (glDepthRange near>far, issue #23 -- Patapon's ZSCALE<0), GL
-// stores depth on the flipped axis, so the inequality direction must flip too
-// (PPSSPP does the same in its reversed-depth path). EQUAL/NOTEQUAL/NEVER/
-// ALWAYS are direction-agnostic and pass through unchanged.
-static GLenum map_depth_func(int func, bool reversed) {
+// Map the PSP depth-compare to a GL depth func. glDepthRange(near, far) makes
+// the GL window depth equal the PSP z / 65535 even for a reversed range
+// (ge_gl_window_depth), so the compare maps 1:1 (PPSSPP
+// compareOps[gstate.getDepthTestFunction()]); flipping it hid Patapon 3's
+// depth-tested chests.
+static GLenum map_depth_func(int func) {
     GLenum gl;
     switch (func) {
     case GE_COMP_NEVER:    return GL_NEVER;
@@ -206,14 +206,7 @@ static GLenum map_depth_func(int func, bool reversed) {
     case GE_COMP_GEQUAL:   gl = GL_GEQUAL;  break;
     default:               gl = GL_LEQUAL;  break;
     }
-    if (!reversed) return gl;
-    switch (gl) {
-    case GL_LESS:    return GL_GREATER;
-    case GL_LEQUAL:  return GL_GEQUAL;
-    case GL_GREATER: return GL_LESS;
-    case GL_GEQUAL:  return GL_LEQUAL;
-    default:         return gl;
-    }
+    return gl;
 }
 
 static GLenum map_prim_type(int prim_type) {
@@ -239,14 +232,6 @@ static GeViewportDepth compute_state_viewport_depth(const GeState& state) {
         state.viewport_x_center, state.viewport_y_center,
         state.viewport_z_scale, state.viewport_z_center,
         state.offset_x, state.offset_y, PSP_FB_HEIGHT, g_render_scale);
-}
-
-// A reversed depth range (PSP ZSCALE<0 -> glDepthRange near>far, issue #23)
-// means the depth axis is flipped: the GL "far" value is the smaller of the
-// two and is what a depth clear must fill so geometry passes the test, and
-// the depth-compare direction must flip to match.
-static bool depth_range_reversed(const GeViewportDepth& vp) {
-    return vp.near_z > vp.far_z;
 }
 
 // ---- FBO pool helpers ----
@@ -746,13 +731,16 @@ void ge_draw_prim(
             clear_bits = GL_COLOR_BUFFER_BIT
                          | GL_DEPTH_BUFFER_BIT;
 
-        // Clear depth to the active range's GL "far" value (issue #23). With
-        // a reversed range (Patapon ZSCALE<0) GL far is 0.0, not the GL
-        // default 1.0; clearing to 1.0 there would put the cleared buffer at
-        // the near plane and reject all subsequent depth-tested geometry.
+        // Clear depth to the clear draw's vertex z (PSP/PPSSPP clear mode
+        // writes the vertex depth; GL depth = PSP z / 65535). A transform-mode
+        // clear keeps the range's far value.
         if (clear_bits & GL_DEPTH_BUFFER_BIT) {
-            const GeViewportDepth vp = compute_state_viewport_depth(state);
-            glClearDepth(static_cast<GLclampd>(vp.far_z));
+            if (ge_vtype_through(state.vertex_type) && !clear_verts.empty()) {
+                glClearDepth(static_cast<GLclampd>(ge_clear_depth(clear_verts[0].pos[2])));
+            } else {
+                const GeViewportDepth vp = compute_state_viewport_depth(state);
+                glClearDepth(static_cast<GLclampd>(vp.far_z));
+            }
         }
 
         // Temporarily disable depth mask restriction
@@ -768,12 +756,10 @@ void ge_draw_prim(
     // already bakes the full-screen 240/136 mapping into NDC in
     // ge_transform_vertices, so it keeps the full-buffer viewport set by
     // ge_draw_begin_list and an identity depth range.
-    bool depth_reversed = false;
     if (!ge_vtype_through(state.vertex_type)) {
         const GeViewportDepth vp = compute_state_viewport_depth(state);
         glViewport(vp.x, vp.y, vp.w, vp.h);
         glDepthRange(vp.near_z, vp.far_z);
-        depth_reversed = depth_range_reversed(vp);
     } else {
         glViewport(0, 0, fb_w(), fb_h());
         glDepthRange(0.0, 1.0);
@@ -973,7 +959,7 @@ void ge_draw_prim(
     // Depth test
     if (state.depth_test_enable) {
         glEnable(GL_DEPTH_TEST);
-        glDepthFunc(map_depth_func(state.depth_func, depth_reversed));
+        glDepthFunc(map_depth_func(state.depth_func));
         glDepthMask(
             state.depth_write_disable
             ? GL_FALSE : GL_TRUE);

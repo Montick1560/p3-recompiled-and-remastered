@@ -206,8 +206,10 @@ issue #23). The mapping mirrors PPSSPP's `ConvertViewportAndScissor` for the 1:1
 to GL bottom-left), depth `[(vpZCenter-vpZScale), (vpZCenter+vpZScale)]/65535`. For a full-screen
 viewport this reduces to the previous `glViewport(0,0,480,272)`. Through-mode (2D/sprite) draws
 already bake the full-screen 240/136 mapping into NDC, so they keep the full-buffer viewport and
-an identity depth range. When the depth range is reversed (`ZSCALE < 0`), `map_depth_func` flips
-the depth-compare direction to match (issue #23). (`MINZ`/`MAXZ` are stored in `GeState` but the
+an identity depth range. `glDepthRange(near, far)` makes the GL window depth equal the PSP window z
+/ 65535 even for a reversed range (`ZSCALE < 0`, `ge_gl_window_depth`), so `map_depth_func` maps
+the compare 1:1 like PPSSPP (the old flip for reversed ranges hid Patapon 3's depth-tested
+chests). (`MINZ`/`MAXZ` are stored in `GeState` but the
 active depth range uses the viewport Z registers, per PPSSPP's non-accurate-depth path.)
 
 In both modes, UVs are post-processed with `TEXSCALEU/V` and `TEXOFFSETU/V`.
@@ -368,7 +370,7 @@ never replaced. Without `PSPRECOMP_TEXTURES` no thread starts and every frame is
 | `BLENDFIXEDA` | `GL_SRC1_COLOR` + `glBlendFunc` | dual-source output 1 (`frag_color1`) carries the fix_a color set by `ge_shader_set_blend`; FIXA 0 / 0xFFFFFF short-circuit to `GL_ZERO` / `GL_ONE` |
 | `BLENDFIXEDB` | `glBlendColor` + `GL_CONSTANT_COLOR` | when the dst factor is FIXB and its value is neither 0 nor 0xFFFFFF, the constant is uploaded with `glBlendColor` and used as `GL_CONSTANT_COLOR` |
 | `ALPHATESTENABLE` + `ALPHATEST` | fragment-shader compare + `discard` | func = bits [2:0], ref = bits [15:8]/255; the AND-mask byte is ignored |
-| `ZTESTENABLE` + `ZTEST` | `glEnable(GL_DEPTH_TEST)` + `glDepthFunc` | all 8 compare funcs; `map_depth_func` flips the inequality when the depth range is reversed |
+| `ZTESTENABLE` + `ZTEST` | `glEnable(GL_DEPTH_TEST)` + `glDepthFunc` | all 8 compare funcs, mapped 1:1 (no flip for reversed ranges) |
 | `ZWRITEDISABLE` | `glDepthMask` | |
 | `CULLFACEENABLE` + `CULL` | `glEnable(GL_CULL_FACE)`; 0 → `GL_BACK`, 1 → `GL_FRONT` | PSP cull is winding-order based; this fixed-face mapping is an approximation |
 | `TEXFUNC` | fragment-shader branch | MODULATE / DECAL / BLEND / REPLACE / ADD; BLEND mixes toward `TEXENVCOLOR`; TCC (bit 8) selects whether texture alpha is used, bit 16 doubles the fragment RGB |
@@ -386,8 +388,8 @@ buffers selected by the clear flags (bit 0 → color, bit 1 → stencil, bit 2 �
 are set, color+depth). Three quirks of this translation: the clear always covers the whole FBO
 (the rectangle's actual extent is ignored, but the active `SCISSOR1`/`SCISSOR2` rect still crops
 it), the depth mask is forced on for the clear, and when a depth clear is requested the clear
-value is the active depth range's GL "far" value (so a reversed range clears to 0.0, not GL's
-default 1.0 — issue #23). The FBO has no stencil attachment, so a stencil-bit clear is a no-op.
+value is the clear vertex's z / 65535 (`ge_clear_depth`; through-mode s16 z is unsigned), as on
+the PSP; a transform-mode clear keeps the range's far value. The FBO has no stencil attachment, so a stencil-bit clear is a no-op.
 
 ### Primitives
 

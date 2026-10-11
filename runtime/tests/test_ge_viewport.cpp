@@ -207,6 +207,29 @@ static void test_scissor_inverted_is_empty() {
     ASSERT_EQ(s.w, 0, "x2 < x1 -> zero width");
 }
 
+// With the PSP range mapped through glDepthRange(near, far), the GL window
+// depth IS the PSP window z / 65535, even for Patapon's reversed range
+// (ZSCALE < 0). So the PSP depth compare maps to the same GL compare, with no
+// flip (PPSSPP: compareOps[gstate.getDepthTestFunction()]).
+static void test_reversed_window_depth_is_psp_z() {
+    GeViewportDepth v = ge_compute_viewport_depth(
+        240.0f, -136.0f, 2048.0f, 2048.0f,
+        -32767.5f, 32767.5f, 0u, 0u, FBH);
+    // ndc z 0.5 -> PSP z = 32767.5 + (-32767.5 * 0.5) = 16383.75
+    ASSERT_NEAR(ge_gl_window_depth(v, 0.5f), 16383.75f / 65535.0f, "GL depth = PSP z / 65535");
+    ASSERT_NEAR(ge_gl_window_depth(v, -1.0f), 1.0f, "ndc -1 -> PSP z 65535");
+}
+
+// A clear-mode draw writes its vertex z (PSP/PPSSPP), not the range's far end:
+// Patapon 3 clears depth to 0 and then draws chests with GREATER.
+static void test_clear_depth_uses_vertex_z() {
+    ASSERT_NEAR(ge_clear_depth(0.0f), 0.0f, "clear z 0 -> 0.0");
+    ASSERT_NEAR(ge_clear_depth(65535.0f), 1.0f, "clear z 65535 -> 1.0");
+    ASSERT_NEAR(ge_clear_depth(32767.5f), 0.5f, "clear z mid -> 0.5");
+    ASSERT_NEAR(ge_clear_depth(70000.0f), 1.0f, "clamped high");
+    ASSERT_NEAR(ge_clear_depth(-5.0f), 0.0f, "clamped low");
+}
+
 int main() {
     test_fullscreen_default_matches_hardcoded();
     test_fullscreen_depth_range();
@@ -215,6 +238,8 @@ int main() {
     test_offset_subpixel_and_mask();
     test_depth_clamped_subrange();
     test_reversed_z_range();
+    test_reversed_window_depth_is_psp_z();
+    test_clear_depth_uses_vertex_z();
     test_fullscreen_scale2();
     test_half_viewport_scale3();
     test_subpixel_offset_scales_before_rounding();

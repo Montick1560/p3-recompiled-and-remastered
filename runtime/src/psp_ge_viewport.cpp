@@ -67,3 +67,12 @@ GeScissor ge_compute_scissor(uint32_t scissor1, uint32_t scissor2, int fb_height
     const int h = y2 >= y1 ? y2 - y1 + 1 : 0;
     return {true, x1 * scale, (fb_height - 1 - y2) * scale, w * scale, h * scale};
 }
+
+float ge_gl_window_depth(const GeViewportDepth& vp, float ndc_z) {
+    return vp.near_z + (ndc_z + 1.0f) * 0.5f * (vp.far_z - vp.near_z);
+}
+
+float ge_clear_depth(float vertex_z) {
+    const float d = vertex_z / 65535.0f;
+    return d < 0.0f ? 0.0f : (d > 1.0f ? 1.0f : d);
+}

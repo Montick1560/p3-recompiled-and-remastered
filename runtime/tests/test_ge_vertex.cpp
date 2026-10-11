@@ -674,6 +674,27 @@ static void test_zero_scale_without_fallback_collapses() {
     ASSERT_NEAR(verts[0].pos[0], -84.0742f * 0.00416219f, "x = projected view translation");
 }
 
+// Through-mode s16 positions: x/y signed, z UNSIGNED (PPSSPP
+// Step_PosS16Through). A depth-clear rectangle at z 0xFFFF must read 65535.
+static void test_through_s16_z_unsigned() {
+    const size_t kRam = 0x08000000u;
+    uint8_t* ram = static_cast<uint8_t*>(std::calloc(kRam, 1));
+    const uint32_t vaddr = 0x08800000u;
+    const uint16_t p[3] = {0xFFF0u, 10u, 0xFFFFu};  // x = -16, y = 10, z = 65535
+    std::memcpy(ram + (vaddr & 0x07FFFFFFu), p, sizeof(p));
+    GeState s;
+    s.reset();
+    s.vertex_type = 0x00800100u;  // through, s16 position
+    s.vertex_addr = vaddr;
+    std::vector<DecodedVertex> out;
+    ge_decode_vertices(ram, s, 0, 1, out);
+    if (out.size() == 1) {
+        ASSERT_NEAR(out[0].pos[0], -16.0f, "through x signed");
+        ASSERT_NEAR(out[0].pos[2], 65535.0f, "through z unsigned");
+    }
+    std::free(ram);
+}
+
 int main() {
     test_color_write_mask();
     test_blend_setup();
@@ -688,6 +709,7 @@ int main() {
     test_healthy_mvp_no_fallback();
     test_tiny_prim_no_overtrigger();
     test_zero_scale_without_fallback_collapses();
+    test_through_s16_z_unsigned();
     test_rect_expand_divides_by_w();
     test_rect_expand_drops_nonpositive_w();
     test_colorless_vertex_uses_material_ambient();
