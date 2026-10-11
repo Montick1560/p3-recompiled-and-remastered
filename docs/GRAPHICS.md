@@ -244,6 +244,12 @@ screen-filling triangle.
 > guest-uploaded matrices are broken (known open issue, FPU/VFPU dataflow family), so 2D content
 > still renders. Remove once the guest uploads sane matrices.
 
+The gates run only when a game module installed a fallback with
+`ge_vertex_set_degenerate_fallback` (games/patapon). Without one the real transform always runs, as
+on hardware: a game that hides an object by scaling it to zero gets one clip point and nothing is
+drawn (Patapon 3's hero-attack burst became a screen-sized black triangle under the old world-space
+passthrough).
+
 Three independent gates select the NDC-direct path (`ndc_direct`):
 
 1. **All-zero view → `ge_view_matrix_all_zero`.** Every element of the view matrix is zero; the
@@ -256,8 +262,7 @@ Three independent gates select the NDC-direct path (`ndc_direct`):
    two gates miss.
 
 When any gate fires, the view/projection stages are skipped and NDC is emitted from **world**
-space through the game-module fallback slot `ge_vertex_set_degenerate_fallback`; with no module
-fallback installed the generic default is a world-space passthrough. Each gate logs once
+space through the game-module fallback slot `ge_vertex_set_degenerate_fallback`. Each gate logs once
 (`view matrix all-zero -- NDC-direct fallback engaged`, `proj matrix degenerate -- NDC-direct
 fallback engaged`, `composed MVP collapses prim (...) -- NDC-direct fallback engaged`).
 

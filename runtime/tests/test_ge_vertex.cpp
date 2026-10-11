@@ -648,6 +648,32 @@ static void test_fixed_point_positions_scaled_in_transform_mode() {
     std::free(ram);
 }
 
+// A game hides an object by scaling it to zero (Patapon 3 hero-attack burst:
+// view rotation all zero, translation set). Without a game-installed
+// degenerate fallback the real transform must run (PPSSPP): every vertex
+// lands on the same clip point, so nothing is drawn -- the world-space
+// passthrough turned such objects into screen-covering triangles.
+static void test_zero_scale_without_fallback_collapses() {
+    ge_vertex_set_degenerate_fallback(nullptr);
+    GeState s;
+    s.reset();
+    s.vertex_type = 0x000183u;
+    s.world_matrix[0] = 1; s.world_matrix[4] = 1; s.world_matrix[8] = 1;
+    s.view_matrix[9] = -84.0742f; s.view_matrix[10] = -83.418f; s.view_matrix[11] = -152.496f;
+    s.proj_matrix[0] = 0.00416219f; s.proj_matrix[5] = 0.00734508f;
+    s.proj_matrix[10] = -0.000200018f; s.proj_matrix[14] = -1.00018f; s.proj_matrix[11] = 0.0f;
+    s.proj_matrix[15] = 1.0f;
+    std::vector<DecodedVertex> verts = {
+        make_pos_vertex(-15.5f, 52.0f, -0.276f),
+        make_pos_vertex(14.5f, 52.0f, -0.276f),
+        make_pos_vertex(-15.5f, -10.0f, -0.276f),
+    };
+    ge_transform_vertices(verts, s);
+    ASSERT_NEAR(verts[0].pos[0], verts[1].pos[0], "zero scale: x collapses to one point");
+    ASSERT_NEAR(verts[0].pos[1], verts[2].pos[1], "zero scale: y collapses to one point");
+    ASSERT_NEAR(verts[0].pos[0], -84.0742f * 0.00416219f, "x = projected view translation");
+}
+
 int main() {
     test_color_write_mask();
     test_blend_setup();
@@ -661,6 +687,7 @@ int main() {
     test_collapsed_mvp_routes_to_fallback();
     test_healthy_mvp_no_fallback();
     test_tiny_prim_no_overtrigger();
+    test_zero_scale_without_fallback_collapses();
     test_rect_expand_divides_by_w();
     test_rect_expand_drops_nonpositive_w();
     test_colorless_vertex_uses_material_ambient();

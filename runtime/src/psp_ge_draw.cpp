@@ -11,6 +11,7 @@
 
 #include <SDL.h>
 #include <glad/glad.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -519,7 +520,7 @@ static void drawlog_prim(const GeState& s, int index, int prim_type, int count) 
             "[DL]   world=[%g %g %g|%g %g %g|%g %g %g|%g %g %g] "
             "view=[%g %g %g|%g %g %g|%g %g %g|%g %g %g] "
             "proj=[%g %g %g %g|%g %g %g %g|%g %g %g %g|%g %g %g %g] "
-            "vp=0x%06X,0x%06X,0x%06X/0x%06X,0x%06X,0x%06X z=%u..%u\n",
+            "vp=%g,%g,%g/%g,%g,%g z=%u..%u\n",
             w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], w[9], w[10], w[11],
             v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11],
             p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10],
@@ -527,6 +528,25 @@ static void drawlog_prim(const GeState& s, int index, int prim_type, int count) 
             s.viewport_x_scale, s.viewport_y_scale, s.viewport_z_scale,
             s.viewport_x_center, s.viewport_y_center, s.viewport_z_center,
             s.min_z, s.max_z);
+        if (s.lighting_enable) {
+            std::fprintf(stderr,
+                "[DL]   light amb=0x%06X/%02X emis=0x%06X diff=0x%06X spec=0x%06X^%g mupd=%u "
+                "lmode=%u rev=%d\n",
+                s.ambient_color, s.ambient_alpha, s.material_emissive, s.material_diffuse,
+                s.material_specular, s.material_specular_coef, s.material_update,
+                s.light_mode, s.reverse_normal ? 1 : 0);
+            for (int li = 0; li < 4; li++) {
+                if (!s.light_enable[li]) continue;
+                std::fprintf(stderr,
+                    "[DL]   L%d type=0x%03X pos=%g,%g,%g dir=%g,%g,%g att=%g,%g,%g "
+                    "cut=%g exp=%g ac=0x%06X dc=0x%06X sc=0x%06X\n",
+                    li, s.light_type[li], s.light_pos[li][0], s.light_pos[li][1],
+                    s.light_pos[li][2], s.light_dir[li][0], s.light_dir[li][1],
+                    s.light_dir[li][2], s.light_att[li][0], s.light_att[li][1],
+                    s.light_att[li][2], s.light_spot_cutoff[li], s.light_spot_exp[li],
+                    s.light_ambient[li], s.light_diffuse[li], s.light_specular[li]);
+            }
+        }
     }
 }
 
@@ -856,13 +876,30 @@ void ge_draw_prim(
     }
 
     if (drawlog) {
-        for (size_t i = 0; i < packed.size() && i < 2; i++) {
+        // Screen rectangle (PSP pixels, 480x272) covered by all vertices
+        // with w > 0: finds the draw that paints a given screen region.
+        float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+        for (const PackedVertex& pv : packed) {
+            if (pv.pos[3] <= 0.0f) continue;
+            const float px = (pv.pos[0] / pv.pos[3] + 1.0f) * 240.0f;
+            const float py = (1.0f - pv.pos[1] / pv.pos[3]) * 136.0f;
+            x0 = std::min(x0, px); x1 = std::max(x1, px);
+            y0 = std::min(y0, py); y1 = std::max(y1, py);
+        }
+        // Draws over the screen centre log every vertex (up to 256), the
+        // rest their first two.
+        const bool centre = x0 <= 240.0f && x1 >= 240.0f && y0 <= 136.0f && y1 >= 136.0f;
+        const size_t nlog = centre ? std::min<size_t>(packed.size(), 256) : std::min<size_t>(packed.size(), 2);
+        for (size_t i = 0; i < nlog; i++) {
             const PackedVertex& pv = packed[i];
             std::fprintf(stderr,
                 "[DL]   v%zu/%zu pos=%.3f,%.3f,%.3f,%.3f uv=%.3f,%.3f rgba=%u,%u,%u,%u\n",
                 i, packed.size(), pv.pos[0], pv.pos[1], pv.pos[2], pv.pos[3],
                 pv.uv[0], pv.uv[1], pv.color[0], pv.color[1], pv.color[2],
                 pv.color[3]);
+        }
+        if (x0 <= x1) {
+            std::fprintf(stderr, "[DL]   bbox x=%.0f..%.0f y=%.0f..%.0f\n", x0, x1, y0, y1);
         }
     }
     if (packed.empty()) return;

@@ -389,6 +389,15 @@ host backtrace, and the return value:
 [OVL-ARGS-OUT] 0xADDR -> v0=0x..
 ```
 
+### `[DL]` draw-list dump: bbox, lights, centre vertices
+
+Each `[DL] i=` PRIM is followed by `[DL]   bbox x=..  y=..` (PSP pixels covered by its vertices
+with w > 0), a `[DL]   light ...` line plus one `[DL]   Ln ...` line per enabled light when lighting
+is on, and its vertices: all of them (up to 256) when the bbox contains the screen centre
+(240,136), else the first two. To find what paints a region, list the PRIMs whose triangles
+contain a pixel and interpolate their colours (2026-10-10 hero-attack black box: a zero-scaled
+object pushed through the degenerate-matrix passthrough).
+
 ### `PSPRECOMP_HW_WATCH` (Windows hardware write watch)
 
 `PSPRECOMP_HW_WATCH=<hex guest address>` arms debug register DR0 (write, 4 bytes) on every host

@@ -662,9 +662,15 @@ void ge_transform_vertices(
         // subtler case (#27 family): matrices that arrive non-zero and
         // non-singular but compose into an MVP that maps the whole prim onto
         // a sub-pixel cluster -- a silent black screen the static gates miss.
-        bool view_zero = ge_view_matrix_all_zero(state);
-        bool proj_bad = ge_proj_matrix_degenerate(state);
-        bool mvp_collapsed =
+        // Only a game that installed a fallback (its broken-matrix workaround)
+        // takes the NDC-direct path. Without one the real transform runs, as on
+        // hardware: a game that hides an object by scaling it to zero gets a
+        // single clip point (nothing drawn); the old world-space passthrough
+        // turned such objects into screen-covering triangles (Patapon 3).
+        const bool have_fallback = g_degenerate_fallback != nullptr;
+        bool view_zero = have_fallback && ge_view_matrix_all_zero(state);
+        bool proj_bad = have_fallback && ge_proj_matrix_degenerate(state);
+        bool mvp_collapsed = have_fallback &&
             !view_zero && !proj_bad && ge_mvp_collapses(state, verts);
         bool ndc_direct = view_zero || proj_bad || mvp_collapsed;
 
