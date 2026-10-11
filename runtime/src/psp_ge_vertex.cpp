@@ -208,6 +208,11 @@ void ge_decode_vertices(
         if (tc_type == GE_VTYPE_TC_8BIT) {
             uv[0] = read_u8(rdram, o) / 128.0f;
             uv[1] = read_u8(rdram, o + 1) / 128.0f;
+        } else if (tc_type == GE_VTYPE_TC_16BIT && through) {
+            // Raw unsigned texels (PPSSPP Step_TcU16ThroughToFloat): the
+            // P3 mission command list uses this and vanished when scaled.
+            uv[0] = static_cast<float>(read_u16(rdram, o));
+            uv[1] = static_cast<float>(read_u16(rdram, o + 2));
         } else if (tc_type == GE_VTYPE_TC_16BIT) {
             uv[0] = read_s16(rdram, o) / 32768.0f;
             uv[1] = read_s16(rdram, o + 2) / 32768.0f;

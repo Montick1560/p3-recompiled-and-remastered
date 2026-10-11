@@ -695,6 +695,35 @@ static void test_through_s16_z_unsigned() {
     std::free(ram);
 }
 
+// Through-mode u16 texture coordinates are raw texel units, unsigned (PPSSPP
+// Step_TcU16ThroughToFloat). Patapon 3's mission command list ("Avanzar: ...")
+// is a 126-vertex sprite run with vtype 0x800102 and u,v = 65,22 for its first
+// glyph: scaling them by 1/32768 like transform mode sampled texel 0,0 for every
+// glyph, which is transparent, so the whole bar vanished.
+static void test_through_u16_uv_raw_texels() {
+    const size_t kRam = 0x08000000u;
+    uint8_t* ram = static_cast<uint8_t*>(std::calloc(kRam, 1));
+    const uint32_t vaddr = 0x08800000u;
+    const uint16_t v[5] = {65u, 0x8016u, 5u, 244u, 2313u};  // u, v (> 0x7FFF), x, y, z
+    std::memcpy(ram + (vaddr & 0x07FFFFFFu), v, sizeof(v));
+    GeState s;
+    s.reset();
+    s.vertex_type = 0x00800102u;  // through, u16 texcoords, s16 position
+    s.vertex_addr = vaddr;
+    std::vector<DecodedVertex> out;
+    ge_decode_vertices(ram, s, 0, 1, out);
+    tests_run++;
+    if (out.size() != 1) {
+        std::fprintf(stderr, "FAIL: through u16 uv: decoded %zu vertices\n", out.size());
+        failures++;
+    } else {
+        ASSERT_NEAR(out[0].uv[0], 65.0f, "through u16 u is raw texels");
+        ASSERT_NEAR(out[0].uv[1], 32790.0f, "through u16 v is unsigned");
+        ASSERT_NEAR(out[0].pos[1], 244.0f, "through y after the u16 uv");
+    }
+    std::free(ram);
+}
+
 int main() {
     test_color_write_mask();
     test_blend_setup();
@@ -710,6 +739,7 @@ int main() {
     test_tiny_prim_no_overtrigger();
     test_zero_scale_without_fallback_collapses();
     test_through_s16_z_unsigned();
+    test_through_u16_uv_raw_texels();
     test_rect_expand_divides_by_w();
     test_rect_expand_drops_nonpositive_w();
     test_colorless_vertex_uses_material_ambient();
