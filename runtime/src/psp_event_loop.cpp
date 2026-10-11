@@ -49,7 +49,8 @@ static uint32_t key_to_psp_button(SDL_Keycode key) {
         case SDLK_q:      return 0x0100;  // LTRIGGER
         case SDLK_w:      return 0x0200;  // RTRIGGER
         case SDLK_SPACE:  return 0x0008;  // START
-        case SDLK_TAB:    return 0x0001;  // SELECT
+        case SDLK_v:
+        case SDLK_TAB:    return 0x0001;  // SELECT (V or TAB)
         default:          return 0;
     }
 }

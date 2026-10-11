@@ -236,7 +236,7 @@ pack (`textures.ini` + PNGs, `xxh64`/`xxh32` hashes) from that folder; packs are
 this repository.
 
 Input: keyboard (arrows = D-pad, X/Enter = CROSS, Z = CIRCLE, A = SQUARE, S = TRIANGLE,
-Q/W = L/R, Space = START, Tab = SELECT; mouse wheel = D-pad up/down, one press per notch) and any SDL game controller (XInput-style layout,
+Q/W = L/R, Space = START, V or Tab = SELECT; mouse wheel = D-pad up/down, one press per notch) and any SDL game controller (XInput-style layout,
 hot-pluggable; keyboard and pads can be used together):
 
 | Controller | PSP |
