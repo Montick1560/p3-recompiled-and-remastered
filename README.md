@@ -251,8 +251,11 @@ Text entry: when the game opens the PSP on-screen keyboard (`sceUtilityOsk`), a 
 the game. Type with the PC keyboard (accents and IME work); Backspace deletes, Enter (or a controller's
 Start) accepts, Esc (or B) cancels and keeps the previous text.
 
-Ad hoc multiplayer (verified between two runtime instances on one PC: Patapon 3's Heropuerta lobby,
-chat, choosing a quest and playing it in co-op; not yet tested against PPSSPP or across machines):
+Ad hoc multiplayer (verified on one PC between two runtime instances, and with PPSSPP 1.20.4 hosting
+and the runtime joining: Patapon 3's Heropuerta lobby, chat, choosing a quest and playing it in co-op;
+the runtime hosting a PPSSPP guest and play across machines are not tested yet). PPSSPP's first instance takes 127.0.0.1 as its own
+address and will not log in to a server at that address unless it runs the built-in one, so point a
+PPSSPP on the same PC at `127.0.0.3` and give the runtime `PSPRECOMP_ADHOC_BIND=127.0.0.2`.
 PSP ad hoc play is carried over
 a PRO ad hoc server, the protocol PPSSPP uses, so the server can be PPSSPP's built-in one or
 `tools/adhoc_server.py` (`python tools/adhoc_server.py`, TCP 27312). The default server is

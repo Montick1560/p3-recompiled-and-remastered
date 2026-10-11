@@ -55,7 +55,12 @@ class User:
 class Server:
     def __init__(self, host="0.0.0.0", port=27312):
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # Windows SO_REUSEADDR lets a second server bind the same port and take
+        # some of the logins; exclusive use makes that second bind fail instead.
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.listener.bind((host, port))
         self.listener.listen(64)
         self.port = self.listener.getsockname()[1]
@@ -194,6 +199,11 @@ class Server:
 
 def selftest():
     srv = Server("127.0.0.1", 0)
+    try:
+        Server("127.0.0.1", srv.port)
+        raise AssertionError("a second server bound the same port")
+    except OSError:
+        pass
     th = threading.Thread(target=srv.serve, daemon=True)
     th.start()
 
