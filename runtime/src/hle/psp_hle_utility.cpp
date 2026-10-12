@@ -12,6 +12,7 @@
 #include "psp_memory.h"
 #include "psp_runtime.h"
 #include "psp_scheduler.h"
+#include "psp_time.h"
 #include "recomp.h"
 #include "recomp_module.h"  // generated module facts (issue #47 Phase 2)
 
@@ -200,19 +201,29 @@ struct AudioChannelState {
 // if Reserve was never seen).
 static int g_output2_samples = 1024;
 static AudioChannelState g_channels[AUDIO_CHANNEL_COUNT];
+// One virtual drain clock per mixer channel (0..7 normal, 8 = Output2), used
+// only when no device drains the mixer: it keeps the no-device pacing at the
+// real 44.1 kHz rate.
+static AudioPaceClock g_pace[AUDIO_CHANNEL_COUNT + 1];
 
 /// Block the calling thread for the playback duration of `samples`
 /// samples at 44.1kHz. Mirrors the hle_sceKernelDelayThread blocking
 /// idiom (psp_hle_kernel_thread.cpp): dispatch pending IO callbacks,
 /// yield, then sleep.
 static void audio_block_for_samples(
-    uint8_t* rdram, recomp_context* ctx, int64_t samples
+    uint8_t* rdram, recomp_context* ctx, int mix_ch, int64_t samples
 ) {
     psp_kernel_check_callbacks(rdram, ctx);
     sched_yield_point();
     psp_cpu_block_begin();  // a real wait: let any ready thread run
-    std::this_thread::sleep_for(std::chrono::microseconds(
-        samples * 1000000LL / AUDIO_OUTPUT_SAMPLE_RATE));
+    // Schedule on the channel's virtual drain clock (a real device keeps
+    // draining while the producer works; waiting "now + grain" instead added
+    // that work on top and slowed the guest's audio-driven clocks ~20%, which
+    // stalls the opening-movie transition without a device — T0 in
+    // build/autopilot/RELEVO.md).
+    const auto deadline = g_pace[mix_ch].schedule(
+        std::chrono::steady_clock::now(), samples);
+    psp_sleep_until(deadline);
 }
 
 /// Queue one grain from guest memory on mixer channel `mix_ch`. Returns
@@ -259,7 +270,7 @@ static void audio_output_channel(
     int vol_left, int vol_right, bool blocking, bool panned
 ) {
     if (channel >= static_cast<uint32_t>(AUDIO_CHANNEL_COUNT)) {
-        if (blocking) audio_block_for_samples(rdram, ctx, 1024);
+        if (blocking) audio_block_for_samples(rdram, ctx, AUDIO_CHANNEL_COUNT, 1024);
         return;
     }
     AudioChannelState& ch = g_channels[channel];
@@ -274,7 +285,7 @@ static void audio_output_channel(
     if (queued) {
         audio_wait_drain(rdram, ctx, static_cast<int>(channel), ch.samples);
     } else {
-        audio_block_for_samples(rdram, ctx, ch.samples);
+        audio_block_for_samples(rdram, ctx, static_cast<int>(channel), ch.samples);
     }
 }
 
@@ -370,7 +381,7 @@ static void hle_sceAudioOutput2OutputBlocking(
                          vol, vol)) {
         audio_wait_drain(rdram, ctx, PspAudioMixer::kOutput2, frames);
     } else {
-        audio_block_for_samples(rdram, ctx, frames);
+        audio_block_for_samples(rdram, ctx, PspAudioMixer::kOutput2, frames);
     }
     ctx->r[2] = SCE_OK;
 }

@@ -126,7 +126,9 @@ Read by the runtime binary at start-up or during execution.
 - **Type:** env (presence).
 - **Default:** unset (an SDL2 audio device is opened).
 - **Effect:** Skips opening the audio device. The `sceAudio*Blocking` calls
-  fall back to timing-only pacing (sleep one grain), so the game runs at the
+  fall back to timing-only pacing on a per-channel virtual drain clock: each
+  grain is scheduled one playback duration after the previous one (44.1 kHz),
+  the way a real device drains while the caller works, so the game runs at the
   same speed, silently.
 - **Set it when:** running headless or in automated test runs.
 
