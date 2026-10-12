@@ -606,6 +606,12 @@ target_include_directories(test_tex_memo PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/inc
 target_compile_options(test_tex_memo PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME tex_memo_tests COMMAND test_tex_memo)
 
+# Header-only pure policy (test_texrep_lru convention: no extra sources).
+add_executable(test_ge_texcache tests/test_ge_texcache.cpp)
+target_include_directories(test_ge_texcache PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_ge_texcache PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME ge_texcache_tests COMMAND test_ge_texcache)
+
 add_executable(test_wheel tests/test_wheel.cpp src/psp_wheel.cpp)
 target_include_directories(test_wheel PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_wheel PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)

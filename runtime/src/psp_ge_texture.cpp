@@ -1,4 +1,5 @@
 #include "psp_ge_texture.h"
+#include "psp_ge_texcache.h"
 #include "psp_perf.h"
 #include "psp_ge.h"
 #include "psp_ge_sampler.h"
@@ -53,32 +54,18 @@ static void evict_slot(int slot) {
     g_gl_lru.remove(slot);
 }
 
-/// Find cache entry matching (addr, hash) or evict LRU.
+/// Find cache entry matching (addr, hash) or evict LRU. Evictions leave vacant
+/// slots behind, so a match is honoured from any slot before a vacancy is
+/// reused; the selection itself is the pure, unit-tested ge_texcache_pick().
 static int find_or_evict(
     uint32_t psp_addr, uint32_t content_hash
 ) {
-    int best_slot = 0;
-    uint32_t oldest_frame = UINT32_MAX;
-
-    for (int i = 0; i < TEX_CACHE_SIZE; i++) {
-        auto& e = g_tex_cache[i];
-        if (e.valid
-            && e.psp_addr == psp_addr
-            && e.content_hash == content_hash) {
-            return i;  // Exact match
-        }
-        if (!e.valid) {
-            return i;  // Empty slot
-        }
-        if (e.last_frame < oldest_frame) {
-            oldest_frame = e.last_frame;
-            best_slot = i;
-        }
+    int slot = 0;
+    if (ge_texcache_pick(g_tex_cache, psp_addr, content_hash, &slot)
+        == GeTexCachePick::Evict) {
+        evict_slot(slot);
     }
-
-    // Evict oldest
-    evict_slot(best_slot);
-    return best_slot;
+    return slot;
 }
 
 // ---- Sampler ----
@@ -117,6 +104,7 @@ void ge_texture_init() {
     std::fprintf(stderr, "[TEX] Texture cache initialized "
                          "(%d entries)\n", TEX_CACHE_SIZE);
     ge_texrep_init();
+    g_gl_lru.clear();
     g_gl_lru.set_budget(ge_texrep_budget_bytes());
 }
 

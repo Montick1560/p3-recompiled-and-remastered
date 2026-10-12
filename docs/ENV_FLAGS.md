@@ -169,7 +169,9 @@ Read by the runtime binary at start-up or during execution.
   `PSPRECOMP_TEXTURES`: the decoded-PNG cache and the uploaded HD GL textures
   are each LRU-capped to it (least recently used freed first). An uploaded PNG
   buffer is dropped immediately (re-decoded from disk if its GL texture is
-  evicted). Values <= 0 are ignored. There is no effect without a pack.
+  evicted). Values <= 0 are ignored. The renderer's GL texture cache is
+  budgeted by it as well, so even without a pack a very small value evicts
+  original textures (re-decoded on demand).
 - **Set it when:** running several packed instances on one machine (RAM) or
   testing eviction behaviour.
 
