@@ -132,6 +132,26 @@ Read by the runtime binary at start-up or during execution.
   same speed, silently.
 - **Set it when:** running headless or in automated test runs.
 
+### `PSPRECOMP_RTC_FIXED`
+- **Read in:** `runtime/src/hle/psp_hle_utility.cpp` (through
+  `runtime/src/psp_rtc.cpp`, which owns the parsing and the fixed clock).
+- **Type:** env (`YYYY-MM-DDTHH:MM:SS`, local civil time; a space instead of
+  the `T` also parses). An unparsable value warns on stderr and is ignored.
+- **Default:** unset — the host clock is reported, as on a real PSP.
+- **Effect:** Pins the guest-visible wall clock to a fixed base that keeps
+  advancing with real time. `sceRtcGetCurrentClockLocalTime`,
+  `sceRtcGetAccumulativeTime`, `sceKernelLibcTime` and
+  `sceKernelLibcGettimeofday` all read from it. Patapon reads the clock once
+  at boot and the hideout sky/lighting follows that value, so identical
+  scripted tours taken at different host hours differ far past the visual
+  regression gate: 18:33 vs 20:41 local (11 Oct) differ up to 54.8 % struct
+  on the mission-prep captures. Pinned to the reference capture's boot time,
+  the same tour is reproducible at any host time (runtime-vs-runtime
+  comparison: PASS, all 21 gated points <= 0.15 % struct against the
+  reference; two runs with the same value, 0.00 % struct).
+- **Set it when:** running the scripted graphics tour and captures must not
+  depend on the host clock. Normal play should leave it unset.
+
 ### `PSPRECOMP_AUDIO_DUMP`
 - **Read in:** `runtime/src/psp_audio_out.cpp`
 - **Type:** env (path string).

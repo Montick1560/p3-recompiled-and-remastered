@@ -13,6 +13,7 @@
 #include "psp_runtime.h"
 #include "psp_scheduler.h"
 #include "psp_time.h"
+#include "psp_rtc.h"
 #include "recomp.h"
 #include "recomp_module.h"  // generated module facts (issue #47 Phase 2)
 
@@ -82,14 +83,30 @@ static void hle_sceKernelDcacheWritebackRange(
 
 // ---- RTC ----
 
+// Deterministic wall clock for automated visual runs (psp_rtc.h): the hideout
+// lighting follows the host clock read once at boot, so PSPRECOMP_RTC_FIXED
+// pins the reported clock to a fixed base. Initialized once, thread-safe.
+static PspFixedClock* fixed_clock() {
+    static PspFixedClock* clock = [] {
+        std::optional<PspRtcTime> base = psp_rtc_env_override();
+        return base ? new PspFixedClock(*base) : nullptr;
+    }();
+    return clock;
+}
+
 static void hle_sceRtcGetAccumulativeTime(
     uint8_t* rdram, recomp_context* ctx
 ) {
     // Return current microsecond timestamp as 64-bit in v0:v1
-    auto now = std::chrono::steady_clock::now();
-    uint64_t us = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            now.time_since_epoch()).count());
+    uint64_t us;
+    if (PspFixedClock* fixed = fixed_clock()) {
+        us = static_cast<uint64_t>(fixed->now_unix_us());
+    } else {
+        auto now = std::chrono::steady_clock::now();
+        us = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                now.time_since_epoch()).count());
+    }
     ctx->r[2] = static_cast<int32_t>(us & 0xFFFFFFFF);
     ctx->r[3] = static_cast<int32_t>((us >> 32) & 0xFFFFFFFF);
     (void)rdram;
@@ -103,22 +120,41 @@ static void hle_sceRtcGetCurrentClockLocalTime(
     if (time_ptr != 0) {
         // ScePspDateTime: year(u16), month(u16), day(u16),
         //   hour(u16), minute(u16), second(u16), microsecond(u32)
-        time_t now = std::time(nullptr);
-        struct tm* local = std::localtime(&now);
-        if (local) {
+        if (PspFixedClock* fixed = fixed_clock()) {
+            const int64_t us = fixed->now_unix_us();
+            const PspRtcTime t = psp_rtc_from_unix_us(us);
             psp_mem_write<uint16_t>(rdram, time_ptr,
-                static_cast<uint16_t>(local->tm_year + 1900));
+                static_cast<uint16_t>(t.year));
             psp_mem_write<uint16_t>(rdram, time_ptr + 2,
-                static_cast<uint16_t>(local->tm_mon + 1));
+                static_cast<uint16_t>(t.month));
             psp_mem_write<uint16_t>(rdram, time_ptr + 4,
-                static_cast<uint16_t>(local->tm_mday));
+                static_cast<uint16_t>(t.day));
             psp_mem_write<uint16_t>(rdram, time_ptr + 6,
-                static_cast<uint16_t>(local->tm_hour));
+                static_cast<uint16_t>(t.hour));
             psp_mem_write<uint16_t>(rdram, time_ptr + 8,
-                static_cast<uint16_t>(local->tm_min));
+                static_cast<uint16_t>(t.minute));
             psp_mem_write<uint16_t>(rdram, time_ptr + 10,
-                static_cast<uint16_t>(local->tm_sec));
-            psp_mem_write<uint32_t>(rdram, time_ptr + 12, 0);
+                static_cast<uint16_t>(t.second));
+            psp_mem_write<uint32_t>(rdram, time_ptr + 12,
+                static_cast<uint32_t>(us % 1000000));
+        } else {
+            time_t now = std::time(nullptr);
+            struct tm* local = std::localtime(&now);
+            if (local) {
+                psp_mem_write<uint16_t>(rdram, time_ptr,
+                    static_cast<uint16_t>(local->tm_year + 1900));
+                psp_mem_write<uint16_t>(rdram, time_ptr + 2,
+                    static_cast<uint16_t>(local->tm_mon + 1));
+                psp_mem_write<uint16_t>(rdram, time_ptr + 4,
+                    static_cast<uint16_t>(local->tm_mday));
+                psp_mem_write<uint16_t>(rdram, time_ptr + 6,
+                    static_cast<uint16_t>(local->tm_hour));
+                psp_mem_write<uint16_t>(rdram, time_ptr + 8,
+                    static_cast<uint16_t>(local->tm_min));
+                psp_mem_write<uint16_t>(rdram, time_ptr + 10,
+                    static_cast<uint16_t>(local->tm_sec));
+                psp_mem_write<uint32_t>(rdram, time_ptr + 12, 0);
+            }
         }
     }
 
@@ -129,7 +165,12 @@ static void hle_sceKernelLibcTime(
     uint8_t* rdram, recomp_context* ctx
 ) {
     uint32_t out_ptr = static_cast<uint32_t>(ctx->r[4]);
-    int32_t t = static_cast<int32_t>(std::time(nullptr));
+    int32_t t;
+    if (PspFixedClock* fixed = fixed_clock()) {
+        t = static_cast<int32_t>(fixed->now_unix_us() / 1000000);
+    } else {
+        t = static_cast<int32_t>(std::time(nullptr));
+    }
 
     if (out_ptr != 0) {
         psp_mem_write<int32_t>(rdram, out_ptr, t);
@@ -151,18 +192,27 @@ static void hle_sceKernelLibcGettimeofday(
     uint32_t tv_ptr = static_cast<uint32_t>(ctx->r[4]);
 
     if (tv_ptr != 0) {
-        auto now = std::chrono::system_clock::now();
-        auto secs = std::chrono::duration_cast<
-            std::chrono::seconds>(
-                now.time_since_epoch()).count();
-        auto usecs = std::chrono::duration_cast<
-            std::chrono::microseconds>(
-                now.time_since_epoch()).count() % 1000000;
-        // struct timeval: tv_sec(u32), tv_usec(u32)
-        psp_mem_write<uint32_t>(rdram, tv_ptr,
-            static_cast<uint32_t>(secs));
-        psp_mem_write<uint32_t>(rdram, tv_ptr + 4,
-            static_cast<uint32_t>(usecs));
+        if (PspFixedClock* fixed = fixed_clock()) {
+            const int64_t us = fixed->now_unix_us();
+            // struct timeval: tv_sec(u32), tv_usec(u32)
+            psp_mem_write<uint32_t>(rdram, tv_ptr,
+                static_cast<uint32_t>(us / 1000000));
+            psp_mem_write<uint32_t>(rdram, tv_ptr + 4,
+                static_cast<uint32_t>(us % 1000000));
+        } else {
+            auto now = std::chrono::system_clock::now();
+            auto secs = std::chrono::duration_cast<
+                std::chrono::seconds>(
+                    now.time_since_epoch()).count();
+            auto usecs = std::chrono::duration_cast<
+                std::chrono::microseconds>(
+                    now.time_since_epoch()).count() % 1000000;
+            // struct timeval: tv_sec(u32), tv_usec(u32)
+            psp_mem_write<uint32_t>(rdram, tv_ptr,
+                static_cast<uint32_t>(secs));
+            psp_mem_write<uint32_t>(rdram, tv_ptr + 4,
+                static_cast<uint32_t>(usecs));
+        }
     }
 
     ctx->r[2] = SCE_OK;

@@ -130,6 +130,7 @@ set(RUNTIME_SOURCES
     src/psp_audio_mixer.cpp
     src/psp_audio_out.cpp
     src/psp_time.cpp
+    src/psp_rtc.cpp
     src/psp_subintr.cpp
     src/psp_backtrace.cpp
     src/psp_cpu.cpp
@@ -551,6 +552,13 @@ target_compile_options(test_audio_pace PRIVATE
 )
 
 add_test(NAME audio_pace_tests COMMAND test_audio_pace)
+
+# Deterministic wall-clock override (psp_rtc.cpp): ISO parse, civil <-> unix
+# round trip, the fixed clock, and the PSPRECOMP_RTC_FIXED env read.
+add_executable(test_rtc_fixed tests/test_rtc_fixed.cpp src/psp_rtc.cpp)
+target_include_directories(test_rtc_fixed PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_rtc_fixed PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME rtc_fixed_tests COMMAND test_rtc_fixed)
 
 # Sub-interrupt handler table unit test (pure bookkeeping, no guest code).
 add_executable(test_subintr tests/test_subintr.cpp src/psp_subintr.cpp)
