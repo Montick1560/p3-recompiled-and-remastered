@@ -163,6 +163,21 @@ Read by the runtime binary at start-up or during execution.
 - **Set it when:** comparing against old nearest-only screenshots or PPSSPP's
   forced filter modes.
 
+### `PSPRECOMP_TEX_HASH_BACKOFF`
+- **Read in:** `runtime/src/psp_ge_texture.cpp` (`tex_hash_backoff_window`,
+  applied in `ge_texture_init`); policy in `runtime/include/psp_ge_texmemo.h`.
+- **Type:** env (integer, display lists).
+- **Default:** `8`.
+- **Effect:** cap of the content-hash memo's reuse window. A texture whose
+  hash verified unchanged is reused without re-reading guest memory for a
+  window that doubles per stable check (1, 2, 4, ... up to this cap); any
+  hash mismatch restarts it at one list (what changes every frame keeps
+  being hashed every frame), as does a GE block transfer. `1` verifies every
+  list (backoff off); `0` or a non-power-of-two value rounds down; values
+  above 65536 clamp.
+- **Set it when:** A/B-testing a suspected stale-texture artifact, or tuning
+  hash cost vs. detection latency of CPU-written textures.
+
 ### `PSPRECOMP_TEXTURES_BUDGET_MB`
 - **Read in:** `runtime/src/psp_texrep.cpp` (`ge_texrep_init`).
 - **Type:** env (integer, megabytes).

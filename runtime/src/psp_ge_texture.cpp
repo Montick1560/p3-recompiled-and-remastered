@@ -23,7 +23,7 @@
 // ---- Module state ----
 static std::array<TexCacheEntry, TEX_CACHE_SIZE> g_tex_cache;
 static bool g_tex_initialized = false;
-static TexHashMemo g_hash_memo;  // per-list content-hash memo (psp_ge_texmemo.h)
+static TexHashMemo g_hash_memo;  // content-hash memo w/ backoff (psp_ge_texmemo.h)
 // Byte budget for uploaded GL textures, shared value with the PNG cache
 // (PSPRECOMP_TEXTURES_BUDGET_MB). Render-thread only: eviction does GL deletes.
 static TexrepLru<int> g_gl_lru(256u << 20);
@@ -99,11 +99,22 @@ static bool apply_sampler(const GeState& state, int forced_filter) {
 
 // ---- Public API ----
 
+// PSPRECOMP_TEX_HASH_BACKOFF=<lists>: the memo's max reuse window. 1 verifies
+// every list (backoff off); invalid or absent keeps the default 8.
+static uint32_t tex_hash_backoff_window() {
+    const char* e = std::getenv("PSPRECOMP_TEX_HASH_BACKOFF");
+    if (e == nullptr || *e == '\0') return 8;
+    const unsigned long v = std::strtoul(e, nullptr, 10);
+    if (v == 0) return 1;
+    return static_cast<uint32_t>(v > 65536u ? 65536u : v);
+}
+
 void ge_texture_init() {
     for (auto& e : g_tex_cache) {
         e = TexCacheEntry{};
     }
     g_tex_initialized = true;
+    g_hash_memo = TexHashMemo(tex_hash_backoff_window());
     std::fprintf(stderr, "[TEX] Texture cache initialized "
                          "(%d entries)\n", TEX_CACHE_SIZE);
     ge_texrep_init();
@@ -215,7 +226,11 @@ GLuint ge_texture_bind(
     const uint32_t params_hash = fnv1a_hash(reinterpret_cast<const uint8_t*>(param_words),
                                             static_cast<int>(sizeof(param_words)));
     // The bytes are hashed once per display list (frame_num counts lists);
-    // later binds of the same texture in the list reuse that hash.
+    // later binds of the same texture in the list reuse that hash. A texture
+    // whose hash verified unchanged is only re-read every few lists: the
+    // memo applies a frame-delayed backoff (PSPRECOMP_TEX_HASH_BACKOFF,
+    // see psp_ge_texmemo.h), so a CPU that rewrites textures each list still
+    // re-hashes each list.
     uint32_t content_hash = 0;
     if (!g_hash_memo.find(frame_num, masked_addr, params_hash, &content_hash)) {
         content_hash = fnv1a_hash(rdram + masked_addr, static_cast<int>(span));
