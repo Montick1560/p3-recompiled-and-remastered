@@ -373,6 +373,116 @@ static void test_rect_expand_drops_nonpositive_w() {
     }
 }
 
+// ---- Through-mode line expansion (PPSSPP ExpandLines) ----
+//
+// The GE draws lines as 1-px quads biased one pixel to the right (vertical
+// lines) or down (horizontal lines) of the segment (PPSSPP
+// GPU/Common/SoftwareTransformCommon.cpp: ExpandLines, default non-CenteredLines
+// path). GL_LINES instead covers the pixel LEFT of an integer-x vertical line
+// (diamond-exit), which put the game's menu shadows and pulse outline one
+// pixel left of PPSSPP. The expansion runs on post-transform through vertices
+// (NDC positions, w = 1, normalized UVs).
+
+static float px_to_ndc_x(float px) { return px / 240.0f - 1.0f; }
+static float px_to_ndc_y(float py) { return 1.0f - py / 136.0f; }
+
+static DecodedVertex make_through_ndc_vertex(float px, float py, float u, float v) {
+    DecodedVertex vtx;
+    vtx.pos[0] = px_to_ndc_x(px);
+    vtx.pos[1] = px_to_ndc_y(py);
+    vtx.pos[2] = 0.0f;
+    vtx.uv[0] = u;
+    vtx.uv[1] = v;
+    vtx.has_uv = true;
+    vtx.has_color = false;
+    vtx.has_normal = false;
+    return vtx;
+}
+
+// A vertical line (menu shadow: x=8, y 27..95) grows to the right: corners
+// BR (9,95), TR (9,27), TL (8,27), BL (8,95) in PPSSPP's index order
+// BR,TR,TL / BL,BR,TL, so the quad covers pixel column 8 ([8,9]).
+static void test_expand_line_through_vertical_biases_right() {
+    DecodedVertex v0 = make_through_ndc_vertex(8.0f, 27.0f, 0.25f, 0.50f);
+    DecodedVertex v1 = make_through_ndc_vertex(8.0f, 95.0f, 0.25f, 0.50f);
+    DecodedVertex out[6];
+    ge_expand_line_through(v0, v1, out);
+
+    ASSERT_NEAR(out[0].pos[0], px_to_ndc_x(9.0f), "v-line BR x = x+1 (pixel 8)");
+    ASSERT_NEAR(out[1].pos[0], px_to_ndc_x(9.0f), "v-line TR x = x+1");
+    ASSERT_NEAR(out[2].pos[0], px_to_ndc_x(8.0f), "v-line TL x = x");
+    ASSERT_NEAR(out[3].pos[0], px_to_ndc_x(8.0f), "v-line BL x = x");
+    ASSERT_NEAR(out[4].pos[0], px_to_ndc_x(9.0f), "v-line tri2 BR x = x+1");
+    ASSERT_NEAR(out[5].pos[0], px_to_ndc_x(8.0f), "v-line tri2 TL x = x");
+    ASSERT_NEAR(out[0].pos[1], px_to_ndc_y(95.0f), "v-line BR y");
+    ASSERT_NEAR(out[1].pos[1], px_to_ndc_y(27.0f), "v-line TR y");
+    ASSERT_NEAR(out[2].pos[1], px_to_ndc_y(27.0f), "v-line TL y");
+    ASSERT_NEAR(out[3].pos[1], px_to_ndc_y(95.0f), "v-line BL y");
+    // UVs of the expanded column gain the 1-unit perpendicular offset
+    // (PPSSPP du = dv = 1, uv_w = 1); the original column keeps its UVs.
+    ASSERT_NEAR(out[2].uv[0], 0.25f, "v-line TL u unchanged");
+    ASSERT_NEAR(out[0].uv[0], 1.25f, "v-line BR u += 1");
+    ASSERT_NEAR(out[1].uv[0], 1.25f, "v-line TR u += 1");
+    ASSERT_NEAR(out[0].uv[1], 0.50f, "v-line v unchanged");
+    for (int k = 0; k < 6; k++)
+        ASSERT_NEAR(out[k].w, 1.0f, "expanded line w == 1");
+}
+
+// A horizontal line (top border: y=20) grows downward: the quad covers pixel
+// row 20 ([20,21]).
+static void test_expand_line_through_horizontal_biases_down() {
+    DecodedVertex v0 = make_through_ndc_vertex(15.0f, 20.0f, 0.0f, 0.0f);
+    DecodedVertex v1 = make_through_ndc_vertex(119.714f, 20.0f, 0.0f, 0.0f);
+    DecodedVertex out[6];
+    ge_expand_line_through(v0, v1, out);
+
+    ASSERT_NEAR(out[0].pos[0], px_to_ndc_x(15.0f), "h-line BR x = first endpoint");
+    ASSERT_NEAR(out[2].pos[0], px_to_ndc_x(119.714f), "h-line TL x = right endpoint");
+    ASSERT_NEAR(out[0].pos[1], px_to_ndc_y(21.0f), "h-line BR y = y+1 (pixel row 20)");
+    ASSERT_NEAR(out[1].pos[1], px_to_ndc_y(21.0f), "h-line TR y = y+1");
+    ASSERT_NEAR(out[2].pos[1], px_to_ndc_y(20.0f), "h-line TL y = y");
+    ASSERT_NEAR(out[3].pos[1], px_to_ndc_y(20.0f), "h-line BL y = y");
+}
+
+// A degenerate line (both endpoints equal) must not produce NaN offsets
+// (PPSSPP's Normalized() has no guard; the hardware draws nothing).
+static void test_expand_line_through_degenerate() {
+    DecodedVertex v0 = make_through_ndc_vertex(30.0f, 40.0f, 0.1f, 0.2f);
+    DecodedVertex v1 = v0;
+    DecodedVertex out[6];
+    ge_expand_line_through(v0, v1, out);
+    for (int k = 0; k < 6; k++) {
+        tests_run++;
+        if (!std::isfinite(out[k].pos[0]) || !std::isfinite(out[k].pos[1])) {
+            std::fprintf(stderr, "FAIL: degenerate line produced non-finite positions\n");
+            failures++;
+            return;
+        }
+        ASSERT_NEAR(out[k].pos[0], px_to_ndc_x(30.0f), "degenerate line x");
+        ASSERT_NEAR(out[k].pos[1], px_to_ndc_y(40.0f), "degenerate line y");
+    }
+}
+
+// A slanted line sorts by y (TL = top endpoint, BL = bottom) and the
+// perpendicular of (TL - BL) biases the expansion sideways: for the
+// down-right segment (0,0)-(10,10) it is (+1,-1)/sqrt(2).
+static void test_expand_line_through_diagonal_biases_perpendicular() {
+    DecodedVertex v0 = make_through_ndc_vertex(0.0f, 0.0f, 0.0f, 0.0f);
+    DecodedVertex v1 = make_through_ndc_vertex(10.0f, 10.0f, 0.5f, 0.5f);
+    DecodedVertex out[6];
+    ge_expand_line_through(v0, v1, out);
+
+    const float k = 0.70710678f;  // 1/sqrt(2)
+    ASSERT_NEAR(out[2].pos[0], px_to_ndc_x(0.0f), "diag TL x = top endpoint");
+    ASSERT_NEAR(out[2].pos[1], px_to_ndc_y(0.0f), "diag TL y = top endpoint");
+    ASSERT_NEAR(out[3].pos[0], px_to_ndc_x(10.0f), "diag BL x = bottom endpoint");
+    ASSERT_NEAR(out[3].pos[1], px_to_ndc_y(10.0f), "diag BL y = bottom endpoint");
+    ASSERT_NEAR(out[1].pos[0], px_to_ndc_x(k), "diag TR x = TL + 1/sqrt2");
+    ASSERT_NEAR(out[1].pos[1], px_to_ndc_y(-k), "diag TR y = TL - 1/sqrt2");
+    ASSERT_NEAR(out[0].pos[0], px_to_ndc_x(10.0f + k), "diag BR x = BL + 1/sqrt2");
+    ASSERT_NEAR(out[0].pos[1], px_to_ndc_y(10.0f - k), "diag BR y = BL - 1/sqrt2");
+}
+
 // Colorless vertices take the material ambient RGB + MATERIALALPHA
 // (PPSSPP gstate.getMaterialAmbientRGBA()), not opaque white: the Patapon 3
 // dialog boxes are filled with colorless quads tinted cream this way.
@@ -742,6 +852,10 @@ int main() {
     test_through_u16_uv_raw_texels();
     test_rect_expand_divides_by_w();
     test_rect_expand_drops_nonpositive_w();
+    test_expand_line_through_vertical_biases_right();
+    test_expand_line_through_horizontal_biases_down();
+    test_expand_line_through_degenerate();
+    test_expand_line_through_diagonal_biases_perpendicular();
     test_colorless_vertex_uses_material_ambient();
     test_vertex_stride_alignment();
     test_decode_uses_aligned_stride();

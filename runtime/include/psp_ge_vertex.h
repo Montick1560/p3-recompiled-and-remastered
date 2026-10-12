@@ -73,6 +73,21 @@ bool ge_expand_rectangle(
     DecodedVertex out[6]
 );
 
+/// Through-mode line (GE_PRIM_LINES) expansion, PPSSPP
+/// SoftwareTransformCommon.cpp:ExpandLines (default non-CenteredLines path):
+/// each line becomes a 1-px quad biased one pixel right (vertical lines) or
+/// down (horizontal lines). GL_LINES rasterizes an integer-x vertical line
+/// one pixel to the LEFT of that (diamond-exit), which put the game's menu
+/// shadows and pulse outline 1 px left of PPSSPP. Input: POST-transform
+/// through vertices (NDC positions, w = 1, normalized UVs; the expansion is
+/// computed in PSP screen pixels the way PPSSPP does). Emits PPSSPP's corner
+/// order BR,TR,TL / BL,BR,TL (two triangles, 6 vertices). Pure.
+void ge_expand_line_through(
+    const DecodedVertex& v0,
+    const DecodedVertex& v1,
+    DecodedVertex out[6]
+);
+
 // ---- Game-module degenerate-matrix fallback (issue #47 Phase 5 seam) ----
 // When the guest uploads broken matrices (view all-zero; proj NaN/Inf or
 // collapsed diagonal — open issue, FPU/VFPU dataflow family), the real

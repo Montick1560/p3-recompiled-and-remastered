@@ -832,6 +832,23 @@ void ge_draw_prim(
     // Transform
     ge_transform_vertices(decoded, state);
 
+    // Through-mode GE lines are drawn as 1-px quads biased right/down by
+    // PPSSPP (SoftwareTransformCommon.cpp:ExpandLines); GL_LINES lands an
+    // integer-x vertical line one pixel left of that, which put the game's
+    // menu shadows and the beat outline 1 px left of the reference. Expand
+    // to the same two triangles and draw them as triangles.
+    if (ge_vtype_through(state.vertex_type) && prim_type == GE_PRIM_LINES) {
+        std::vector<DecodedVertex> quads;
+        quads.reserve((decoded.size() / 2) * 6);
+        DecodedVertex quad[6];
+        for (size_t i = 0; i + 1 < decoded.size(); i += 2) {
+            ge_expand_line_through(decoded[i], decoded[i + 1], quad);
+            quads.insert(quads.end(), quad, quad + 6);
+        }
+        decoded.swap(quads);
+        prim_type = GE_PRIM_TRIANGLES;
+    }
+
     // Handle RECTANGLES: expand 2 verts to 6 (two tris)
     std::vector<PackedVertex> packed;
     if (prim_type == GE_PRIM_RECTANGLES) {

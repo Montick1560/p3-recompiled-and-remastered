@@ -808,3 +808,70 @@ bool ge_expand_rectangle(
     out[5] = c3;
     return true;
 }
+
+// ---- Through-mode line expansion (GE_PRIM_LINES) ----
+//
+// PPSSPP expands every line into a 1-px quad (SoftwareTransformCommon.cpp:
+// ExpandLines, the default non-CenteredLines path). The quad grows from the
+// segment toward the right (vertical lines) or downward (horizontal lines):
+// the perpendicular of (TL - BL) is (-vertical, horizontal), so the top
+// endpoint of a vertical line yields BR/TR one pixel right of TL/BL.
+// GL's own line rasterization (diamond-exit) instead covers the pixel left
+// of an integer-x vertical line, placing menu shadows and the pulse outline
+// one pixel left of PPSSPP. Positions are expanded in PSP screen pixels
+// (inverse of the through-mode NDC mapping) and the UVs gain the same 1-unit
+// normalized offset PPSSPP applies (du = dv = 1, uv_w = 1).
+void ge_expand_line_through(
+    const DecodedVertex& v0,
+    const DecodedVertex& v1,
+    DecodedVertex out[6]
+) {
+    // NDC -> PSP pixels (inverse of ge_transform_vertices' through mapping).
+    const float x0 = (v0.pos[0] + 1.0f) * 240.0f;
+    const float y0 = (1.0f - v0.pos[1]) * 136.0f;
+    const float x1 = (v1.pos[0] + 1.0f) * 240.0f;
+    const float y1 = (1.0f - v1.pos[1]) * 136.0f;
+
+    // PPSSPP's TL/BL ordering: top endpoint first (vertical lines), and for
+    // horizontal lines the right endpoint plays "TL" so the perpendicular
+    // biases downward.
+    const bool v0_is_top = y0 <= y1;
+    const float yT = v0_is_top ? y0 : y1, yB = v0_is_top ? y1 : y0;
+    const float xT = v0_is_top ? x0 : x1, xB = v0_is_top ? x1 : x0;
+    const bool top_is_tl = (yT != yB) || (xT > xB);
+    const DecodedVertex& TL = top_is_tl == v0_is_top ? v0 : v1;
+    const DecodedVertex& BL = top_is_tl == v0_is_top ? v1 : v0;
+    const float TLx = top_is_tl == v0_is_top ? x0 : x1;
+    const float TLy = top_is_tl == v0_is_top ? y0 : y1;
+    const float BLx = top_is_tl == v0_is_top ? x1 : x0;
+    const float BLy = top_is_tl == v0_is_top ? y1 : y0;
+
+    const float horizontal = TLx - BLx;
+    const float vertical = TLy - BLy;
+    const float len2 = horizontal * horizontal + vertical * vertical;
+    float add_x = 0.0f, add_y = 0.0f;
+    if (len2 > 1e-12f) {  // degenerate line: stays a zero-area quad
+        const float inv = 1.0f / std::sqrt(len2);
+        add_x = -vertical * inv;
+        add_y = horizontal * inv;
+    }
+
+    DecodedVertex BR = BL;  // bottom right: BL + 1 px along the perpendicular
+    DecodedVertex TR = TL;  // top right: TL + 1 px
+    BR.pos[0] = (BLx + add_x) / 240.0f - 1.0f;
+    BR.pos[1] = 1.0f - (BLy + add_y) / 136.0f;
+    TR.pos[0] = (TLx + add_x) / 240.0f - 1.0f;
+    TR.pos[1] = 1.0f - (TLy + add_y) / 136.0f;
+    BR.uv[0] += add_x;
+    BR.uv[1] += add_y;
+    TR.uv[0] += add_x;
+    TR.uv[1] += add_y;
+
+    // PPSSPP's expansion order: BR,TR,TL / BL,BR,TL.
+    out[0] = BR;
+    out[1] = TR;
+    out[2] = TL;
+    out[3] = BL;
+    out[4] = BR;
+    out[5] = TL;
+}

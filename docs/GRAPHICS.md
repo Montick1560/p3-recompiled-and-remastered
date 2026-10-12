@@ -411,7 +411,13 @@ TRIANGLE_STRIP/TRIANGLE_FAN map directly to their GL equivalents. **RECTANGLES**
 type 6) have no GL analog: each pair of vertices (top-left, bottom-right) is expanded by
 `ge_expand_rectangle` (in `psp_ge_vertex.cpp`) into two triangles (6 vertices), synthesizing the
 other two corners from the pair's coordinates and UVs; the two corner positions are
-perspective-divided and a corner with `w <= 0` drops the whole rectangle.
+perspective-divided and a corner with `w <= 0` drops the whole rectangle. **Through-mode LINES**
+get `ge_expand_line_through` (same file) into the same 1-px quads PPSSPP builds
+(`SoftwareTransformCommon.cpp:ExpandLines`): each segment grows one PSP pixel to the right
+(vertical lines) or downward (horizontal lines) of its perpendicular. GL's own line
+rasterization (diamond-exit) covers the pixel *left* of an integer-x vertical line, which put
+the game's menu shadows and beat outline one pixel left of PPSSPP; expand-and-triangles lands
+them on the same pixel at every render scale. Transform-mode lines keep plain `GL_LINES`.
 
 Draws go through one streaming VBO: vertices are packed into a 28-byte `PackedVertex` (4 floats
 clip-space position, 2 floats UV, 4 bytes color), uploaded with `GL_STREAM_DRAW`, and rendered
@@ -509,9 +515,10 @@ Two adjustments apply only at scale > 1. Through-mode fills (triangles, strips, 
 rectangles) are snapped to the PSP pixel grid with `ge_snap_through_positions` (edge
 `x -> ceil(x - 0.5)`, the 1x pixel-centre coverage): 2D pieces that touch at 1x, such as a
 menu body ending at x = 328 and its corner sprite starting at x = 328.196, would otherwise
-leave a one-pixel gap. Lines and points get `glLineWidth`/`glPointSize` = scale in
-`ge_draw_init` so they keep their one-PSP-pixel apparent width (logged as
-`[DRAW] line/point width`; a driver that rejects wide lines leaves them at 1 px).
+leave a one-pixel gap. Points get `glPointSize` = scale in `ge_draw_init` so they keep their
+one-PSP-pixel apparent width (logged as `[DRAW] line/point width`; a driver that rejects wide
+lines leaves them at 1 px). Through-mode lines do not need it: their quads are expanded in PSP
+pixels, and transform-mode `GL_LINES` get `glLineWidth` = scale for the same reason.
 
 ### Render targets and render-to-texture
 
