@@ -60,6 +60,7 @@ Key files:
 | `runtime/src/psp_ge_viewport.cpp` | PSP viewport/depth registers -> GL viewport/depth range |
 | `runtime/src/psp_ge_draw.cpp` | Per-address FBO pool, VBO upload, GL state mapping, draw, present |
 | `runtime/src/psp_ge_shader.cpp` | The single GLSL 330 shader pair |
+| `runtime/src/psp_gl_state.cpp` | GL state shadow (`include/psp_gl_shadow.h`, pure + unit-tested): skips tracked GL calls whose value did not change |
 | `runtime/src/psp_render_queue.cpp` | Cross-thread queue; the only path to GL |
 | `runtime/src/hle/psp_hle_ge.cpp` | `sceGe*` HLE entry points |
 | `runtime/src/hle/psp_hle_display.cpp` | `sceDisplay*` HLE entry points |

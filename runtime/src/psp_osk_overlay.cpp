@@ -221,9 +221,9 @@ void rect(int win_w, int win_h, float x, float y, float w, float h, const float 
 
 }  // namespace
 
-void psp_osk_overlay_draw(int win_w, int win_h, int rx, int ry, int rw, int rh) {
+bool psp_osk_overlay_draw(int win_w, int win_h, int rx, int ry, int rw, int rh) {
     const OskSession::View v = osk_session().view();
-    if (!v.active || win_w <= 0 || win_h <= 0 || rw <= 0 || rh <= 0) return;
+    if (!v.active || win_w <= 0 || win_h <= 0 || rw <= 0 || rh <= 0) return false;
     static TextTex title, text, counter, hint;
 
     // Game rectangle in top-left window coordinates (ry is GL bottom-left).
@@ -277,4 +277,5 @@ void psp_osk_overlay_draw(int win_w, int win_h, int rx, int ry, int rw, int rh) 
     glDisable(GL_BLEND);
     glBindVertexArray(0);
     glUseProgram(0);
+    return true;
 }

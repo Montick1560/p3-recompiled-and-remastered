@@ -1,6 +1,7 @@
 #include "psp_ge_shader.h"
 #include "psp_ge.h"
 #include "psp_ge_constants.h"
+#include "psp_gl_state.h"
 
 #include <glad/glad.h>
 #include <cstdio>
@@ -233,47 +234,48 @@ void ge_shader_shutdown() {
     if (g_program) {
         glDeleteProgram(g_program);
         g_program = 0;
+        gl_state_invalidate();  // the shadow may still point at the dead program
     }
 }
 
 void ge_shader_use() {
     if (g_program) {
-        glUseProgram(g_program);
+        gl_state_use_program(g_program);
     }
 }
 
 void ge_shader_set_uniforms(const GeState& state) {
     if (!g_program) return;
 
-    glUniform1i(g_uniforms.u_texture_enable,
-                state.texture_enable ? 1 : 0);
-    glUniform1i(g_uniforms.u_texture, 0);  // unit 0
-    glUniform1i(g_uniforms.u_tex_func,
-                static_cast<int>(state.tex_func));
-    glUniform1i(g_uniforms.u_tex_alpha, state.tex_alpha ? 1 : 0);
-    glUniform1i(g_uniforms.u_tex_double, state.tex_color_double ? 1 : 0);
-    glUniform3f(g_uniforms.u_tex_env,
-                (state.tex_env_color & 0xFF) / 255.0f,
-                ((state.tex_env_color >> 8) & 0xFF) / 255.0f,
-                ((state.tex_env_color >> 16) & 0xFF) / 255.0f);
+    gl_state_uniform1i(g_uniforms.u_texture_enable,
+                       state.texture_enable ? 1 : 0);
+    gl_state_uniform1i(g_uniforms.u_texture, 0);  // unit 0
+    gl_state_uniform1i(g_uniforms.u_tex_func,
+                       static_cast<int>(state.tex_func));
+    gl_state_uniform1i(g_uniforms.u_tex_alpha, state.tex_alpha ? 1 : 0);
+    gl_state_uniform1i(g_uniforms.u_tex_double, state.tex_color_double ? 1 : 0);
+    gl_state_uniform3f(g_uniforms.u_tex_env,
+                       (state.tex_env_color & 0xFF) / 255.0f,
+                       ((state.tex_env_color >> 8) & 0xFF) / 255.0f,
+                       ((state.tex_env_color >> 16) & 0xFF) / 255.0f);
 
     // Alpha test
-    glUniform1i(g_uniforms.u_alpha_test_enable,
-                state.alpha_test_enable ? 1 : 0);
+    gl_state_uniform1i(g_uniforms.u_alpha_test_enable,
+                       state.alpha_test_enable ? 1 : 0);
     if (state.alpha_test_enable) {
         int func = state.alpha_test & 0x7;
         int ref_byte = (state.alpha_test >> 8) & 0xFF;
         float ref = ref_byte / 255.0f;
-        glUniform1f(g_uniforms.u_alpha_test_ref, ref);
-        glUniform1i(g_uniforms.u_alpha_test_func, func);
+        gl_state_uniform1f(g_uniforms.u_alpha_test_ref, ref);
+        gl_state_uniform1i(g_uniforms.u_alpha_test_func, func);
     }
 }
 
 void ge_shader_set_blend(int src1_rgb, int src1_a, const float fix_a[3]) {
     if (!g_program) return;
-    glUniform1i(g_uniforms.u_src1_rgb, src1_rgb);
-    glUniform1i(g_uniforms.u_src1_a, src1_a);
-    glUniform3f(g_uniforms.u_fix_a, fix_a[0], fix_a[1], fix_a[2]);
+    gl_state_uniform1i(g_uniforms.u_src1_rgb, src1_rgb);
+    gl_state_uniform1i(g_uniforms.u_src1_a, src1_a);
+    gl_state_uniform3f(g_uniforms.u_fix_a, fix_a[0], fix_a[1], fix_a[2]);
 }
 
 GLuint ge_shader_get_program() {

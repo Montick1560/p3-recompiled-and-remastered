@@ -8,6 +8,7 @@
 #include "psp_ge_vertex.h"
 #include "psp_ge_texture.h"
 #include "psp_ge_shader.h"
+#include "psp_gl_state.h"
 #include "psp_event_loop.h"
 
 #include <SDL.h>
@@ -247,7 +248,7 @@ static GeTarget make_target(uint32_t key) {
     glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
 
     glGenTextures(1, &t.color_tex);
-    glBindTexture(GL_TEXTURE_2D, t.color_tex);
+    gl_state_bind_texture(t.color_tex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, fb_w(), fb_h(), 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -294,6 +295,7 @@ static int acquire_target(uint32_t key) {
             "[DRAW] FBO pool overflow: evicting key=0x%06X for key=0x%06X\n",
             g_targets[slot].key, key);
         glDeleteFramebuffers(1, &g_targets[slot].fbo);
+        gl_state_note_texture_deleted(g_targets[slot].color_tex);
         glDeleteTextures(1, &g_targets[slot].color_tex);
         glDeleteRenderbuffers(1, &g_targets[slot].depth_rb);
     }
@@ -394,6 +396,7 @@ void ge_draw_init() {
     glBindVertexArray(0);
 
     // Init shader
+    gl_state_reset();
     ge_shader_init();
 
     g_frame_counter = 0;
@@ -427,12 +430,16 @@ void ge_draw_shutdown() {
     for (int i = 0; i < GE_MAX_TARGETS; ++i) {
         GeTarget& t = g_targets[i];
         if (t.depth_rb) glDeleteRenderbuffers(1, &t.depth_rb);
-        if (t.color_tex) glDeleteTextures(1, &t.color_tex);
+        if (t.color_tex) {
+            gl_state_note_texture_deleted(t.color_tex);
+            glDeleteTextures(1, &t.color_tex);
+        }
         if (t.fbo) glDeleteFramebuffers(1, &t.fbo);
         t = GeTarget{};
     }
     g_current_target = -1;
     g_front_target = -1;
+    gl_state_reset();
 
     std::fprintf(stderr,
         "[DRAW] Draw infrastructure shutdown\n");
@@ -950,38 +957,34 @@ void ge_draw_prim(
     if (state.alpha_blend_enable) {
         GeBlendSetup b = ge_blend_setup(
             state.blend_mode, state.blend_fix_a, state.blend_fix_b);
-        glEnable(GL_BLEND);
-        glBlendFunc(b.src, b.dst);
-        glBlendEquation(b.equation);
+        gl_state_set_cap(GL_BLEND, true);
+        gl_state_blend_func(b.src, b.dst);
+        gl_state_blend_equation(b.equation);
         if (b.set_constant) {
-            glBlendColor(b.constant[0], b.constant[1], b.constant[2], 1.0f);
+            gl_state_blend_color(b.constant[0], b.constant[1], b.constant[2]);
         }
         ge_shader_set_blend(b.src1_rgb, b.src1_a, b.fix_a);
     } else {
-        glDisable(GL_BLEND);
+        gl_state_set_cap(GL_BLEND, false);
         const float zero[3] = {0.0f, 0.0f, 0.0f};
         ge_shader_set_blend(0, 0, zero);
     }
 
-    // Depth test
+    // Depth test (glDepthMask stays direct: the clear path also sets it)
+    gl_state_set_cap(GL_DEPTH_TEST, state.depth_test_enable);
     if (state.depth_test_enable) {
-        glEnable(GL_DEPTH_TEST);
-        glDepthFunc(map_depth_func(state.depth_func));
+        gl_state_depth_func(map_depth_func(state.depth_func));
         glDepthMask(
             state.depth_write_disable
             ? GL_FALSE : GL_TRUE);
-    } else {
-        glDisable(GL_DEPTH_TEST);
     }
 
     // Cull face
+    gl_state_set_cap(GL_CULL_FACE, state.cull_enable);
     if (state.cull_enable) {
-        glEnable(GL_CULL_FACE);
         glCullFace(
             state.cull_face == 0
             ? GL_BACK : GL_FRONT);
-    } else {
-        glDisable(GL_CULL_FACE);
     }
 
     // Draw
@@ -1036,7 +1039,11 @@ static void present_blit(GLuint fbo) {
     glBlitFramebuffer(0, 0, fb_w(), fb_h(), r.x, r.y, r.x + r.w, r.y + r.h,
                       GL_COLOR_BUFFER_BIT, present_filter());
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    psp_osk_overlay_draw(win_w, win_h, r.x, r.y, r.w, r.h);  // text box while the game asks for text
+    // The overlay uses its own program, textures and enables while active;
+    // drop the shadow so the next GE draw re-emits everything it needs.
+    if (psp_osk_overlay_draw(win_w, win_h, r.x, r.y, r.w, r.h)) {
+        gl_state_invalidate();
+    }
     SDL_GL_SwapWindow(window);
     g_present_dirty = false;
     g_last_present = std::chrono::steady_clock::now();

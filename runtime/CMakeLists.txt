@@ -149,6 +149,7 @@ set(RUNTIME_SOURCES
     src/psp_ge_texdecode.cpp
     src/psp_ge_shader.cpp
     src/psp_ge_draw.cpp
+    src/psp_gl_state.cpp
     src/psp_ge_viewport.cpp
     src/psp_texrep_hash.cpp
     src/psp_texrep.cpp
@@ -628,6 +629,13 @@ add_executable(test_ge_texcache tests/test_ge_texcache.cpp)
 target_include_directories(test_ge_texcache PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_ge_texcache PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME ge_texcache_tests COMMAND test_ge_texcache)
+
+# Header-only pure policy: shadow state of the render thread's GL calls
+# (psp_gl_state.cpp). No GL / SDL dependency.
+add_executable(test_gl_shadow tests/test_gl_shadow.cpp)
+target_include_directories(test_gl_shadow PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_gl_shadow PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME gl_shadow_tests COMMAND test_gl_shadow)
 
 add_executable(test_wheel tests/test_wheel.cpp src/psp_wheel.cpp)
 target_include_directories(test_wheel PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

@@ -1,5 +1,6 @@
 #include "psp_ge_texture.h"
 #include "psp_ge_texcache.h"
+#include "psp_gl_state.h"
 #include "psp_perf.h"
 #include "psp_ge.h"
 #include "psp_ge_sampler.h"
@@ -47,6 +48,7 @@ static uint32_t fnv1a_hash(
 static void evict_slot(int slot) {
     TexCacheEntry& e = g_tex_cache[slot];
     if (e.gl_tex != 0) {
+        gl_state_note_texture_deleted(e.gl_tex);
         glDeleteTextures(1, &e.gl_tex);
         e.gl_tex = 0;
     }
@@ -72,26 +74,27 @@ static int find_or_evict(
 
 /// Set the GL_TEXTURE_2D sampler from the draw's TEXFILTER / TEXWRAP. The same
 /// cached texture can be drawn with different registers, so this runs on every
-/// bind. PSPRECOMP_TEX_FILTER=nearest|linear overrides the filter bits; wrap is
-/// always taken from the registers.
-static void apply_sampler(const GeState& state, int forced_filter) {
+/// bind; the shadow skips it while the same texture keeps the same values.
+/// PSPRECOMP_TEX_FILTER=nearest|linear overrides the filter bits; wrap is
+/// always taken from the registers. Returns true when the parameters were
+/// emitted (the caller's bind/work accounting).
+static bool apply_sampler(const GeState& state, int forced_filter) {
     static const GeFilterOverride ov = ge_filter_override_parse(
         std::getenv("PSPRECOMP_TEX_FILTER"));
     const GeSampler s =
         ge_sampler_from_regs(state.tex_filter, state.tex_wrap, ov);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
-                    s.min_linear ? GL_LINEAR : GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
-                    s.mag_linear ? GL_LINEAR : GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,
-                    s.clamp_s ? GL_CLAMP_TO_EDGE : GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,
-                    s.clamp_t ? GL_CLAMP_TO_EDGE : GL_REPEAT);
+    GlShadow::Sampler sm;
     if (forced_filter != 0) {  // texture pack [filtering]: 1 nearest, 2 linear
         const GLint f = forced_filter == 1 ? GL_NEAREST : GL_LINEAR;
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, f);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, f);
+        sm.min = static_cast<uint32_t>(f);
+        sm.mag = static_cast<uint32_t>(f);
+    } else {
+        sm.min = s.min_linear ? GL_LINEAR : GL_NEAREST;
+        sm.mag = s.mag_linear ? GL_LINEAR : GL_NEAREST;
     }
+    sm.wrap_s = s.clamp_s ? GL_CLAMP_TO_EDGE : GL_REPEAT;
+    sm.wrap_t = s.clamp_t ? GL_CLAMP_TO_EDGE : GL_REPEAT;
+    return gl_state_apply_sampler(sm);
 }
 
 // ---- Public API ----
@@ -118,6 +121,7 @@ void ge_texture_shutdown() {
     }
     g_gl_lru.clear();
     g_tex_initialized = false;
+    gl_state_invalidate();
     std::fprintf(stderr, "[TEX] Texture cache shutdown\n");
 }
 
@@ -133,6 +137,7 @@ void ge_texture_invalidate_all() {
         e.valid = false;
     }
     g_gl_lru.clear();
+    gl_state_invalidate();
 }
 
 GLuint ge_texture_bind(
@@ -143,7 +148,7 @@ GLuint ge_texture_bind(
     const GeState& state = ge_get_state();
 
     if (!state.texture_enable) {
-        glBindTexture(GL_TEXTURE_2D, 0);
+        gl_state_bind_texture(0);
         return 0;
     }
 
@@ -183,7 +188,7 @@ GLuint ge_texture_bind(
     // its first bytes or a palette fade must re-decode.
     const uint32_t span = ge_tex_byte_span(params);
     if (masked_addr + span > static_cast<uint32_t>(PSP_MEM_SIZE)) {
-        glBindTexture(GL_TEXTURE_2D, 0);
+        gl_state_bind_texture(0);
         return 0;
     }
     // PSPRECOMP_TEX_WATCH=<hex addr>: log the draw state of the first binds of
@@ -202,7 +207,6 @@ GLuint ge_texture_bind(
                      state.alpha_test_enable ? 1 : 0, state.alpha_test, state.vertex_type,
                      state.clear_mode ? 1 : 0);
     }
-    if (perf_enabled()) g_perf.tex_binds.fetch_add(1, std::memory_order_relaxed);
     const uint32_t param_words[6] = {
         static_cast<uint32_t>(params.bufw), static_cast<uint32_t>(fmt),
         params.swizzle ? 1u : 0u, state.clut_format, params.clut_addr,
@@ -237,7 +241,7 @@ GLuint ge_texture_bind(
         // Cache hit
         entry.last_frame = frame_num;
         g_gl_lru.touch(slot);
-        glBindTexture(GL_TEXTURE_2D, entry.gl_tex);
+        const bool bound = gl_state_bind_texture(entry.gl_tex);
         if (entry.replace_pending && ge_texrep_epoch() != entry.replace_epoch) {
             // A pack image finished decoding since the last try: retry.
             entry.replace_epoch = ge_texrep_epoch();
@@ -255,7 +259,12 @@ GLuint ge_texture_bind(
             }
             entry.replace_pending = r == GeTexrepResult::Pending;
         }
-        apply_sampler(state, entry.forced_filter);
+        const bool sampled = apply_sampler(state, entry.forced_filter);
+        // Perf: count the binds that reached the driver (the shadow skips
+        // repeats), not the GE's bind requests.
+        if (perf_enabled() && (bound || sampled)) {
+            g_perf.tex_binds.fetch_add(1, std::memory_order_relaxed);
+        }
         return entry.gl_tex;
     }
 
@@ -275,7 +284,7 @@ GLuint ge_texture_bind(
     if (entry.gl_tex == 0) {
         glGenTextures(1, &entry.gl_tex);
     }
-    glBindTexture(GL_TEXTURE_2D, entry.gl_tex);
+    const bool bound = gl_state_bind_texture(entry.gl_tex);
     if (replaced) {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, rep.w, rep.h, 0,
                      GL_RGBA, GL_UNSIGNED_BYTE, rep.rgba);
@@ -297,7 +306,7 @@ GLuint ge_texture_bind(
             rgba.data());
     }
     entry.forced_filter = replaced ? static_cast<int>(rep.filter) : 0;
-    apply_sampler(state, entry.forced_filter);
+    const bool sampled = apply_sampler(state, entry.forced_filter);
 
     // Store entry
     entry.psp_addr = psp_addr;
@@ -317,5 +326,8 @@ GLuint ge_texture_bind(
     g_gl_lru.put(slot, tex_bytes);
     for (int victim : g_gl_lru.trim({slot})) evict_slot(victim);
 
+    if (perf_enabled() && (bound || sampled)) {
+        g_perf.tex_binds.fetch_add(1, std::memory_order_relaxed);
+    }
     return entry.gl_tex;
 }
