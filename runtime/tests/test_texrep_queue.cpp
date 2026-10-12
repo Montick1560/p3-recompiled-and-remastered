@@ -69,6 +69,23 @@ static void lru_budget() {
     q.wait_idle();
 }
 
+static void release_frees_and_redecodes() {
+    g_calls = 0;
+    TexrepImageQueue q(fake_decode, 1u << 20);
+    const TexrepImage* img = nullptr;
+    q.request("abcd", &img);
+    q.wait_idle();
+    CHECK(q.request("abcd", &img) == TexrepImageQueue::State::Ready, "ready before release");
+    q.release("abcd");  // uploaded to GL: the CPU buffer is dropped
+    CHECK(q.request("abcd", &img) == TexrepImageQueue::State::Pending, "released file decodes again");
+    CHECK(img == nullptr, "no image while re-decoding");
+    q.wait_idle();
+    CHECK(q.request("abcd", &img) == TexrepImageQueue::State::Ready, "ready again after re-decode");
+    CHECK(g_calls == 2, "decoded once per release cycle");
+    q.release("absent.png");  // absent key: no-op
+    q.release("abcd");
+}
+
 static void destructor_with_work_pending() {
     TexrepImageQueue q(fake_decode, 1u << 20);
     const TexrepImage* img = nullptr;
@@ -80,6 +97,7 @@ int main() {
     pending_then_ready();
     failure_is_sticky();
     lru_budget();
+    release_frees_and_redecodes();
     destructor_with_work_pending();
     if (failures == 0) std::printf("test_texrep_queue: all passed\n");
     return failures == 0 ? 0 : 1;

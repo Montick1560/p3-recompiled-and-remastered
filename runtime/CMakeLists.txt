@@ -585,6 +585,12 @@ target_compile_options(test_texrep_queue PRIVATE -O2 -Wall -Wextra -Wno-unused-p
 target_link_libraries(test_texrep_queue PRIVATE pthread)
 add_test(NAME texrep_queue_tests COMMAND test_texrep_queue)
 
+# Header-only pure class (test_refer_info convention: no extra sources).
+add_executable(test_texrep_lru tests/test_texrep_lru.cpp)
+target_include_directories(test_texrep_lru PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_texrep_lru PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME texrep_lru_tests COMMAND test_texrep_lru)
+
 add_executable(test_pad tests/test_pad.cpp src/psp_pad.cpp)
 target_include_directories(test_pad PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${SDL2_INCLUDE_DIRS})
 target_compile_options(test_pad PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)

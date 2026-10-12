@@ -351,7 +351,10 @@ Patapon 3 HD pack). The key must match PPSSPP bit for bit; the contract is in
   `[hashranges]`, `[reducehashranges]`, and PPSSPP's `LookupWildcard` order (`ignoreAddress`
   zeroes the address half first).
 - `psp_texrep` (render thread): env, pack loading, the CLUT snapshot taken at `LOADCLUT`, and a
-  `TexrepImageQueue` that decodes PNGs (stb_image) on one worker thread into a 256 MiB LRU cache.
+  `TexrepImageQueue` that decodes PNGs (stb_image) on one worker thread. Decoded images and
+  uploaded GL textures are each LRU-capped by `TexrepLru` (pure, tested) under
+  `PSPRECOMP_TEXTURES_BUDGET_MB` (default 256 MiB); an uploaded PNG buffer is dropped right away
+  and re-decoded from disk if the GL texture for it is ever evicted.
 
 `ge_texture_bind` asks for a replacement only on a texture-cache miss (`draw_max_v`, the largest V
 of the current through-mode draw, feeds `maxSeenV`). A ready image is uploaded at its own size

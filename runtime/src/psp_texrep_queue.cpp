@@ -1,7 +1,7 @@
 #include "psp_texrep_queue.h"
 
 TexrepImageQueue::TexrepImageQueue(DecodeFn decode, size_t budget_bytes)
-    : decode_(std::move(decode)), budget_(budget_bytes), thread_([this] { worker(); }) {}
+    : decode_(std::move(decode)), lru_(budget_bytes), thread_([this] { worker(); }) {}
 
 TexrepImageQueue::~TexrepImageQueue() {
     {
@@ -18,18 +18,26 @@ TexrepImageQueue::State TexrepImageQueue::request(const std::string& path, const
     std::lock_guard<std::mutex> lk(mu_);
     auto it = entries_.find(path);
     if (it == entries_.end()) {
-        entries_[path].last_use = ++clock_;
+        entries_[path];
         queue_.push_back(path);
         cv_.notify_one();
         return State::Pending;
     }
     Entry& e = it->second;
-    e.last_use = ++clock_;
     if (e.state == State::Ready) {
+        lru_.touch(path);
         evict_locked(path);
         *out = e.image.get();
     }
     return e.state;
+}
+
+void TexrepImageQueue::release(const std::string& path) {
+    std::lock_guard<std::mutex> lk(mu_);
+    auto it = entries_.find(path);
+    if (it == entries_.end() || it->second.state != State::Ready) return;
+    lru_.remove(path);
+    entries_.erase(it);
 }
 
 uint64_t TexrepImageQueue::ready_epoch() const {
@@ -43,14 +51,7 @@ void TexrepImageQueue::wait_idle() {
 }
 
 void TexrepImageQueue::evict_locked(const std::string& keep) {
-    while (bytes_ > budget_) {
-        auto victim = entries_.end();
-        for (auto j = entries_.begin(); j != entries_.end(); ++j) {
-            if (j->first == keep || j->second.state != State::Ready) continue;
-            if (victim == entries_.end() || j->second.last_use < victim->second.last_use) victim = j;
-        }
-        if (victim == entries_.end()) return;
-        bytes_ -= victim->second.image->rgba.size();
+    for (const std::string& victim : lru_.trim({keep})) {
         entries_.erase(victim);  // a later request decodes it again
     }
 }
@@ -74,7 +75,10 @@ void TexrepImageQueue::worker() {
             auto it = entries_.find(path);
             if (it != entries_.end()) {
                 if (ok) {
-                    bytes_ += img->rgba.size();
+                    // Insert only: the render thread trims the budget, so an
+                    // image handed out by request() stays valid until its next
+                    // call on the render thread.
+                    lru_.put(path, img->rgba.size());
                     it->second.image = std::move(img);
                     it->second.state = State::Ready;
                 } else {

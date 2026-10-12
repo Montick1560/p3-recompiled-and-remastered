@@ -27,9 +27,10 @@ std::string g_dir;
 std::unordered_set<std::string> g_logged;  // DUMP: keys already printed
 
 // Pack images decode on a worker thread (TexrepImageQueue); created only when
-// a pack is loaded. 256 MiB LRU byte budget.
+// a pack is loaded. Byte budget for replacement texture memory, shared by the
+// decoded-PNG cache and the GL texture cache (PSPRECOMP_TEXTURES_BUDGET_MB).
+size_t g_budget_bytes = 256u << 20;
 std::unique_ptr<TexrepImageQueue> g_images;
-constexpr size_t kImageBudget = 256u << 20;
 
 bool decode_file(const std::string& rel, int* w, int* h, std::vector<uint8_t>* rgba) {
     const auto t0 = std::chrono::steady_clock::now();
@@ -59,6 +60,11 @@ const GeClutSnapshot& ge_texrep_clut() { return g_clut; }
 void ge_texrep_init() {
     g_enabled = false;
     g_logged.clear();
+    g_budget_bytes = 256u << 20;  // MiB unless PSPRECOMP_TEXTURES_BUDGET_MB says otherwise
+    if (const char* mb = std::getenv("PSPRECOMP_TEXTURES_BUDGET_MB")) {
+        const long v = std::strtol(mb, nullptr, 10);
+        if (v > 0) g_budget_bytes = static_cast<size_t>(v) << 20;
+    }
     const char* dir = std::getenv("PSPRECOMP_TEXTURES");
     if (!dir || !dir[0]) return;
     const char* dump = std::getenv("PSPRECOMP_TEXTURES_DUMP");
@@ -84,11 +90,15 @@ void ge_texrep_init() {
         return;
     }
     g_enabled = true;
-    g_images = std::make_unique<TexrepImageQueue>(decode_file, kImageBudget);
-    std::fprintf(stderr, "[TEXREP] pack %s: %zu textures, hash=%s ignoreAddress=%d reduceHash=%d\n",
+    g_images = std::make_unique<TexrepImageQueue>(decode_file, g_budget_bytes);
+    std::fprintf(stderr, "[TEXREP] pack %s: %zu textures, hash=%s ignoreAddress=%d reduceHash=%d "
+                 "budget=%zu MB\n",
                  g_dir.c_str(), g_pack.alias_count(), g_pack.xxh32() ? "xxh32" : "xxh64",
-                 g_pack.ignore_address() ? 1 : 0, g_pack.reduce_hash() ? 1 : 0);
+                 g_pack.ignore_address() ? 1 : 0, g_pack.reduce_hash() ? 1 : 0,
+                 g_budget_bytes >> 20);
 }
+
+size_t ge_texrep_budget_bytes() { return g_budget_bytes; }
 
 bool ge_texrep_enabled() { return g_enabled; }
 
@@ -146,7 +156,12 @@ GeTexrepResult ge_texrep_replacement(const uint8_t* rdram, const GeState& s, uin
     out->h = img->h;
     out->rgba = img->rgba.data();
     out->filter = g_pack.filter(key);
+    out->path = f.path;
     return GeTexrepResult::Ready;
+}
+
+void ge_texrep_image_uploaded(const GeTexrepImage& img) {
+    if (g_images && !img.path.empty()) g_images->release(img.path);
 }
 
 uint64_t ge_texrep_epoch() { return g_images ? g_images->ready_epoch() : 0; }

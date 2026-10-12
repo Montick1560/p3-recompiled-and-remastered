@@ -7,6 +7,7 @@
 #include "psp_ge_constants.h"
 #include "psp_memory.h"
 #include "psp_texrep.h"
+#include "psp_texrep_lru.h"
 #include "recomp.h"
 
 #include <glad/glad.h>
@@ -21,6 +22,9 @@
 static std::array<TexCacheEntry, TEX_CACHE_SIZE> g_tex_cache;
 static bool g_tex_initialized = false;
 static TexHashMemo g_hash_memo;  // per-list content-hash memo (psp_ge_texmemo.h)
+// Byte budget for uploaded GL textures, shared value with the PNG cache
+// (PSPRECOMP_TEXTURES_BUDGET_MB). Render-thread only: eviction does GL deletes.
+static TexrepLru<int> g_gl_lru(256u << 20);
 
 // ---- FNV-1a hash ----
 
@@ -36,6 +40,18 @@ static uint32_t fnv1a_hash(
 }
 
 // ---- Cache operations ----
+
+/// Delete the GL texture of `slot` and drop its byte accounting (LRU victim).
+/// Render thread only.
+static void evict_slot(int slot) {
+    TexCacheEntry& e = g_tex_cache[slot];
+    if (e.gl_tex != 0) {
+        glDeleteTextures(1, &e.gl_tex);
+        e.gl_tex = 0;
+    }
+    e.valid = false;
+    g_gl_lru.remove(slot);
+}
 
 /// Find cache entry matching (addr, hash) or evict LRU.
 static int find_or_evict(
@@ -61,12 +77,7 @@ static int find_or_evict(
     }
 
     // Evict oldest
-    auto& evict = g_tex_cache[best_slot];
-    if (evict.gl_tex != 0) {
-        glDeleteTextures(1, &evict.gl_tex);
-        evict.gl_tex = 0;
-    }
-    evict.valid = false;
+    evict_slot(best_slot);
     return best_slot;
 }
 
@@ -106,6 +117,7 @@ void ge_texture_init() {
     std::fprintf(stderr, "[TEX] Texture cache initialized "
                          "(%d entries)\n", TEX_CACHE_SIZE);
     ge_texrep_init();
+    g_gl_lru.set_budget(ge_texrep_budget_bytes());
 }
 
 void ge_texture_shutdown() {
@@ -116,6 +128,7 @@ void ge_texture_shutdown() {
         }
         e.valid = false;
     }
+    g_gl_lru.clear();
     g_tex_initialized = false;
     std::fprintf(stderr, "[TEX] Texture cache shutdown\n");
 }
@@ -131,6 +144,7 @@ void ge_texture_invalidate_all() {
         }
         e.valid = false;
     }
+    g_gl_lru.clear();
 }
 
 GLuint ge_texture_bind(
@@ -234,6 +248,7 @@ GLuint ge_texture_bind(
         && entry.content_hash == content_hash) {
         // Cache hit
         entry.last_frame = frame_num;
+        g_gl_lru.touch(slot);
         glBindTexture(GL_TEXTURE_2D, entry.gl_tex);
         if (entry.replace_pending && ge_texrep_epoch() != entry.replace_epoch) {
             // A pack image finished decoding since the last try: retry.
@@ -244,6 +259,11 @@ GLuint ge_texture_bind(
                 glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, rep.w, rep.h, 0,
                              GL_RGBA, GL_UNSIGNED_BYTE, rep.rgba);
                 entry.forced_filter = static_cast<int>(rep.filter);
+                ge_texrep_image_uploaded(rep);
+                // The replacement changed the texture size: re-account and
+                // evict other textures if the budget is now over.
+                g_gl_lru.put(slot, static_cast<size_t>(rep.w) * rep.h * 4);
+                for (int victim : g_gl_lru.trim({slot})) evict_slot(victim);
             }
             entry.replace_pending = r == GeTexrepResult::Pending;
         }
@@ -271,6 +291,7 @@ GLuint ge_texture_bind(
     if (replaced) {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, rep.w, rep.h, 0,
                      GL_RGBA, GL_UNSIGNED_BYTE, rep.rgba);
+        ge_texrep_image_uploaded(rep);
     } else {
         std::vector<uint8_t> rgba;
         if (!ge_decode_texture(rdram, params, rgba)) {
@@ -298,6 +319,15 @@ GLuint ge_texture_bind(
     entry.format = fmt;
     entry.last_frame = frame_num;
     entry.valid = true;
+
+    // Account the uploaded RGBA8 and evict least-recently-used textures while
+    // over budget (this slot is in use right now, so it is kept).
+    g_gl_lru.remove(slot);
+    const size_t tex_bytes = (replaced
+        ? static_cast<size_t>(rep.w) * rep.h
+        : static_cast<size_t>(width) * height) * 4;
+    g_gl_lru.put(slot, tex_bytes);
+    for (int victim : g_gl_lru.trim({slot})) evict_slot(victim);
 
     return entry.gl_tex;
 }

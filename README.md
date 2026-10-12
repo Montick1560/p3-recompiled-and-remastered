@@ -233,7 +233,8 @@ Alt+Enter toggles fullscreen. The image keeps the PSP aspect ratio and is scaled
 default 1) renders internally at N× 480x272 (4 = 1920x1088) for a sharper image in large
 windows and fullscreen. `PSPRECOMP_TEXTURES=<dir>` loads a PPSSPP-format texture-replacement
 pack (`textures.ini` + PNGs, `xxh64`/`xxh32` hashes) from that folder; packs are not part of
-this repository.
+this repository. `PSPRECOMP_TEXTURES_BUDGET_MB=<mb>` caps the replacement texture memory
+(decoded images and GL textures, default 256; least recently used freed first).
 
 Input: keyboard (arrows = D-pad, X/Enter = CROSS, Z = CIRCLE, A = SQUARE, S = TRIANGLE,
 Q/W = L/R, Space = START, V or Tab = SELECT; mouse wheel = D-pad up/down, one press per notch) and any SDL game controller (XInput-style layout,

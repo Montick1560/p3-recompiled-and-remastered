@@ -161,6 +161,18 @@ Read by the runtime binary at start-up or during execution.
 - **Set it when:** comparing against old nearest-only screenshots or PPSSPP's
   forced filter modes.
 
+### `PSPRECOMP_TEXTURES_BUDGET_MB`
+- **Read in:** `runtime/src/psp_texrep.cpp` (`ge_texrep_init`).
+- **Type:** env (integer, megabytes).
+- **Default:** `256`.
+- **Effect:** byte budget for replacement texture memory with
+  `PSPRECOMP_TEXTURES`: the decoded-PNG cache and the uploaded HD GL textures
+  are each LRU-capped to it (least recently used freed first). An uploaded PNG
+  buffer is dropped immediately (re-decoded from disk if its GL texture is
+  evicted). Values <= 0 are ignored. There is no effect without a pack.
+- **Set it when:** running several packed instances on one machine (RAM) or
+  testing eviction behaviour.
+
 ### `PSPRECOMP_WINDOW_SCALE`
 - **Read in:** `runtime/src/psp_event_loop.cpp` (`psp_runtime_init_sdl`).
 - **Type:** env (integer 1..8).
