@@ -330,7 +330,9 @@ swizzle, width×height) and, for CLUT formats, the first 1024 palette bytes. On 
 2. Exact (addr, hash) match → bind cached GL texture, refresh its `last_frame`.
 3. Otherwise an empty slot is used, or the least-recently-used entry (smallest `last_frame`) is
    evicted and its GL texture deleted; the texture is then decoded and uploaded with
-   `glTexImage2D(GL_RGBA8, ...)`.
+   `glTexImage2D(GL_RGBA8, ...)`. The slot pick is pure policy
+   (`runtime/include/psp_ge_texcache.h`, unit-tested): an exact (addr, hash) match wins over a
+   vacancy left by an earlier eviction, and a vacancy wins over a new eviction.
 
 The content-hash memo (`TexHashMemo`, `runtime/include/psp_ge_texmemo.h`) stores the last hash
 of each (addr, params) with the display list at which guest memory must be re-read. A texture
