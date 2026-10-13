@@ -27,6 +27,16 @@ static TexHashMemo g_hash_memo;  // content-hash memo w/ backoff (psp_ge_texmemo
 // Byte budget for uploaded GL textures, shared value with the PNG cache
 // (PSPRECOMP_TEXTURES_BUDGET_MB). Render-thread only: eviction does GL deletes.
 static TexrepLru<int> g_gl_lru(256u << 20);
+// A texture bound within this many display lists counts as **in use**: the
+// budget spares it even while over, because evicting a live texture makes the
+// pack path re-decode its PNG (the original is drawn until the worker
+// finishes) — the HD flicker the hard LRU produced when the pack's working
+// set exceeds the budget (measured: mission 1 decodes ~957 MB of 4096x4096
+// atlases against the 256 MB budget; the hard LRU churned ~50 re-decodes/s).
+// 0 disables the protection (pure LRU); PSPRECOMP_TEX_HOT_FRAMES overrides
+// the default 300 (10 s at 30 fps; frame_num counts display lists, one per
+// frame in practice).
+static uint32_t g_tex_hot_frames = 300;
 
 // ---- FNV-1a hash ----
 
@@ -54,6 +64,17 @@ static void evict_slot(int slot) {
     }
     e.valid = false;
     g_gl_lru.remove(slot);
+}
+
+/// Trim the GL texture budget, sparing `keep_slot` (in use right now) and any
+/// texture bound within the last g_tex_hot_frames display lists (see above).
+/// Render thread only.
+static void trim_gl_budget(uint32_t frame_num, int keep_slot) {
+    auto cold = [frame_num](int slot) {
+        return g_tex_hot_frames == 0
+            || frame_num - g_tex_cache[slot].last_frame > g_tex_hot_frames;
+    };
+    for (int victim : g_gl_lru.trim_if({keep_slot}, cold)) evict_slot(victim);
 }
 
 /// Find cache entry matching (addr, hash) or evict LRU. Evictions leave vacant
@@ -115,6 +136,14 @@ void ge_texture_init() {
     }
     g_tex_initialized = true;
     g_hash_memo = TexHashMemo(tex_hash_backoff_window());
+    // PSPRECOMP_TEX_HOT_FRAMES=<lists>: "in use" window of the GL budget
+    // trim. 0 = pure LRU. A value with no digits keeps the default.
+    g_tex_hot_frames = 300;
+    if (const char* e = std::getenv("PSPRECOMP_TEX_HOT_FRAMES")) {
+        char* end = nullptr;
+        const unsigned long v = std::strtoul(e, &end, 10);
+        if (end != e) g_tex_hot_frames = static_cast<uint32_t>(v > 100000ul ? 100000ul : v);
+    }
     std::fprintf(stderr, "[TEX] Texture cache initialized "
                          "(%d entries)\n", TEX_CACHE_SIZE);
     ge_texrep_init();
@@ -270,7 +299,7 @@ GLuint ge_texture_bind(
                 // The replacement changed the texture size: re-account and
                 // evict other textures if the budget is now over.
                 g_gl_lru.put(slot, static_cast<size_t>(rep.w) * rep.h * 4);
-                for (int victim : g_gl_lru.trim({slot})) evict_slot(victim);
+                trim_gl_budget(frame_num, slot);
             }
             entry.replace_pending = r == GeTexrepResult::Pending;
         }
@@ -332,14 +361,14 @@ GLuint ge_texture_bind(
     entry.last_frame = frame_num;
     entry.valid = true;
 
-    // Account the uploaded RGBA8 and evict least-recently-used textures while
-    // over budget (this slot is in use right now, so it is kept).
+    // Account the uploaded RGBA8 and evict least-recently-used cold textures
+    // while over budget (this slot is in use right now, so it is kept).
     g_gl_lru.remove(slot);
     const size_t tex_bytes = (replaced
         ? static_cast<size_t>(rep.w) * rep.h
         : static_cast<size_t>(width) * height) * 4;
     g_gl_lru.put(slot, tex_bytes);
-    for (int victim : g_gl_lru.trim({slot})) evict_slot(victim);
+    trim_gl_budget(frame_num, slot);
 
     if (perf_enabled() && (bound || sampled)) {
         g_perf.tex_binds.fetch_add(1, std::memory_order_relaxed);

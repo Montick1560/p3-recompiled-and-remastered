@@ -366,7 +366,13 @@ Patapon 3 HD pack). The key must match PPSSPP bit for bit; the contract is in
   `TexrepImageQueue` that decodes PNGs (stb_image) on one worker thread. Decoded images and
   uploaded GL textures are each LRU-capped by `TexrepLru` (pure, tested) under
   `PSPRECOMP_TEXTURES_BUDGET_MB` (default 256 MiB); an uploaded PNG buffer is dropped right away
-  and re-decoded from disk if the GL texture for it is ever evicted.
+  and re-decoded from disk if the GL texture for it is ever evicted. The GL trim spares
+  **hot** textures — anything bound within `PSPRECOMP_TEX_HOT_FRAMES` display lists (default
+  300) stays resident even while over budget — because the pack's working set can exceed the
+  budget by far (missions decode ~1 GB of 4096x4096 atlases) and evicting a live texture forces
+  a PNG re-decode on its next bind, flashing the original: a hard LRU below the working set
+  churned ~50 re-decodes/s (HD flicker). The budget therefore bounds *cold* data; the trim
+  falls back to pure LRU with `PSPRECOMP_TEX_HOT_FRAMES=0`.
 
 `ge_texture_bind` asks for a replacement only on a texture-cache miss (`draw_max_v`, the largest V
 of the current through-mode draw, feeds `maxSeenV`). A ready image is uploaded at its own size

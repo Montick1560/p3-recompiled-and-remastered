@@ -54,6 +54,15 @@ public:
     /// recently used entry (a single oversized entry stays instead of thrashing).
     /// Returns the evicted keys, least recently used first.
     std::vector<Key> trim(std::initializer_list<Key> keep = {}) {
+        return trim_if(keep, [](const Key&) { return true; });
+    }
+
+    /// trim() that only considers entries `eligible(key)` accepts. The caller
+    /// uses it to spare entries still in use: when no eligible victim remains,
+    /// the budget is exceeded on purpose (bytes() > budget() is allowed) —
+    /// evicting a live entry would make the caller reload it immediately.
+    template <typename Pred>
+    std::vector<Key> trim_if(std::initializer_list<Key> keep, Pred eligible) {
         std::vector<Key> evicted;
         while (bytes_ > budget_) {
             uint64_t newest = 0;
@@ -64,6 +73,7 @@ public:
             auto victim = entries_.end();
             for (auto it = entries_.begin(); it != entries_.end(); ++it) {
                 if (is_kept(it->first, keep)) continue;
+                if (!eligible(it->first)) continue;
                 if (it->second.clock == newest) continue;
                 if (victim == entries_.end() || it->second.clock < victim->second.clock) {
                     victim = it;

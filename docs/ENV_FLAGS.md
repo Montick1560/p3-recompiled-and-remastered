@@ -204,13 +204,31 @@ Read by the runtime binary at start-up or during execution.
 - **Default:** `256`.
 - **Effect:** byte budget for replacement texture memory with
   `PSPRECOMP_TEXTURES`: the decoded-PNG cache and the uploaded HD GL textures
-  are each LRU-capped to it (least recently used freed first). An uploaded PNG
-  buffer is dropped immediately (re-decoded from disk if its GL texture is
-  evicted). Values <= 0 are ignored. The renderer's GL texture cache is
-  budgeted by it as well, so even without a pack a very small value evicts
-  original textures (re-decoded on demand).
+  are each LRU-capped to it (least recently used freed first). The GL trim
+  only considers *cold* textures, so the budget is a target rather than a
+  hard cap when the scene's working set is larger (see
+  `PSPRECOMP_TEX_HOT_FRAMES`). An uploaded PNG buffer is dropped immediately
+  (re-decoded from disk if its GL texture is evicted). Values <= 0 are
+  ignored. The renderer's GL texture cache is budgeted by it as well, so even
+  without a pack a very small value evicts original textures (re-decoded on
+  demand).
 - **Set it when:** running several packed instances on one machine (RAM) or
   testing eviction behaviour.
+
+### `PSPRECOMP_TEX_HOT_FRAMES`
+- **Read in:** `runtime/src/psp_ge_texture.cpp` (`ge_texture_init`).
+- **Type:** env (integer, display lists — one per frame in practice).
+- **Default:** `300`.
+- **Effect:** "in use" window of the GL texture budget trim: a texture bound
+  within this many lists is never evicted, even while the budget is exceeded.
+  Needed because the HD pack's working set can dwarf the budget (missions
+  decode ~1 GB of 4096x4096 atlases): a hard LRU below it evicted textures
+  in use, and each eviction re-decoded the pack PNG while the original was
+  drawn — sustained HD flicker (measured ~50 re-decodes/s). `0` = pure LRU
+  (the old behaviour); values above 100000 clamp; a value with no digits
+  leaves the default.
+- **Set it when:** forcing the budget hard at the price of flicker (`0`), or
+  tuning how long a texture is considered live.
 
 ### `PSPRECOMP_WINDOW_SCALE`
 - **Read in:** `runtime/src/psp_event_loop.cpp` (`psp_runtime_init_sdl`).

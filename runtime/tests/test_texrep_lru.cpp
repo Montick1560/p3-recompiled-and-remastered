@@ -75,6 +75,56 @@ static void set_budget_enforced_on_next_trim() {
     CHECK(lru.bytes() <= 40, "bytes fit the new budget");
 }
 
+static void trim_if_skips_ineligible_lru() {
+    TexrepLru<std::string> lru(100);
+    lru.put("a", 40);
+    lru.put("b", 40);
+    lru.touch("a");          // b is the least recently used
+    lru.put("c", 40);        // bytes 120 > 100
+    // The usual victim (b) is ineligible: the next LRU entry (a) goes instead.
+    const std::vector<std::string> evicted =
+        lru.trim_if({}, [](const std::string& k) { return k != "b"; });
+    CHECK(evicted.size() == 1 && evicted[0] == "a", "skips the ineligible LRU entry");
+    CHECK(lru.contains("b") && lru.contains("c") && !lru.contains("a"), "ineligible entry survives");
+}
+
+static void trim_if_all_ineligible_evicts_nothing() {
+    TexrepLru<std::string> lru(100);
+    lru.put("a", 60);
+    lru.put("b", 60);
+    const std::vector<std::string> evicted =
+        lru.trim_if({}, [](const std::string&) { return false; });
+    CHECK(evicted.empty(), "all ineligible: nothing is evicted");
+    CHECK(lru.bytes() == 120 && lru.count() == 2, "over budget with live entries: bytes and count stay");
+}
+
+static void trim_if_evicts_eligible_in_lru_order() {
+    TexrepLru<std::string> lru(60);
+    lru.put("a", 30);
+    lru.put("b", 30);
+    lru.put("c", 30);
+    lru.put("d", 30);        // bytes 120
+    // a is ineligible; among eligible b < c < d, the budget needs b and c.
+    const std::vector<std::string> evicted =
+        lru.trim_if({}, [](const std::string& k) { return k != "a"; });
+    CHECK(evicted.size() == 2 && evicted[0] == "b" && evicted[1] == "c",
+          "eligible entries are evicted least-recently-used first");
+    CHECK(lru.contains("a") && lru.contains("d"), "ineligible and newest entries stay");
+    CHECK(lru.bytes() == 60, "bytes reach the budget");
+}
+
+static void trim_if_keep_still_wins() {
+    TexrepLru<std::string> lru(40);
+    lru.put("a", 30);        // eligible but kept
+    lru.put("b", 30);        // the only real candidate (oldest unkept, eligible)
+    lru.put("c", 30);        // ineligible and newest: never a victim
+    const std::vector<std::string> evicted =
+        lru.trim_if({"a"}, [](const std::string& k) { return k != "c"; });
+    CHECK(evicted.size() == 1 && evicted[0] == "b", "keep list protects a though it is eligible");
+    CHECK(lru.contains("a") && lru.contains("c"), "kept and ineligible entries survive");
+    CHECK(lru.bytes() == 60, "budget stays exceeded when only protected entries remain");
+}
+
 static void clear_resets() {
     TexrepLru<std::string> lru(100);
     lru.put("a", 40);
@@ -91,6 +141,10 @@ int main() {
     remove_accounts();
     oversized_entry_is_kept();
     set_budget_enforced_on_next_trim();
+    trim_if_skips_ineligible_lru();
+    trim_if_all_ineligible_evicts_nothing();
+    trim_if_evicts_eligible_in_lru_order();
+    trim_if_keep_still_wins();
     clear_resets();
     if (failures == 0) std::printf("test_texrep_lru: all passed\n");
     return failures == 0 ? 0 : 1;
