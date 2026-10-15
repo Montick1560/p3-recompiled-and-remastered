@@ -142,7 +142,8 @@ hooks wrap entries, so a set that is not named costs nothing and changes nothing
 whose effect needs host help pair with the game module through `psp_patch_set_active()`
 (Patapon 3: the `60fps` set doubles the frame rate, and the module paces the game's input
 update to 30 Hz with `VblankPacer`, because the game counts key repeat and held time in
-frames). Reasoning: cheats patch guest RAM, but recompiled code never reads instruction
+frames; it also samples character poses at the fractional motion clock, since the GMO
+evaluator otherwise rounds to whole frames and the doubled rate would show each pose twice). Reasoning: cheats patch guest RAM, but recompiled code never reads instruction
 words, so the patched words have to become code at recompile time; keeping both bodies
 leaves the default build byte-identical.
 

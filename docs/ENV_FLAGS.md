@@ -134,7 +134,7 @@ Read by the runtime binary at start-up or during execution.
   `[RT] Patch set '<name>' enabled (<n> entries)`; an unknown name logs a
   warning with the available sets. A game module can pair a set with host-side
   help (`psp_patch_set_active`); Patapon 3's `60fps` set paces the input update
-  to 30 Hz.
+  to 30 Hz and turns on smooth animation (`PSPRECOMP_P3_ANIM_SMOOTH`).
 - **Set it when:** playing with an opt-in game patch, e.g. Patapon 3
   `PSPRECOMP_PATCHES=60fps` (60 fps; see `games/patapon3/game.toml`).
 
@@ -588,9 +588,38 @@ flags toggle individual experimental fixes/band-aids in the Patapon game module.
   raw bytes plus decoded position and RGBA.
 - **Set it when:** a vertex format is decoding to the wrong positions.
 
+### Patapon 3 module — enhancements
+
+Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
+
+### `PSPRECOMP_P3_ANIM_SMOOTH`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`.
+- **Type:** env (`1` on, `0` off; unset or empty = follow the `60fps` patch set).
+  **Game-specific: patapon3.**
+- **Default:** on when `PSPRECOMP_PATCHES` enables `60fps`, off otherwise.
+- **Effect:** Character poses are sampled at the motion player's fractional
+  clock instead of a whole frame. While the motion tick `0x08878A18` or draw
+  `0x08878B18` runs, the playhead setter `0x089DAF74` stores the player's
+  clock (+0x68) and the GMO evaluation `0x089DBD2C` runs with the model's
+  interpolate flag (model +0x28 bit 4) set, so `0x089DB1E0` skips its
+  round-to-whole-frame. The clock and frame-keyed events are untouched. Install
+  prints `[P3] smooth animation: poses sampled at the fractional frame`.
+- **Set it when:** `0` to compare against the stepped animation at 60 fps; `1`
+  to try it at 30 fps.
+
 ### Patapon 3 module — diagnostics
 
 Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
+
+### `PSPRECOMP_P3_ANIM_TRACE`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`.
+- **Type:** env (`=1`; first character `'1'`). **Game-specific: patapon3.**
+- **Default:** off.
+- **Effect:** Diagnostics only. Wraps the pose cache `0x088785A8` and logs
+  each distinct model vtable +0x38 (pose) method once (first 16) as
+  `[ANIM] cache=... model=... vtbl=... +0x38=... motion=... frame=...`.
+- **Set it when:** looking for the pose path of a model that does not animate
+  smoothly.
 
 ### `PSPRECOMP_P3_GMO_GUARD`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`.
