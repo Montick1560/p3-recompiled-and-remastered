@@ -32,6 +32,7 @@ list(APPEND RECOMP_SOURCES
     "${{CMAKE_CURRENT_SOURCE_DIR}}/init_array.cpp"
     "${{CMAKE_CURRENT_SOURCE_DIR}}/mid_entries.cpp"
     "${{CMAKE_CURRENT_SOURCE_DIR}}/syscall_table.cpp"
+    "${{CMAKE_CURRENT_SOURCE_DIR}}/patch_sets.cpp"
 )
 
 add_library({module_name}_recomp STATIC ${{RECOMP_SOURCES}})

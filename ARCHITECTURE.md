@@ -57,6 +57,7 @@ All under `crates/`:
 | `data_sections.cpp` | `.data`/`.rodata`/`.bss` as byte arrays (addresses masked with `0x07FFFFFFU`) |
 | `init_array.cpp` | Static-constructor pointer table (not walked by default — the game's CRT handles it) |
 | `mid_entries.cpp` | Mid-function entry point wrappers |
+| `patch_sets.cpp` | Opt-in `[[patch_sets]]` of the manifest: each patched function re-emitted from the patched bytes as `<name>__ps_<set>` (plus mid-entry wrappers and code caves outside the image as `PATCH_<set>_<addr>`), and the `recomp_patch_set_count/_name/_enable` API that registers a set over the dispatch table. Always emitted (empty API without sets); main output only — bank code is not patchable yet |
 | `syscall_table.cpp` | Generated NID import binding table (issue #40): one `RecompNidStub` row per analysis.json `imports[]` entry (stub address, NID, resolved name, library), sorted by stub address, header stamped with the analysis.json sha256. The runtime's `psp_hle_init()` binds HLE handlers by name at these stub addresses (decls: `runtime/include/hle/psp_hle_imports.h`; emitter: `crates/psp-emitter/src/syscall_table.rs`; recompile **hard-errors** on an empty `imports[]`) |
 | `funcs.h` | Forward declarations for all generated functions |
 | `include/recomp.h` | `recomp_context` struct, register aliases, memory macros, `RECOMP_LOOKUP` declaration |
@@ -98,7 +99,7 @@ lives entirely under `games/<id>/`:
 
 | Artifact | Consumed by | Carries |
 |----------|-------------|---------|
-| `games/<id>/game.toml` | `psprecomp recompile --config` | `[recompile]` force entries / force mid-entries (replaces the former hardcoded consts), top-level stubs/skips/patches, and `[game]`/`[boot]`/`[module]`/`[runtime]` choices emitted into `recomp_game_config.h` (the runtime never parses TOML) |
+| `games/<id>/game.toml` | `psprecomp recompile --config` | `[recompile]` force entries / force mid-entries (replaces the former hardcoded consts), top-level stubs/skips/patches, opt-in `[[patch_sets]]` (alternate bodies the runtime swaps in with `PSPRECOMP_PATCHES`), and `[game]`/`[boot]`/`[module]`/`[runtime]` choices emitted into `recomp_game_config.h` (the runtime never parses TOML) |
 | `games/<id>/runtime/*.cpp` | runtime build via `-DPSPRECOMP_GAME=<id>` | Address-keyed dispatch hooks, allocator/CRT override bodies, boot/thread context tweaks, asset layer, IO policy, LOOKUP_MISS handler, GE vertex fallback — everything title-specific that is code, not data (Patapon: `hooks_main/_memory/_thread/_dispatch/_io/_ge.cpp` + `asset_bnd.cpp/.h`; private decls in `patapon_hooks.h`) |
 | `games/<id>/tests/`, `games/<id>/scripts/` | manual / CI | Game-coupled unit tests (`test_asset_bnd`, built only under `-DPSPRECOMP_GAME=patapon`) and acceptance scripts (`test_phase11_*.sh`) |
 
@@ -131,6 +132,19 @@ The quarantine is enforced mechanically by `runtime/tools/purity_gate.sh` (see
 DEBUGGING.md §2): no non-allowlisted `0x08xxxxxx`/`0x09xxxxxx` literal in
 `runtime/src` + `runtime/include`, and no game symbol (defined or undefined) in any
 core object file of a build.
+
+Opt-in patch sets (`[[patch_sets]]`): a named group of instruction words and code caves,
+for patches a player chooses at run time, such as a community 60 fps cheat. The recompiler
+emits each affected function twice (unpatched in the batches, patched in `patch_sets.cpp`);
+`PSPRECOMP_PATCHES=<name>` makes `psp_patch_sets_apply()` register the patched bodies over
+the dispatch entries right after the table is built, before the HLE layer and the game
+hooks wrap entries, so a set that is not named costs nothing and changes nothing. Patches
+whose effect needs host help pair with the game module through `psp_patch_set_active()`
+(Patapon 3: the `60fps` set doubles the frame rate, and the module paces the game's input
+update to 30 Hz with `VblankPacer`, because the game counts key repeat and held time in
+frames). Reasoning: cheats patch guest RAM, but recompiled code never reads instruction
+words, so the patched words have to become code at recompile time; keeping both bodies
+leaves the default build byte-identical.
 
 Zero-manifest defaults: no `--config` ⇒ no force entries, generic boot path, heap from
 the `RECOMP_HEAP_BASE` align policy, no asset layer; `-DPSPRECOMP_GAME=none` ⇒ no hooks.

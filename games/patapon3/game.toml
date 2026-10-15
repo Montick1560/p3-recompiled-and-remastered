@@ -36,3 +36,37 @@ force_entries = [
     "0x089DC06C",
 ]
 
+# Opt-in 60 fps: PSPRECOMP_PATCHES=60fps. The community "60 FPS Patch v3"
+# CWCheat for UCES-01421 (pastebin Mk3ZvhBp, 2019; _L 0x2xxxxxxx = 0x08800000 +
+# offset, PPSSPP Core/CwCheat.h GetAddress), whose sites hold the same words in
+# this DxD EBOOT. The game normally waits two vblanks per frame; the patch:
+# - 0x0883E754: nop the `bnez v0` of the vblank wait loop in FUN_0883e674
+#   (wait one vblank per frame instead of the frame interval's count);
+# - 0x0883D5CC..0x0883D670: nop the two "fewer than two samples" exits of the
+#   sceCtrlReadBufferPositive merge in FUN_0883d434, so a frame that read one
+#   buffered sample still ORs it into the pressed-buttons word;
+# - 0x088FAB68 / 0x088FADF8 (FUN_088fa9d0, unit advance `pos += speed * k`):
+#   `jal 0x08800C00` with the original mul.s moved into its delay slot; the
+#   cave halves the step (lui at,0x3F00; mtc1 at,f31; mul.s f0,f0,f31; jr ra;
+#   add.s f0,f1,f0 = the original add) so units march at the 30 fps speed.
+# The game counts pad input in frames (key repeat, held time); the patapon3
+# game module paces its input update to 30 Hz while this set is on
+# (runtime/hooks_main.cpp).
+[[patch_sets]]
+name = "60fps"
+reason = "community 60 FPS Patch v3 (UCES-01421 CWCheat)"
+words = [
+    { address = "0x0883E754", instruction = "0x00000000" },
+    { address = "0x0883D5CC", instruction = "0x00000000" },
+    { address = "0x0883D5D0", instruction = "0x00000000" },
+    { address = "0x0883D5DC", instruction = "0x00000000" },
+    { address = "0x0883D66C", instruction = "0x00000000" },
+    { address = "0x0883D670", instruction = "0x00000000" },
+    { address = "0x088FADF8", instruction = "0x0E200300" },
+    { address = "0x088FADFC", instruction = "0x46001002" },
+    { address = "0x088FAB68", instruction = "0x0E200300" },
+    { address = "0x088FAB6C", instruction = "0x46001002" },
+]
+[[patch_sets.caves]]
+address = "0x08800C00"
+instructions = ["0x3C013F00", "0x4481F800", "0x461F0002", "0x03E00008", "0x46000800"]

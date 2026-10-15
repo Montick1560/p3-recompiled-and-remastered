@@ -159,6 +159,7 @@ set(RUNTIME_SOURCES
     src/psp_texrep_queue.cpp
     src/psp_pad.cpp
     src/psp_wheel.cpp
+    src/psp_patch_sets.cpp
     src/psp_text_edit.cpp
     src/psp_osk_session.cpp
     src/psp_osk_overlay.cpp
@@ -656,6 +657,12 @@ add_executable(test_ge_stencil tests/test_ge_stencil.cpp)
 target_include_directories(test_ge_stencil PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_ge_stencil PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME ge_stencil_tests COMMAND test_ge_stencil)
+
+# PSPRECOMP_PATCHES parsing (opt-in patch sets). Header-only.
+add_executable(test_patch_sets tests/test_patch_sets.cpp)
+target_include_directories(test_patch_sets PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_patch_sets PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME patch_sets_tests COMMAND test_patch_sets)
 
 add_executable(test_wheel tests/test_wheel.cpp src/psp_wheel.cpp)
 target_include_directories(test_wheel PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

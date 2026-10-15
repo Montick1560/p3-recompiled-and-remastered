@@ -121,6 +121,23 @@ Read by the runtime binary at start-up or during execution.
   continues with no game data.
 - **Set it when:** running against an extracted ISO that is not in `./disc0`.
 
+### `PSPRECOMP_PATCHES`
+- **Read in:** `runtime/src/psp_patch_sets.cpp` (`psp_patch_sets_apply`, called
+  from `runtime/src/main.cpp` right after the dispatch table is built).
+- **Type:** env (set names separated by commas, spaces or semicolons; exact,
+  case-sensitive match).
+- **Default:** unset (no patch set; the game runs unpatched).
+- **Effect:** Registers the named `[[patch_sets]]` of the recompiled game
+  (`games/<id>/game.toml`, emitted into the output's `patch_sets.cpp`) over the
+  dispatch table: every function holding a patched word runs its patched
+  variant, and the set's code caves become callable. Each enabled set logs
+  `[RT] Patch set '<name>' enabled (<n> entries)`; an unknown name logs a
+  warning with the available sets. A game module can pair a set with host-side
+  help (`psp_patch_set_active`); Patapon 3's `60fps` set paces the input update
+  to 30 Hz.
+- **Set it when:** playing with an opt-in game patch, e.g. Patapon 3
+  `PSPRECOMP_PATCHES=60fps` (60 fps; see `games/patapon3/game.toml`).
+
 ### `PSPRECOMP_NO_AUDIO`
 - **Read in:** `runtime/src/psp_audio_out.cpp`
 - **Type:** env (presence).

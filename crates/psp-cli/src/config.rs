@@ -32,6 +32,13 @@
 //!   [[skips]]   address = "0x08804000"  reason = "..."
 //!   [[patches]] address = "0x08810004"  instruction = "0x00000000"  reason = "..."
 //!
+//!   # Opt-in patches, swapped in at run time by PSPRECOMP_PATCHES=<name>:
+//!   [[patch_sets]]
+//!   name  = "fps60"
+//!   words = [{ address = "0x0883E754", instruction = "0x00000000" }]
+//!   [[patch_sets.caves]]                       # new code outside the image
+//!   address = "0x08800C00"  instructions = ["0x03E00008", "0x00000000"]
+//!
 //! `[game]`/`[boot]`/`[module]`/`[runtime]` flow into the generated
 //! `output/include/recomp_game_config.h`; the runtime never parses TOML.
 
@@ -64,6 +71,10 @@ pub struct GameConfig {
     /// Instruction-level patches (override a specific address with a new word).
     #[serde(default)]
     pub patches: Vec<PatchEntry>,
+    /// Opt-in patch sets: emitted as alternate function bodies the runtime
+    /// swaps in when `PSPRECOMP_PATCHES` names the set.
+    #[serde(default)]
+    pub patch_sets: Vec<PatchSet>,
     /// Overrides for batch size (default: 50 or CLI --batch-size).
     #[serde(default)]
     pub functions_per_file: Option<usize>,
@@ -179,7 +190,91 @@ pub struct PatchEntry {
     pub reason: String,
 }
 
+/// `[[patch_sets]]` — a named group of instruction patches the runtime can
+/// turn on (`PSPRECOMP_PATCHES=<name>[,<name>...]`), e.g. a community cheat
+/// such as a 60 fps patch. Each function containing a patched word is emitted
+/// a second time from the patched bytes; `caves` are new code at addresses
+/// outside the image (cheat code caves), emitted as functions of their own.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PatchSet {
+    /// Set name; `[A-Za-z0-9_]` only (it becomes part of C++ identifiers).
+    pub name: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub reason: String,
+    #[serde(default)]
+    pub words: Vec<PatchEntry>,
+    #[serde(default)]
+    pub caves: Vec<PatchCave>,
+}
+
+/// New code for a patch set at `address`, one hex word per instruction.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PatchCave {
+    pub address: String,
+    pub instructions: Vec<String>,
+}
+
+/// A patch set with every hex string parsed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedPatchSet {
+    pub name: String,
+    /// (address, new word), in manifest order.
+    pub words: Vec<(u32, u32)>,
+    /// (address, instruction words).
+    pub caves: Vec<(u32, Vec<u32>)>,
+}
+
 impl GameConfig {
+    /// `[[patch_sets]]`, parsed and checked (names unique and identifier-safe,
+    /// addresses word-aligned, caves non-empty).
+    pub fn patch_sets(&self) -> anyhow::Result<Vec<ParsedPatchSet>> {
+        let mut out: Vec<ParsedPatchSet> = Vec::new();
+        for set in &self.patch_sets {
+            let name = &set.name;
+            if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                anyhow::bail!("[[patch_sets]] name must be [A-Za-z0-9_]+, got {name:?}");
+            }
+            if out.iter().any(|s| &s.name == name) {
+                anyhow::bail!("[[patch_sets]] name {name:?} is used twice");
+            }
+            let word = |s: &str, what: &str| {
+                parse_hex(s).ok_or_else(|| {
+                    anyhow::anyhow!("[[patch_sets]] {name}: {what} is not hex: {s:?}")
+                })
+            };
+            let aligned = |a: u32| {
+                if a % 4 == 0 {
+                    Ok(a)
+                } else {
+                    Err(anyhow::anyhow!("[[patch_sets]] {name}: address 0x{a:08X} is not word-aligned"))
+                }
+            };
+            let mut words = Vec::new();
+            for w in &set.words {
+                words.push((aligned(word(&w.address, "address")?)?, word(&w.instruction, "instruction")?));
+            }
+            let mut caves = Vec::new();
+            for c in &set.caves {
+                let addr = aligned(word(&c.address, "cave address")?)?;
+                if c.instructions.is_empty() {
+                    anyhow::bail!("[[patch_sets]] {name}: cave 0x{addr:08X} has no instructions");
+                }
+                let code = c
+                    .instructions
+                    .iter()
+                    .map(|s| word(s, "cave instruction"))
+                    .collect::<anyhow::Result<Vec<u32>>>()?;
+                caves.push((addr, code));
+            }
+            if words.is_empty() && caves.is_empty() {
+                anyhow::bail!("[[patch_sets]] {name}: no words and no caves");
+            }
+            out.push(ParsedPatchSet { name: name.clone(), words, caves });
+        }
+        Ok(out)
+    }
+
     /// Game id ("" with no manifest / no `[game]` table).
     pub fn game_id(&self) -> &str {
         self.game.as_ref().map(|g| g.id.as_str()).unwrap_or("")
@@ -443,6 +538,52 @@ window = [\"zz\", \"0x1\"]
         let toml = "[runtime]\nasset_layer = \"zip\"\n";
         let cfg: GameConfig = toml::from_str(toml).unwrap();
         assert!(cfg.asset_layer_is_bnd().is_err());
+    }
+
+    #[test]
+    fn patch_sets_parsed() {
+        let toml = r#"
+        [[patch_sets]]
+        name = "fps60"
+        reason = "community cheat"
+        words = [
+            { address = "0x0883E754", instruction = "0x00000000" },
+            { address = "0x088FAB68", instruction = "0x0E200300" },
+        ]
+        [[patch_sets.caves]]
+        address = "0x08800C00"
+        instructions = ["0x3C013F00", "0x03E00008", "0x00000000"]
+
+        [[patch_sets]]
+        name = "other"
+        words = [{ address = "0x1000", instruction = "0x0" }]
+        "#;
+        let cfg: GameConfig = toml::from_str(toml).unwrap();
+        let sets = cfg.patch_sets().unwrap();
+        assert_eq!(sets.len(), 2);
+        assert_eq!(sets[0].name, "fps60");
+        assert_eq!(sets[0].words, vec![(0x0883_E754, 0), (0x088F_AB68, 0x0E20_0300)]);
+        assert_eq!(sets[0].caves, vec![(0x0880_0C00, vec![0x3C01_3F00, 0x03E0_0008, 0])]);
+        assert_eq!(sets[1].words, vec![(0x1000, 0)]);
+        assert!(GameConfig::default().patch_sets().unwrap().is_empty());
+    }
+
+    #[test]
+    fn bad_patch_sets_rejected() {
+        let bad = |t: &str| toml::from_str::<GameConfig>(t).unwrap().patch_sets().is_err();
+        assert!(bad("[[patch_sets]]\nname = \"60-fps\"\n"));
+        assert!(bad("[[patch_sets]]\nname = \"\"\n"));
+        assert!(bad("[[patch_sets]]\nname = \"empty\"\n"));
+        assert!(bad("[[patch_sets]]\nname = \"a\"\n[[patch_sets]]\nname = \"a\"\n"));
+        assert!(bad(
+            "[[patch_sets]]\nname = \"a\"\nwords = [{ address = \"0x1002\", instruction = \"0\" }]\n"
+        ));
+        assert!(bad(
+            "[[patch_sets]]\nname = \"a\"\nwords = [{ address = \"0x1000\", instruction = \"zz\" }]\n"
+        ));
+        assert!(bad(
+            "[[patch_sets]]\nname = \"a\"\n[[patch_sets.caves]]\naddress = \"0x1000\"\ninstructions = []\n"
+        ));
     }
 
     #[test]

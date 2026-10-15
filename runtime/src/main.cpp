@@ -17,6 +17,7 @@
 #include "psp_debug_socket.h"
 #include "psp_game_module.h"
 #include "psp_vfpu.h"  // vfpu_init_context — VFPU prefix reset default
+#include "psp_patch_sets.h"
 
 // Build fingerprint of the output/ this binary was generated from (issue #36).
 // Guarded so pre-fingerprint output dirs still build (warning at configure
@@ -181,6 +182,10 @@ int main(int argc, char* argv[]) {
     // 3. Populate dispatch table (must be before any RECOMP_LOOKUP)
     psp_init_dispatch_table();
     std::fprintf(stderr, "[RT] Dispatch table initialized\n");
+
+    // 3a. Opt-in patch sets (PSPRECOMP_PATCHES): replace generated entries
+    //     before the HLE layer and the game hooks wrap them.
+    psp_patch_sets_apply(std::getenv("PSPRECOMP_PATCHES"));
 
     // 3b. Initialize I/O subsystem (disc0 path mapping)
     //     PSPRECOMP_DISC0 env var overrides default ./disc0 path
