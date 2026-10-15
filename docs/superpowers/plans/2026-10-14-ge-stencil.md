@@ -2,7 +2,7 @@
 
 Written 2026-10-14 (Opus 5.5, end of the relevo review) for the next session. Status (2026-10-15):
 steps 1-4 and 6 done (stencil buffer, `psp_ge_stencil.h`, GL shadow, clears); step 5 deferred (see
-the finding below); pending: the user plays a mission with FEVER.
+the finding below); the user played a mission with FEVER and confirmed the fire mask (2026-10-15).
 
 ## Problem
 
