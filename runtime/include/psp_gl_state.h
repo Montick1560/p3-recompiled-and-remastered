@@ -22,6 +22,10 @@ void gl_state_blend_func(GLenum src, GLenum dst);
 void gl_state_blend_equation(GLenum equation);
 void gl_state_blend_color(GLfloat r, GLfloat g, GLfloat b);
 void gl_state_depth_func(GLenum func);
+void gl_state_stencil_func(GLenum func, GLint ref, GLuint mask);
+void gl_state_stencil_op(GLenum sfail, GLenum zfail, GLenum zpass);
+// glStencilMask: also gates glClear(GL_STENCIL_BUFFER_BIT).
+void gl_state_stencil_mask(GLuint mask);
 
 void gl_state_use_program(GLuint program);
 void gl_state_uniform1i(GLint loc, GLint v);

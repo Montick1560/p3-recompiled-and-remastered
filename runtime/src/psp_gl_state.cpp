@@ -56,6 +56,18 @@ void gl_state_depth_func(GLenum func) {
     if (g_shadow.set_depth_func(func)) glDepthFunc(func);
 }
 
+void gl_state_stencil_func(GLenum func, GLint ref, GLuint mask) {
+    if (g_shadow.set_stencil_func(func, ref, mask)) glStencilFunc(func, ref, mask);
+}
+
+void gl_state_stencil_op(GLenum sfail, GLenum zfail, GLenum zpass) {
+    if (g_shadow.set_stencil_op(sfail, zfail, zpass)) glStencilOp(sfail, zfail, zpass);
+}
+
+void gl_state_stencil_mask(GLuint mask) {
+    if (g_shadow.set_stencil_mask(mask)) glStencilMask(mask);
+}
+
 void gl_state_use_program(GLuint program) {
     if (g_shadow.use_program(program)) glUseProgram(program);
 }

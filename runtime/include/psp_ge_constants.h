@@ -342,6 +342,16 @@ enum GeCompFunc : uint8_t {
     GE_COMP_GEQUAL   = 7,
 };
 
+/// Stencil operations (GE_CMD_STENCILOP bytes: sfail, zfail, zpass).
+enum GeStencilOp : uint8_t {
+    GE_STENCILOP_KEEP    = 0,
+    GE_STENCILOP_ZERO    = 1,
+    GE_STENCILOP_REPLACE = 2,
+    GE_STENCILOP_INVERT  = 3,
+    GE_STENCILOP_INCR    = 4,
+    GE_STENCILOP_DECR    = 5,
+};
+
 /// Blend src/dst factors.
 enum GeBlendSrcFactor : uint8_t {
     GE_SRCBLEND_DSTCOLOR          = 0,

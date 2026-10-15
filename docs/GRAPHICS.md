@@ -67,6 +67,7 @@ Key files:
 | `runtime/include/psp_ge_constants.h` | Command IDs, VTYPE fields, format enums (derived from PPSSPP) |
 | `runtime/include/psp_ge_blend.h` | PSP blend factor/equation -> GL blend mapping (pure) |
 | `runtime/include/psp_ge_mask.h` | `MASKRGB`/`MASKALPHA` -> per-channel color write enables (pure) |
+| `runtime/include/psp_ge_stencil.h` | `STENCILTEST`/`STENCILOP`/`MASKALPHA` + framebuffer format -> stencil func/ops/write mask, clear-mode stencil (pure, PPSSPP `ConvertStencilFuncState` port) |
 
 ## Display-List Interpretation
 
@@ -406,7 +407,8 @@ and render targets are never replaced. Without `PSPRECOMP_TEXTURES` no thread st
 | `SHADEMODE` | none | tracked; GL 3.3 core is always smooth-shaded |
 | `SCISSOR1` / `SCISSOR2` | `glEnable(GL_SCISSOR_TEST)` + `glScissor` | inclusive `x1,y1` / `x2,y2` (10 bits each, top-left origin, y flipped for GL); applies to clears too; all-zero disables scissor |
 | `MASKRGB` / `MASKALPHA` | `glColorMask` | `ge_color_write_mask` (`psp_ge_mask.h`) derives per-channel writes (a set GE bit means "do not write") |
-| Stencil, region, color test, logic op, dither, MINZ/MAXZ, fog | none | registers tracked (or ignored); no GL calls are emitted |
+| `STENCILTESTENABLE` + `STENCILTEST` + `STENCILOP` | `glEnable(GL_STENCIL_TEST)` + `glStencilFunc` / `glStencilOp` / `glStencilMask` | `ge_stencil_state` (`psp_ge_stencil.h`): write mask = `~MASKALPHA`; RGB-masked REPLACE-only draws test ALWAYS; 565 never writes; 5551 (one stencil bit) rewrites the compare for a buffer holding only 0x00/0xFF, as PPSSPP |
+| Region, color test, logic op, dither, MINZ/MAXZ, fog | none | registers tracked (or ignored); no GL calls are emitted |
 
 ### Clear mode
 
@@ -418,7 +420,9 @@ are set, color+depth). Three quirks of this translation: the clear always covers
 (the rectangle's actual extent is ignored, but the active `SCISSOR1`/`SCISSOR2` rect still crops
 it), the depth mask is forced on for the clear, and when a depth clear is requested the clear
 value is the clear vertex's z / 65535 (`ge_clear_depth`; through-mode s16 z is unsigned), as on
-the PSP; a transform-mode clear keeps the range's far value. The FBO has no stencil attachment, so a stencil-bit clear is a no-op.
+the PSP; a transform-mode clear keeps the range's far value. A stencil-bit clear writes the clear's vertex
+alpha (a RECTANGLES clear takes the second vertex, as PPSSPP; other clear prims write 0xFF) through
+the `MASKALPHA` write mask (`ge_stencil_clear`).
 
 ### Primitives
 
@@ -543,7 +547,7 @@ pixels, and transform-mode `GL_LINES` get `glLineWidth` = scale for the same rea
   target is keyed by `ge_fb_key(addr) = (addr & 0x07FFFFFF) & 0x001FFFF0` — the 16-byte-aligned
   eDRAM offset. `ge_draw_select_target` / `acquire_target` reuse a matching slot, else allocate a
   free one, else LRU-evict the least-recently-used target (deleting its GL objects). Each target
-  is a 480x272 × render scale RGBA8 color texture plus a Depth24 renderbuffer (render scale
+  is a 480x272 × render scale RGBA8 color texture plus a Depth24/Stencil8 renderbuffer (render scale
   `PSPRECOMP_RENDER_SCALE`, default 1), created lazily on first use.
 - **What `FRAMEBUFPTR` does.** The `FRAMEBUFPTR` case in `psp_ge.cpp` stores the raw value in
   `framebuf_ptr` and calls `ge_draw_select_target`, binding that address's FBO for subsequent
@@ -578,7 +582,7 @@ consequence of each. "Tracked" means the register value is stored in `GeState`.
 | `BJUMP` (bounding-box conditional jump) | treated as a no-op — never jumps | conservative: everything is processed, minor overdraw |
 | DXT1/3/5 textures | `ge_decode_texture` returns false → opaque magenta | compressed textures are visually loud |
 | Mipmaps (levels 1–7) | only `TEXADDR0`/`TEXSIZE0` used (`TEXLEVEL` ignored) | no minification chain; level 0 only, filtered per `TEXFILTER` bit 0 |
-| Stencil (`STENCILTEST`/`STENCILOP`) | tracked, no GL stencil calls; the clear's stencil bit is a no-op | stencil-masked effects missing; the FBO has no stencil attachment |
+| Stencil value in the color alpha | the GL stencil buffer is separate; draws write their fragment alpha (per `MASKALPHA`), not the stencil value | a game reading the stencil back as alpha (DST_ALPHA blends, sampling the framebuffer) sees fragment alpha; Patapon 3's stencil masks (FEVER worm fire) only use the stencil test |
 | Region (`REGION1`/`REGION2`) | tracked, never applied | region clipping missing (scissor *is* applied) |
 | Color test, logic op, dither | ignored | corresponding per-fragment effects missing |
 | `MINZ`/`MAXZ` (depth-range clamp) | stored; active depth range derived from viewport Z (PPSSPP non-accurate-depth path) | per-fragment depth clamp not applied |

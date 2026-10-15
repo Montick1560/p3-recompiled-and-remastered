@@ -75,6 +75,21 @@ static void depth_func_skips_repeats() {
     CHECK(s.set_depth_func(0x0203), "depth func change emits");
 }
 
+static void stencil_calls_skip_repeats() {
+    GlShadow s;
+    CHECK(s.set_stencil_func(0x0202, 0, 0xFF), "first stencil func emits");
+    CHECK(!s.set_stencil_func(0x0202, 0, 0xFF), "same stencil func skipped");
+    CHECK(s.set_stencil_func(0x0202, 1, 0xFF), "ref change emits");
+    CHECK(s.set_stencil_func(0x0202, 1, 0x0F), "mask change emits");
+    CHECK(s.set_stencil_func(0x0207, 1, 0x0F), "func change emits");
+    CHECK(s.set_stencil_op(0x1E00, 0x1E00, 0x1E01), "first stencil op emits");
+    CHECK(!s.set_stencil_op(0x1E00, 0x1E00, 0x1E01), "same stencil op skipped");
+    CHECK(s.set_stencil_op(0x1E00, 0x1E01, 0x1E01), "zfail change emits");
+    CHECK(s.set_stencil_mask(0xFF), "first stencil mask emits");
+    CHECK(!s.set_stencil_mask(0xFF), "same stencil mask skipped");
+    CHECK(s.set_stencil_mask(0x00), "stencil mask change emits");
+}
+
 // ---- Program and uniforms ----------------------------------------------------
 
 static void program_change_invalidates_uniforms() {
@@ -114,6 +129,9 @@ static void invalidate_all_forces_one_re_emission() {
     s.set_blend_equation(3);
     s.set_blend_color(0.1f, 0.2f, 0.3f);
     s.set_depth_func(4);
+    s.set_stencil_func(6, 7, 8);
+    s.set_stencil_op(9, 10, 11);
+    s.set_stencil_mask(12);
     s.use_program(5);
     s.uniform1i(0, 1);
     s.invalidate_all();
@@ -125,6 +143,9 @@ static void invalidate_all_forces_one_re_emission() {
     CHECK(s.set_blend_equation(3), "equation re-emits");
     CHECK(s.set_blend_color(0.1f, 0.2f, 0.3f), "blend color re-emits");
     CHECK(s.set_depth_func(4), "depth func re-emits");
+    CHECK(s.set_stencil_func(6, 7, 8), "stencil func re-emits");
+    CHECK(s.set_stencil_op(9, 10, 11), "stencil op re-emits");
+    CHECK(s.set_stencil_mask(12), "stencil mask re-emits");
     CHECK(s.use_program(5), "program re-emits");
     CHECK(s.uniform1i(0, 1), "uniform re-emits");
 }
@@ -147,6 +168,7 @@ int main() {
     sampler_skips_only_when_unchanged();
     blend_calls_skip_repeats();
     depth_func_skips_repeats();
+    stencil_calls_skip_repeats();
     program_change_invalidates_uniforms();
     uniforms_track_each_location_and_kind();
     invalidate_all_forces_one_re_emission();

@@ -3,6 +3,7 @@
 #include "psp_perf.h"
 #include "psp_ge_blend.h"
 #include "psp_ge_mask.h"
+#include "psp_ge_stencil.h"
 #include "psp_ge.h"
 #include "psp_ge_constants.h"
 #include "psp_ge_vertex.h"
@@ -211,6 +212,31 @@ static GLenum map_depth_func(int func) {
     return gl;
 }
 
+// GE stencil op -> GL (PPSSPP StateMappingGLES.cpp stencilOps; 6/7 reserved).
+static GLenum map_stencil_op(int op) {
+    switch (op) {
+    case GE_STENCILOP_ZERO:    return GL_ZERO;
+    case GE_STENCILOP_REPLACE: return GL_REPLACE;
+    case GE_STENCILOP_INVERT:  return GL_INVERT;
+    case GE_STENCILOP_INCR:    return GL_INCR;
+    case GE_STENCILOP_DECR:    return GL_DECR;
+    default:                   return GL_KEEP;
+    }
+}
+
+static GeStencilInput stencil_input(const GeState& s) {
+    GeStencilInput in;
+    in.test_enable = s.stencil_test_enable;
+    in.stencil_test = s.stencil_test;
+    in.stencil_op = s.stencil_op;
+    in.mask_rgb = s.mask_rgb;
+    in.mask_alpha = s.mask_alpha;
+    in.depth_test = s.depth_test_enable;
+    in.depth_write = !s.depth_write_disable;
+    in.fb_format = s.framebuf_format & 3;
+    return in;
+}
+
 static GLenum map_prim_type(int prim_type) {
     switch (prim_type) {
     case GE_PRIM_POINTS:         return GL_POINTS;
@@ -238,7 +264,7 @@ static GeViewportDepth compute_state_viewport_depth(const GeState& state) {
 
 // ---- FBO pool helpers ----
 
-// Create one render target (FBO + RGBA8 color texture + Depth24 renderbuffer,
+// Create one render target (FBO + RGBA8 color texture + Depth24/Stencil8 renderbuffer,
 // PSP size x render scale, NEAREST) for the given normalized key. Clears it to black. The
 // pool owns the GL objects; ge_draw_shutdown deletes them.
 static GeTarget make_target(uint32_t key) {
@@ -258,8 +284,10 @@ static GeTarget make_target(uint32_t key) {
 
     glGenRenderbuffers(1, &t.depth_rb);
     glBindRenderbuffer(GL_RENDERBUFFER, t.depth_rb);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, fb_w(), fb_h());
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+    // The PSP keeps stencil in the color alpha; the host needs a real buffer
+    // for the stencil test (psp_ge_stencil.h).
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, fb_w(), fb_h());
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
                               GL_RENDERBUFFER, t.depth_rb);
 
     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
@@ -269,7 +297,9 @@ static GeTarget make_target(uint32_t key) {
     }
     glDisable(GL_SCISSOR_TEST);  // a new buffer starts fully cleared
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glClearStencil(0);
+    gl_state_stencil_mask(0xFF);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     t.last_use = ++g_target_clock;
     return t;
 }
@@ -493,7 +523,8 @@ static void drawlog_prim(const GeState& s, int index, int prim_type, int count) 
         "[DL] i=%d prim=%d n=%d vt=0x%06X va=0x%08X base=0x%06X off=0x%08X fb=0x%06X clr=%d thr=%d "
         "tex=%d ta=0x%08X tf=%u tsz=0x%04X bw=%u clut=0x%08X cf=0x%06X "
         "tfn=0x%X blend=%d bm=0x%03X fa=0x%06X fb2=0x%06X at=%d atv=0x%06X "
-        "zt=%d zf=%u zw=%d st=%d lit=%d mat=0x%06X/%02X amb=0x%06X sc=0x%06X/0x%06X\n",
+        "zt=%d zf=%u zw=%d st=%d stt=0x%06X sop=0x%06X mrgb=0x%06X ma=0x%02X fmt=%u cf=%u "
+        "lit=%d mat=0x%06X/%02X amb=0x%06X sc=0x%06X/0x%06X\n",
         index, prim_type, count, s.vertex_type, s.vertex_addr, s.base_addr, s.offset_addr,
         s.framebuf_ptr,
         s.clear_mode ? 1 : 0, ge_vtype_through(s.vertex_type) ? 1 : 0,
@@ -503,6 +534,8 @@ static void drawlog_prim(const GeState& s, int index, int prim_type, int count) 
         s.blend_fix_b, s.alpha_test_enable ? 1 : 0, s.alpha_test,
         s.depth_test_enable ? 1 : 0, s.depth_func,
         s.depth_write_disable ? 0 : 1, s.stencil_test_enable ? 1 : 0,
+        s.stencil_test & 0xFFFFFF, s.stencil_op & 0xFFFFFF, s.mask_rgb & 0xFFFFFF,
+        s.mask_alpha & 0xFF, s.framebuf_format, s.clear_flags,
         s.lighting_enable ? 1 : 0, s.material_ambient, s.material_alpha,
         s.ambient_color, s.scissor1, s.scissor2);
     if (!ge_vtype_through(s.vertex_type)) {
@@ -753,6 +786,20 @@ void ge_draw_prim(
             }
         }
 
+        // Stencil: the clear's vertex alpha through MASKALPHA (psp_ge_stencil.h).
+        // PPSSPP takes the first rectangle's second vertex; other clear prims
+        // draw with stencil ref 0xFF.
+        if (clear_bits & GL_STENCIL_BUFFER_BIT) {
+            uint8_t alpha = 0xFF;
+            if (prim_type == GE_PRIM_RECTANGLES) {
+                alpha = clear_verts.size() > 1 ? clear_verts[1].color[3] : 0;
+            }
+            const GeStencilClear sc =
+                ge_stencil_clear(stencil_input(state), state.clear_flags, alpha);
+            glClearStencil(sc.value);
+            gl_state_stencil_mask(sc.write_mask);
+        }
+
         // Temporarily disable depth mask restriction
         glDepthMask(GL_TRUE);
         glClear(clear_bits);
@@ -994,6 +1041,18 @@ void ge_draw_prim(
         glDepthMask(
             state.depth_write_disable
             ? GL_FALSE : GL_TRUE);
+    }
+
+    // Stencil test (PPSSPP ConvertStencilFuncState, psp_ge_stencil.h)
+    {
+        const GeStencilState st = ge_stencil_state(stencil_input(state));
+        gl_state_set_cap(GL_STENCIL_TEST, st.enabled);
+        if (st.enabled) {
+            gl_state_stencil_func(map_depth_func(st.func), st.ref, st.test_mask);
+            gl_state_stencil_op(map_stencil_op(st.sfail), map_stencil_op(st.zfail),
+                                map_stencil_op(st.zpass));
+            gl_state_stencil_mask(st.write_mask);
+        }
     }
 
     // Cull face

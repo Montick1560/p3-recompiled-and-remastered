@@ -651,6 +651,12 @@ target_include_directories(test_gl_shadow PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/in
 target_compile_options(test_gl_shadow PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME gl_shadow_tests COMMAND test_gl_shadow)
 
+# GE stencil registers -> GL stencil state (PPSSPP ConvertStencilFuncState port). Header-only.
+add_executable(test_ge_stencil tests/test_ge_stencil.cpp)
+target_include_directories(test_ge_stencil PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_ge_stencil PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME ge_stencil_tests COMMAND test_ge_stencil)
+
 add_executable(test_wheel tests/test_wheel.cpp src/psp_wheel.cpp)
 target_include_directories(test_wheel PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_wheel PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)

@@ -246,6 +246,7 @@ bool psp_osk_overlay_draw(int win_w, int win_h, int rx, int ry, int rw, int rh) 
     glUseProgram(g.prog);
     glBindVertexArray(g.vao);
     glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
     glDisable(GL_CULL_FACE);
     glDisable(GL_SCISSOR_TEST);
     glEnable(GL_BLEND);

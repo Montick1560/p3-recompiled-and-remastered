@@ -1,6 +1,8 @@
 # GE stencil (FEVER worm fire mask) — implementation plan
 
-Written 2026-10-14 (Opus 5.5, end of the relevo review) for the next session. Status: not started.
+Written 2026-10-14 (Opus 5.5, end of the relevo review) for the next session. Status (2026-10-15):
+steps 1-4 and 6 done (stencil buffer, `psp_ge_stencil.h`, GL shadow, clears); step 5 deferred (see
+the finding below); pending: the user plays a mission with FEVER.
 
 ## Problem
 
@@ -20,6 +22,26 @@ On the PSP the stencil **is the alpha channel of the color buffer** (8888: 8 bit
 565: none). A game masks a draw by writing stencil (STENCILOP REPLACE, often with RGB masked) and then
 drawing with the stencil test (or a DST_ALPHA blend, since alpha == stencil). The worm fire is almost
 certainly one of those two. Step 1 decides which before any code is written.
+
+## Step 1 finding (2026-10-15)
+
+Display lists dumped on both sides during FEVER (miracle save, mission "Cincuenta Cíclopes";
+PPSSPP side with `gelist.py`, runtime side with `D <n>`; `build/tour/stencil/`). The framebuffer is
+**5551** (`FRAMEBUFPIXFORMAT` = 1), so the stencil is one bit. Per frame, in the HUD part of the list:
+
+- The worm silhouette is drawn twice. First untextured (stencil off), then the same geometry
+  textured with `STENCILTESTENABLE` = 1, `STENCILTEST` = 0xFF0001 (ALWAYS, ref 0, mask 0xFF),
+  `STENCILOP` = 0x010000 (sfail KEEP, zfail KEEP, zpass **ZERO**), MASKALPHA 0: stencil = 0 inside
+  the worm.
+- Right after, the fire (texture 0x12FD40, CLUT4, five 22-vertex strips much larger than the worm)
+  is drawn with `STENCILTEST` = 0xFF0002 (**EQUAL ref 0**), ops KEEP: only where the worm zeroed the
+  stencil. Skipping those PRIMs on the runtime (`X 449 460`) removes the rectangle.
+- The frame's first PRIM is a clear with flags 7 (color + stencil + depth), which sets the stencil
+  from the clear vertex alpha.
+
+No DST_ALPHA blend reads the alpha copy in these frames (blend modes 0x032 and 0x0A2 only), so the
+fix is the GL stencil itself (steps 2-4). Step 5 (stencil value into the color alpha) is not needed
+for this bug and stays a separate follow-up.
 
 ## Reference (PPSSPP, `tools/ppsspp-src`)
 

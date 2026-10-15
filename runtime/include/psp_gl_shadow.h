@@ -36,11 +36,14 @@ public:
     };
     bool apply_sampler(const Sampler& s);
 
-    // ---- Blend / depth ----
+    // ---- Blend / depth / stencil ----
     bool set_blend_func(uint32_t src, uint32_t dst);
     bool set_blend_equation(uint32_t equation);
     bool set_blend_color(float r, float g, float b);
     bool set_depth_func(uint32_t func);
+    bool set_stencil_func(uint32_t func, int ref, uint32_t mask);
+    bool set_stencil_op(uint32_t sfail, uint32_t zfail, uint32_t zpass);
+    bool set_stencil_mask(uint32_t mask);
 
     // ---- Program and uniforms ----
     // Switching programs clears the uniform cache: the values were uploaded to
@@ -85,6 +88,13 @@ private:
     float blend_color_[3] = {0.0f, 0.0f, 0.0f};
     bool depth_func_known_ = false;
     uint32_t depth_func_ = 0;
+    bool stencil_func_known_ = false;
+    uint32_t stencil_func_ = 0, stencil_func_mask_ = 0;
+    int stencil_ref_ = 0;
+    bool stencil_op_known_ = false;
+    uint32_t stencil_op_[3] = {0, 0, 0};
+    bool stencil_mask_known_ = false;
+    uint32_t stencil_mask_ = 0;
     bool program_known_ = false;
     uint32_t program_ = 0;
     Uniform uniforms_[kMaxUniforms];
@@ -148,6 +158,37 @@ inline bool GlShadow::set_depth_func(uint32_t func) {
     return true;
 }
 
+inline bool GlShadow::set_stencil_func(uint32_t func, int ref, uint32_t mask) {
+    if (stencil_func_known_ && stencil_func_ == func && stencil_ref_ == ref
+        && stencil_func_mask_ == mask) {
+        return false;
+    }
+    stencil_func_known_ = true;
+    stencil_func_ = func;
+    stencil_ref_ = ref;
+    stencil_func_mask_ = mask;
+    return true;
+}
+
+inline bool GlShadow::set_stencil_op(uint32_t sfail, uint32_t zfail, uint32_t zpass) {
+    if (stencil_op_known_ && stencil_op_[0] == sfail && stencil_op_[1] == zfail
+        && stencil_op_[2] == zpass) {
+        return false;
+    }
+    stencil_op_known_ = true;
+    stencil_op_[0] = sfail;
+    stencil_op_[1] = zfail;
+    stencil_op_[2] = zpass;
+    return true;
+}
+
+inline bool GlShadow::set_stencil_mask(uint32_t mask) {
+    if (stencil_mask_known_ && stencil_mask_ == mask) return false;
+    stencil_mask_known_ = true;
+    stencil_mask_ = mask;
+    return true;
+}
+
 inline bool GlShadow::use_program(uint32_t program) {
     if (program_known_ && program_ == program) return false;
     program_known_ = true;
@@ -208,6 +249,9 @@ inline void GlShadow::invalidate_all() {
     blend_eq_known_ = false;
     blend_color_known_ = false;
     depth_func_known_ = false;
+    stencil_func_known_ = false;
+    stencil_op_known_ = false;
+    stencil_mask_known_ = false;
     program_known_ = false;
     uniform_count_ = 0;
 }
