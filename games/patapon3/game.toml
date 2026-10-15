@@ -36,8 +36,8 @@ force_entries = [
     "0x089DC06C",
 ]
 
-# Opt-in 60 fps: PSPRECOMP_PATCHES=60fps. The community "60 FPS Patch v3"
-# CWCheat for UCES-01421 (pastebin Mk3ZvhBp, 2019; _L 0x2xxxxxxx = 0x08800000 +
+# Opt-in 60 fps: PSPRECOMP_PATCHES=60fps. Madwig's "60 FPS Patch v3" CWCheat
+# for UCES-01421 (efonte/patapon-re CWCheats/; _L 0x2xxxxxxx = 0x08800000 +
 # offset, PPSSPP Core/CwCheat.h GetAddress), whose sites hold the same words in
 # this DxD EBOOT. The game normally waits two vblanks per frame; the patch:
 # - 0x0883E754: nop the `bnez v0` of the vblank wait loop in FUN_0883e674
@@ -54,7 +54,7 @@ force_entries = [
 # (runtime/hooks_main.cpp).
 [[patch_sets]]
 name = "60fps"
-reason = "community 60 FPS Patch v3 (UCES-01421 CWCheat)"
+reason = "Madwig's 60 FPS Patch v3 (UCES-01421 CWCheat)"
 words = [
     { address = "0x0883E754", instruction = "0x00000000" },
     { address = "0x0883D5CC", instruction = "0x00000000" },
