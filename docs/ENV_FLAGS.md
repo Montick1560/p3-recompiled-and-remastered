@@ -187,7 +187,7 @@ Read by the runtime binary at start-up or during execution.
 - **Read in:** `runtime/src/psp_ge_texture.cpp` (`tex_hash_backoff_window`,
   applied in `ge_texture_init`); policy in `runtime/include/psp_ge_texmemo.h`.
 - **Type:** env (integer, display lists).
-- **Default:** `8`.
+- **Default:** `1` (verify every list, as PPSSPP rehashes once per sync domain).
 - **Effect:** cap of the content-hash memo's reuse window. A texture whose
   hash verified unchanged is reused without re-reading guest memory for a
   window that doubles per stable check (1, 2, 4, ... up to this cap); any
@@ -195,8 +195,10 @@ Read by the runtime binary at start-up or during execution.
   being hashed every frame), as does a GE block transfer. `1` verifies every
   list (backoff off); `0` or a non-power-of-two value rounds down; values
   above 65536 clamp.
-- **Set it when:** A/B-testing a suspected stale-texture artifact, or tuning
-  hash cost vs. detection latency of CPU-written textures.
+- **Set it when:** a slow host needs the hash cost back (with XXH3 it is
+  ~0.02 ms/frame in the hideout). There is no guest write tracking, so a
+  window > 1 can draw a stale texture for up to that many lists after the CPU
+  rewrites it without a GE transfer.
 
 ### `PSPRECOMP_TEXTURES_BUDGET_MB`
 - **Read in:** `runtime/src/psp_texrep.cpp` (`ge_texrep_init`).

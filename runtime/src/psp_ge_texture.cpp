@@ -13,6 +13,7 @@
 #include "recomp.h"
 
 #include <glad/glad.h>
+#include "xxhash.h"
 #include <array>
 #include <vector>
 #include <cstdio>
@@ -38,7 +39,16 @@ static TexrepLru<int> g_gl_lru(256u << 20);
 // frame in practice).
 static uint32_t g_tex_hot_frames = 300;
 
-// ---- FNV-1a hash ----
+// ---- Hashes ----
+
+// Texture bytes are hashed with XXH3 (PPSSPP's texture-cache hash,
+// TextureCacheCommon.cpp): ~25x faster than byte-wise FNV-1a, which made
+// re-hashing every list cost ~0.4 ms/frame in the hideout. FNV stays for the
+// 24-byte decode-parameter key.
+static uint32_t content_hash32(const uint8_t* data, size_t len) {
+    return static_cast<uint32_t>(XXH3_64bits(data, len));
+}
+
 
 static uint32_t fnv1a_hash(
     const uint8_t* data, size_t len
@@ -120,11 +130,13 @@ static bool apply_sampler(const GeState& state, int forced_filter) {
 
 // ---- Public API ----
 
-// PSPRECOMP_TEX_HASH_BACKOFF=<lists>: the memo's max reuse window. 1 verifies
-// every list (backoff off); invalid or absent keeps the default 8.
+// PSPRECOMP_TEX_HASH_BACKOFF=<lists>: the memo's max reuse window. Default 1
+// verifies every list, like PPSSPP (it rehashes each texture once per sync
+// domain): with no write tracking, a longer window can draw a stale texture
+// for up to that many lists after the CPU rewrites it. Opt-in for slow hosts.
 static uint32_t tex_hash_backoff_window() {
     const char* e = std::getenv("PSPRECOMP_TEX_HASH_BACKOFF");
-    if (e == nullptr || *e == '\0') return 8;
+    if (e == nullptr || *e == '\0') return 1;
     const unsigned long v = std::strtoul(e, nullptr, 10);
     if (v == 0) return 1;
     return static_cast<uint32_t>(v > 65536u ? 65536u : v);
@@ -255,20 +267,18 @@ GLuint ge_texture_bind(
     const uint32_t params_hash = fnv1a_hash(reinterpret_cast<const uint8_t*>(param_words),
                                             static_cast<int>(sizeof(param_words)));
     // The bytes are hashed once per display list (frame_num counts lists);
-    // later binds of the same texture in the list reuse that hash. A texture
-    // whose hash verified unchanged is only re-read every few lists: the
-    // memo applies a frame-delayed backoff (PSPRECOMP_TEX_HASH_BACKOFF,
-    // see psp_ge_texmemo.h), so a CPU that rewrites textures each list still
-    // re-hashes each list.
+    // later binds of the same texture in the list reuse that hash. With
+    // PSPRECOMP_TEX_HASH_BACKOFF > 1 a texture whose hash verified unchanged
+    // is only re-read every few lists (psp_ge_texmemo.h).
     uint32_t content_hash = 0;
     if (!g_hash_memo.find(frame_num, masked_addr, params_hash, &content_hash)) {
-        content_hash = fnv1a_hash(rdram + masked_addr, static_cast<int>(span));
+        content_hash = content_hash32(rdram + masked_addr, span);
         content_hash ^= params_hash * 0x9E3779B1u;
         if (perf_enabled()) g_perf.tex_hash_bytes.fetch_add(span, std::memory_order_relaxed);
         if (fmt >= GE_TFMT_CLUT4 && fmt <= GE_TFMT_CLUT32) {
             const uint32_t clut_off = params.clut_addr & PSP_ADDR_MASK;
             if (clut_off + 1024 <= static_cast<uint32_t>(PSP_MEM_SIZE)) {
-                content_hash ^= fnv1a_hash(rdram + clut_off, 1024) * 0x85EBCA6Bu;
+                content_hash ^= content_hash32(rdram + clut_off, 1024) * 0x85EBCA6Bu;
                 if (perf_enabled()) g_perf.tex_hash_bytes.fetch_add(1024, std::memory_order_relaxed);
             }
         }

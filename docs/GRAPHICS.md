@@ -318,15 +318,14 @@ as-is.
 ### Texture cache
 
 A fixed 256-entry cache (`TexCacheEntry`, `psp_ge_texture.h`) keyed by
-**(psp_addr, content_hash)**. The hash is FNV-1a over the texture's whole guest-memory span
+**(psp_addr, content_hash)**. The hash is XXH3 (PPSSPP's texture-cache hash) over the texture's whole guest-memory span
 (`ge_tex_byte_span`, stride and all rows), mixed with the decode parameters (bufw, format,
 swizzle, width×height) and, for CLUT formats, the first 1024 palette bytes. On every
 `ge_texture_bind`:
 
-1. The hash is recomputed from current guest memory whenever the memo's
-   frame-delayed window expires (below), so a CPU write to a texture or its
-   palette is picked up by the next recompute; a GE block transfer invalidates
-   the memo immediately.
+1. The hash is recomputed from current guest memory once per display list
+   (the memo below), so a CPU write to a texture or its palette is picked up
+   by the next list; a GE block transfer invalidates the memo immediately.
 2. Exact (addr, hash) match → bind cached GL texture, refresh its `last_frame`.
 3. Otherwise an empty slot is used, or the least-recently-used entry (smallest `last_frame`) is
    evicted and its GL texture deleted; the texture is then decoded and uploaded with
@@ -335,11 +334,13 @@ swizzle, width×height) and, for CLUT formats, the first 1024 palette bytes. On 
    vacancy left by an earlier eviction, and a vacancy wins over a new eviction.
 
 The content-hash memo (`TexHashMemo`, `runtime/include/psp_ge_texmemo.h`) stores the last hash
-of each (addr, params) with the display list at which guest memory must be re-read. A texture
-whose hash verifies unchanged widens the window 1, 2, 4, ... up to
-`PSPRECOMP_TEX_HASH_BACKOFF` lists (default 8); any mismatch (font updates, palette fades,
-movie frames) restarts it at one list, so what changes every frame keeps being hashed every
-frame. `frame_num` counts display lists, which is one per frame in the common case.
+of each (addr, params) with the display list at which guest memory must be re-read. By default
+that is the next list, like PPSSPP's once-per-sync-domain rehash. `PSPRECOMP_TEX_HASH_BACKOFF`
+> 1 opts into a frame-delayed window: a texture whose hash verifies unchanged widens it 1, 2,
+4, ... up to that many lists, and any mismatch (font updates, palette fades, movie frames)
+restarts it at one list. It is off by default because nothing tracks guest CPU writes, so a
+texture rewritten inside the window is drawn stale until it expires. `frame_num` counts
+display lists, which is one per frame in the common case.
 
 The sampler follows `TEXFILTER` (bit 0 minify, bit 8 magnify; mipmap
 bits ignored, only level 0 is uploaded) and `TEXWRAP` (bit 0 / bit 8 = clamp U / V,
