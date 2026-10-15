@@ -58,6 +58,12 @@ enum class GeTexrepResult {
 GeTexrepResult ge_texrep_replacement(const uint8_t* rdram, const GeState& s, uint16_t draw_max_v,
                                      GeTexrepImage* out);
 
+/// The pack file (and its [filtering]) the live texture resolves to, without
+/// requesting a decode; false when the pack has no replacement for it. The
+/// GL cache uses it to share one texture per file (psp_texrep_share.h).
+bool ge_texrep_resolve(const uint8_t* rdram, const GeState& s, uint16_t draw_max_v,
+                       std::string* path, TexrepFilter* filter);
+
 /// Render thread, right after `img` was copied into a GL texture: the CPU
 /// buffer is no longer needed and the budget drops it now (a later request of
 /// the same file decodes it again from disk).

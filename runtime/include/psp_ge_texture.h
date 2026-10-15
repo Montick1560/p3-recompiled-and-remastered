@@ -3,6 +3,7 @@
 #include <glad/glad.h>
 #include <cstdint>
 #include <array>
+#include <string>
 
 /// Single entry in the texture cache.
 struct TexCacheEntry {
@@ -16,6 +17,13 @@ struct TexCacheEntry {
     int forced_filter = 0;  // texture pack [filtering]: 0 none, 1 nearest, 2 linear
     bool replace_pending = false;   // pack image still decoding: original drawn
     uint64_t replace_epoch = 0;     // ge_texrep_epoch() at the last attempt
+    // Pack file this slot shows (psp_texrep_share.h): slots resolving to the
+    // same file share one GL texture; empty for an original texture.
+    std::string rep_path;
+    // The slot accounting the shared texture's bytes in the GL budget (the
+    // others account 0); handed to another sharer when this slot is evicted.
+    bool rep_owner = false;
+    size_t gl_bytes = 0;            // bytes this slot accounts in the GL budget
     bool valid = false;
 };
 

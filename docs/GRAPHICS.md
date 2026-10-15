@@ -379,8 +379,15 @@ Patapon 3 HD pack). The key must match PPSSPP bit for bit; the contract is in
 of the current through-mode draw, feeds `maxSeenV`). A ready image is uploaded at its own size
 (UVs are normalised, so nothing else changes) and `[filtering]` can force nearest/linear. While
 the PNG is decoding the original texture is drawn and the entry is marked `replace_pending`; it
-retries on a later bind once `ge_texrep_epoch()` changes. Video frames and render targets are
-never replaced. Without `PSPRECOMP_TEXTURES` no thread starts and every frame is unchanged.
+retries on a later bind once `ge_texrep_epoch()` changes. One GL texture is kept per pack
+file (`include/psp_texrep_share.h`, pure, reference-counted, tested): the cache key hashes the
+whole guest span while the pack key hashes less, so a texture the game keeps rewriting (the
+loading tips: ~25 misses per screen) resolves many slots to one PNG. A miss whose file is
+already on the GPU (`ge_texrep_resolve`, no decode request) binds that texture; it is deleted
+with its last slot, and its bytes are accounted once, by the uploading slot (handed to another
+sharer when that slot is evicted). Before this every such miss re-decoded the PNG (its CPU copy
+is dropped on upload) and uploaded another copy, drawing the original meanwhile. Video frames
+and render targets are never replaced. Without `PSPRECOMP_TEXTURES` no thread starts and every frame is unchanged.
 
 ## Raster State Mapping
 

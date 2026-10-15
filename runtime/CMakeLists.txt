@@ -617,6 +617,12 @@ target_include_directories(test_texrep_lru PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/i
 target_compile_options(test_texrep_lru PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME texrep_lru_tests COMMAND test_texrep_lru)
 
+# Header-only pure class (test_texrep_lru convention: no extra sources).
+add_executable(test_texrep_share tests/test_texrep_share.cpp)
+target_include_directories(test_texrep_share PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_texrep_share PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME texrep_share_tests COMMAND test_texrep_share)
+
 add_executable(test_pad tests/test_pad.cpp src/psp_pad.cpp)
 target_include_directories(test_pad PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${SDL2_INCLUDE_DIRS})
 target_compile_options(test_pad PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)

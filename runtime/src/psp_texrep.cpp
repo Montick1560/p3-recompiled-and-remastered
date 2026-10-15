@@ -160,6 +160,17 @@ GeTexrepResult ge_texrep_replacement(const uint8_t* rdram, const GeState& s, uin
     return GeTexrepResult::Ready;
 }
 
+bool ge_texrep_resolve(const uint8_t* rdram, const GeState& s, uint16_t draw_max_v,
+                       std::string* path, TexrepFilter* filter) {
+    if (!g_enabled) return false;
+    GeTexrepKey key{};
+    const TexrepFind f = ge_texrep_lookup(rdram, s, draw_max_v, &key);
+    if (!f.found || f.ignored) return false;
+    *path = f.path;
+    *filter = g_pack.filter(key);
+    return true;
+}
+
 void ge_texrep_image_uploaded(const GeTexrepImage& img) {
     if (g_images && !img.path.empty()) g_images->release(img.path);
 }

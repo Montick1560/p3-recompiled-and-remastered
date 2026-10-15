@@ -10,6 +10,7 @@
 #include "psp_memory.h"
 #include "psp_texrep.h"
 #include "psp_texrep_lru.h"
+#include "psp_texrep_share.h"
 #include "recomp.h"
 
 #include <glad/glad.h>
@@ -38,6 +39,9 @@ static TexrepLru<int> g_gl_lru(256u << 20);
 // the default 300 (10 s at 30 fps; frame_num counts display lists, one per
 // frame in practice).
 static uint32_t g_tex_hot_frames = 300;
+// One live GL texture per pack file, shared by the slots that resolve to it
+// (psp_texrep_share.h). Render-thread only, like the cache.
+static TexrepShare g_rep_share;
 
 // ---- Hashes ----
 
@@ -48,7 +52,6 @@ static uint32_t g_tex_hot_frames = 300;
 static uint32_t content_hash32(const uint8_t* data, size_t len) {
     return static_cast<uint32_t>(XXH3_64bits(data, len));
 }
-
 
 static uint32_t fnv1a_hash(
     const uint8_t* data, size_t len
@@ -63,16 +66,43 @@ static uint32_t fnv1a_hash(
 
 // ---- Cache operations ----
 
-/// Delete the GL texture of `slot` and drop its byte accounting (LRU victim).
-/// Render thread only.
-static void evict_slot(int slot) {
-    TexCacheEntry& e = g_tex_cache[slot];
-    if (e.gl_tex != 0) {
+/// Account `bytes` for `slot` in the GL budget (0 for a texture another slot
+/// already accounts).
+static void account_slot(int slot, size_t bytes) {
+    g_tex_cache[slot].gl_bytes = bytes;
+    g_gl_lru.put(slot, bytes);
+}
+
+/// Drop `e`'s GL texture: a pack texture other slots still share stays alive
+/// (psp_texrep_share.h); anything else is deleted. Render thread only.
+static void release_gl_texture(TexCacheEntry& e) {
+    if (e.gl_tex != 0 && (e.rep_path.empty() || g_rep_share.drop(e.rep_path))) {
         gl_state_note_texture_deleted(e.gl_tex);
         glDeleteTextures(1, &e.gl_tex);
-        e.gl_tex = 0;
     }
+    e.gl_tex = 0;
+    e.rep_path.clear();
+    e.rep_owner = false;
+}
+
+/// Delete the GL texture of `slot` and drop its byte accounting (LRU victim).
+/// A shared pack texture that outlives the slot keeps its bytes in the budget:
+/// the accounting moves to another slot that shows it. Render thread only.
+static void evict_slot(int slot) {
+    TexCacheEntry& e = g_tex_cache[slot];
+    if (e.rep_owner && g_rep_share.refs(e.rep_path) > 1) {
+        for (int i = 0; i < TEX_CACHE_SIZE; i++) {
+            TexCacheEntry& o = g_tex_cache[i];
+            if (i != slot && o.valid && o.gl_tex == e.gl_tex) {
+                o.rep_owner = true;
+                account_slot(i, e.gl_bytes);
+                break;
+            }
+        }
+    }
+    release_gl_texture(e);
     e.valid = false;
+    e.gl_bytes = 0;
     g_gl_lru.remove(slot);
 }
 
@@ -99,6 +129,28 @@ static int find_or_evict(
         evict_slot(slot);
     }
     return slot;
+}
+
+/// When the pack file this texture resolves to is already on the GPU for
+/// another slot, show that texture in `slot` (no decode, no upload) and
+/// return true. Drops the slot's own original-texture object, if any.
+static bool try_share(int slot, const uint8_t* rdram, const GeState& state,
+                      uint16_t draw_max_v) {
+    std::string path;
+    TexrepFilter filter = TexrepFilter::None;
+    if (!ge_texrep_enabled() || !ge_texrep_resolve(rdram, state, draw_max_v, &path, &filter)) {
+        return false;
+    }
+    const uint32_t tex = g_rep_share.acquire(path);
+    if (tex == 0) return false;
+    TexCacheEntry& e = g_tex_cache[slot];
+    release_gl_texture(e);
+    e.gl_tex = tex;
+    e.rep_path = path;
+    e.forced_filter = static_cast<int>(filter);
+    e.replace_pending = false;
+    account_slot(slot, 0);  // the owner slot accounts the shared bytes
+    return true;
 }
 
 // ---- Sampler ----
@@ -159,18 +211,18 @@ void ge_texture_init() {
     std::fprintf(stderr, "[TEX] Texture cache initialized "
                          "(%d entries)\n", TEX_CACHE_SIZE);
     ge_texrep_init();
+    g_rep_share.clear();
     g_gl_lru.clear();
     g_gl_lru.set_budget(ge_texrep_budget_bytes());
 }
 
 void ge_texture_shutdown() {
     for (auto& e : g_tex_cache) {
-        if (e.gl_tex != 0) {
-            glDeleteTextures(1, &e.gl_tex);
-            e.gl_tex = 0;
-        }
+        release_gl_texture(e);
         e.valid = false;
+        e.gl_bytes = 0;
     }
+    g_rep_share.clear();
     g_gl_lru.clear();
     g_tex_initialized = false;
     gl_state_invalidate();
@@ -182,12 +234,11 @@ void ge_texture_memo_invalidate() { g_hash_memo.invalidate(); }
 void ge_texture_invalidate_all() {
     g_hash_memo.invalidate();
     for (auto& e : g_tex_cache) {
-        if (e.gl_tex != 0) {
-            glDeleteTextures(1, &e.gl_tex);
-            e.gl_tex = 0;
-        }
+        release_gl_texture(e);
         e.valid = false;
+        e.gl_bytes = 0;
     }
+    g_rep_share.clear();
     g_gl_lru.clear();
     gl_state_invalidate();
 }
@@ -295,24 +346,29 @@ GLuint ge_texture_bind(
         // Cache hit
         entry.last_frame = frame_num;
         g_gl_lru.touch(slot);
-        const bool bound = gl_state_bind_texture(entry.gl_tex);
-        if (entry.replace_pending && ge_texrep_epoch() != entry.replace_epoch) {
+        if (entry.replace_pending && ge_texrep_epoch() != entry.replace_epoch
+            && !try_share(slot, rdram, state, draw_max_v)) {
             // A pack image finished decoding since the last try: retry.
             entry.replace_epoch = ge_texrep_epoch();
             GeTexrepImage rep;
             const GeTexrepResult r = ge_texrep_replacement(rdram, state, draw_max_v, &rep);
             if (r == GeTexrepResult::Ready) {
+                gl_state_bind_texture(entry.gl_tex);
                 glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, rep.w, rep.h, 0,
                              GL_RGBA, GL_UNSIGNED_BYTE, rep.rgba);
                 entry.forced_filter = static_cast<int>(rep.filter);
                 ge_texrep_image_uploaded(rep);
+                g_rep_share.adopt(rep.path, entry.gl_tex);
+                entry.rep_path = rep.path;
+                entry.rep_owner = true;
                 // The replacement changed the texture size: re-account and
                 // evict other textures if the budget is now over.
-                g_gl_lru.put(slot, static_cast<size_t>(rep.w) * rep.h * 4);
+                account_slot(slot, static_cast<size_t>(rep.w) * rep.h * 4);
                 trim_gl_budget(frame_num, slot);
             }
             entry.replace_pending = r == GeTexrepResult::Pending;
         }
+        const bool bound = gl_state_bind_texture(entry.gl_tex);
         const bool sampled = apply_sampler(state, entry.forced_filter);
         // Perf: count the binds that reached the driver (the shadow skips
         // repeats), not the GE's bind requests.
@@ -327,22 +383,32 @@ GLuint ge_texture_bind(
     // nothing else changes. Otherwise decode from guest RAM (stride, swizzle
     // and CLUT transform in psp_ge_texdecode.cpp; unsupported formats:
     // magenta placeholder).
+    // A pack file already on the GPU for another slot is shared as is.
     if (perf_enabled()) g_perf.tex_misses.fetch_add(1, std::memory_order_relaxed);
+    const bool shared = try_share(slot, rdram, state, draw_max_v);
     GeTexrepImage rep;
-    const uint64_t epoch = ge_texrep_epoch();
-    const GeTexrepResult r = ge_texrep_enabled()
-        ? ge_texrep_replacement(rdram, state, draw_max_v, &rep) : GeTexrepResult::None;
+    GeTexrepResult r = GeTexrepResult::None;
+    if (!shared) {
+        const uint64_t epoch = ge_texrep_epoch();
+        r = ge_texrep_enabled()
+            ? ge_texrep_replacement(rdram, state, draw_max_v, &rep) : GeTexrepResult::None;
+        entry.replace_pending = r == GeTexrepResult::Pending;
+        entry.replace_epoch = epoch;
+    }
     const bool replaced = r == GeTexrepResult::Ready;
-    entry.replace_pending = r == GeTexrepResult::Pending;
-    entry.replace_epoch = epoch;
     if (entry.gl_tex == 0) {
         glGenTextures(1, &entry.gl_tex);
     }
     const bool bound = gl_state_bind_texture(entry.gl_tex);
-    if (replaced) {
+    if (shared) {
+        // Already uploaded; forced_filter came with the share.
+    } else if (replaced) {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, rep.w, rep.h, 0,
                      GL_RGBA, GL_UNSIGNED_BYTE, rep.rgba);
         ge_texrep_image_uploaded(rep);
+        g_rep_share.adopt(rep.path, entry.gl_tex);
+        entry.rep_path = rep.path;
+        entry.rep_owner = true;
     } else {
         std::vector<uint8_t> rgba;
         if (!ge_decode_texture(rdram, params, rgba)) {
@@ -359,7 +425,7 @@ GLuint ge_texture_bind(
             GL_RGBA, GL_UNSIGNED_BYTE,
             rgba.data());
     }
-    entry.forced_filter = replaced ? static_cast<int>(rep.filter) : 0;
+    if (!shared) entry.forced_filter = replaced ? static_cast<int>(rep.filter) : 0;
     const bool sampled = apply_sampler(state, entry.forced_filter);
 
     // Store entry
@@ -372,12 +438,13 @@ GLuint ge_texture_bind(
     entry.valid = true;
 
     // Account the uploaded RGBA8 and evict least-recently-used cold textures
-    // while over budget (this slot is in use right now, so it is kept).
+    // while over budget (this slot is in use right now, so it is kept). A
+    // shared pack texture is accounted once, by the slot that uploaded it.
     g_gl_lru.remove(slot);
-    const size_t tex_bytes = (replaced
+    const size_t tex_bytes = shared ? 0 : (replaced
         ? static_cast<size_t>(rep.w) * rep.h
         : static_cast<size_t>(width) * height) * 4;
-    g_gl_lru.put(slot, tex_bytes);
+    account_slot(slot, tex_bytes);
     trim_gl_budget(frame_num, slot);
 
     if (perf_enabled() && (bound || sampled)) {
