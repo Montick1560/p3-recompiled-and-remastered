@@ -69,15 +69,6 @@ static inline uint32_t resolve_addr(uint32_t data) {
                                data);
 }
 
-/// Convert 24-bit GE float data to IEEE 754 float.
-/// GE encodes floats as the upper 24 bits of a 32-bit IEEE float.
-static inline float data_to_float(uint32_t data) {
-    uint32_t bits = data << 8;
-    float result;
-    std::memcpy(&result, &bits, sizeof(float));
-    return result;
-}
-
 // -- Atexit summary --
 static void ge_atexit_summary() {
     std::fprintf(stderr,
@@ -475,7 +466,7 @@ GeListResult ge_process_display_list(
             break;
         case GE_CMD_BONEMATRIXDATA:
             if (g_ge_state.bone_mtx_num < 96) {
-                g_ge_state.bone_matrix[g_ge_state.bone_mtx_num] = data_to_float(data);
+                g_ge_state.bone_matrix[g_ge_state.bone_mtx_num] = ge_float24(data);
             }
             g_ge_state.bone_mtx_num = (g_ge_state.bone_mtx_num + 1) & 0x7F;
             break;
@@ -483,7 +474,7 @@ GeListResult ge_process_display_list(
         case GE_CMD_MORPHWEIGHT2: case GE_CMD_MORPHWEIGHT3:
         case GE_CMD_MORPHWEIGHT4: case GE_CMD_MORPHWEIGHT5:
         case GE_CMD_MORPHWEIGHT6: case GE_CMD_MORPHWEIGHT7:
-            g_ge_state.morph_weights[cmd - GE_CMD_MORPHWEIGHT0] = data_to_float(data);
+            g_ge_state.morph_weights[cmd - GE_CMD_MORPHWEIGHT0] = ge_float24(data);
             break;
         case GE_CMD_WORLDMATRIXNUMBER:
             g_ge_state.world_mtx_num = data & 0xF;
@@ -492,7 +483,7 @@ GeListResult ge_process_display_list(
             if (g_ge_state.world_mtx_num < 12) {
                 g_ge_state.world_matrix[
                     g_ge_state.world_mtx_num++] =
-                    data_to_float(data);
+                    ge_float24(data);
             }
             break;
 
@@ -503,7 +494,7 @@ GeListResult ge_process_display_list(
             if (g_ge_state.view_mtx_num < 12) {
                 g_ge_state.view_matrix[
                     g_ge_state.view_mtx_num++] =
-                    data_to_float(data);
+                    ge_float24(data);
             }
             break;
 
@@ -514,7 +505,7 @@ GeListResult ge_process_display_list(
             if (g_ge_state.proj_mtx_num < 16) {
                 g_ge_state.proj_matrix[
                     g_ge_state.proj_mtx_num++] =
-                    data_to_float(data);
+                    ge_float24(data);
             }
             break;
 
@@ -525,41 +516,41 @@ GeListResult ge_process_display_list(
             if (g_ge_state.tgen_mtx_num < 12) {
                 g_ge_state.tgen_matrix[
                     g_ge_state.tgen_mtx_num++] =
-                    data_to_float(data);
+                    ge_float24(data);
             }
             break;
 
         // ---- Viewport ----
         case GE_CMD_VIEWPORTXSCALE:
-            g_ge_state.viewport_x_scale = data_to_float(data);
+            g_ge_state.viewport_x_scale = ge_float24(data);
             break;
         case GE_CMD_VIEWPORTYSCALE:
-            g_ge_state.viewport_y_scale = data_to_float(data);
+            g_ge_state.viewport_y_scale = ge_float24(data);
             break;
         case GE_CMD_VIEWPORTZSCALE:
-            g_ge_state.viewport_z_scale = data_to_float(data);
+            g_ge_state.viewport_z_scale = ge_float24(data);
             break;
         case GE_CMD_VIEWPORTXCENTER:
-            g_ge_state.viewport_x_center = data_to_float(data);
+            g_ge_state.viewport_x_center = ge_float24(data);
             break;
         case GE_CMD_VIEWPORTYCENTER:
-            g_ge_state.viewport_y_center = data_to_float(data);
+            g_ge_state.viewport_y_center = ge_float24(data);
             break;
         case GE_CMD_VIEWPORTZCENTER:
-            g_ge_state.viewport_z_center = data_to_float(data);
+            g_ge_state.viewport_z_center = ge_float24(data);
             break;
 
         case GE_CMD_TEXSCALEU:
-            g_ge_state.tex_scale_u = data_to_float(data);
+            g_ge_state.tex_scale_u = ge_float24(data);
             break;
         case GE_CMD_TEXSCALEV:
-            g_ge_state.tex_scale_v = data_to_float(data);
+            g_ge_state.tex_scale_v = ge_float24(data);
             break;
         case GE_CMD_TEXOFFSETU:
-            g_ge_state.tex_offset_u = data_to_float(data);
+            g_ge_state.tex_offset_u = ge_float24(data);
             break;
         case GE_CMD_TEXOFFSETV:
-            g_ge_state.tex_offset_v = data_to_float(data);
+            g_ge_state.tex_offset_v = ge_float24(data);
             break;
 
         case GE_CMD_OFFSETX:
@@ -752,7 +743,7 @@ GeListResult ge_process_display_list(
             g_ge_state.material_specular = data;
             break;
         case GE_CMD_MATERIALSPECULARCOEF:
-            g_ge_state.material_specular_coef = data_to_float(data);
+            g_ge_state.material_specular_coef = ge_float24(data);
             break;
         case GE_CMD_MATERIALUPDATE:
             g_ge_state.material_update = data;
@@ -894,7 +885,7 @@ GeListResult ge_process_display_list(
         case GE_CMD_LX2: case GE_CMD_LY2: case GE_CMD_LZ2:
         case GE_CMD_LX3: case GE_CMD_LY3: case GE_CMD_LZ3: {
             const int i = cmd - GE_CMD_LX0;
-            g_ge_state.light_pos[i / 3][i % 3] = data_to_float(data);
+            g_ge_state.light_pos[i / 3][i % 3] = ge_float24(data);
             break;
         }
 
@@ -903,7 +894,7 @@ GeListResult ge_process_display_list(
         case GE_CMD_LDX2: case GE_CMD_LDY2: case GE_CMD_LDZ2:
         case GE_CMD_LDX3: case GE_CMD_LDY3: case GE_CMD_LDZ3: {
             const int i = cmd - GE_CMD_LDX0;
-            g_ge_state.light_dir[i / 3][i % 3] = data_to_float(data);
+            g_ge_state.light_dir[i / 3][i % 3] = ge_float24(data);
             break;
         }
 
@@ -912,20 +903,20 @@ GeListResult ge_process_display_list(
         case GE_CMD_LKA2: case GE_CMD_LKB2: case GE_CMD_LKC2:
         case GE_CMD_LKA3: case GE_CMD_LKB3: case GE_CMD_LKC3: {
             const int i = cmd - GE_CMD_LKA0;
-            g_ge_state.light_att[i / 3][i % 3] = data_to_float(data);
+            g_ge_state.light_att[i / 3][i % 3] = ge_float24(data);
             break;
         }
 
         case GE_CMD_LKS0: case GE_CMD_LKS1:
         case GE_CMD_LKS2: case GE_CMD_LKS3:
             g_ge_state.light_spot_exp[cmd - GE_CMD_LKS0] =
-                data_to_float(data);
+                ge_float24(data);
             break;
 
         case GE_CMD_LKO0: case GE_CMD_LKO1:
         case GE_CMD_LKO2: case GE_CMD_LKO3:
             g_ge_state.light_spot_cutoff[cmd - GE_CMD_LKO0] =
-                data_to_float(data);
+                ge_float24(data);
             break;
 
         case GE_CMD_LAC0: case GE_CMD_LDC0: case GE_CMD_LSC0:
