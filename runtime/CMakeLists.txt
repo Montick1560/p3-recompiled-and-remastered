@@ -659,6 +659,12 @@ target_include_directories(test_ge_stencil PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/i
 target_compile_options(test_ge_stencil PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME ge_stencil_tests COMMAND test_ge_stencil)
 
+# GE fog helpers (float24 coefs, factor, colour; PPSSPP semantics). Header-only.
+add_executable(test_ge_fog tests/test_ge_fog.cpp)
+target_include_directories(test_ge_fog PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_ge_fog PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME ge_fog_tests COMMAND test_ge_fog)
+
 # PSPRECOMP_PATCHES parsing (opt-in patch sets). Header-only.
 add_executable(test_patch_sets tests/test_patch_sets.cpp)
 target_include_directories(test_patch_sets PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
