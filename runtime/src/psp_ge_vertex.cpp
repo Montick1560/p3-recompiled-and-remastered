@@ -278,7 +278,7 @@ void ge_decode_vertices(
         }
     };
 
-    out.resize(count);
+    out.assign(count, DecodedVertex{});
     for (int i = 0; i < count; i++) {
         DecodedVertex& v = out[i];
         v.has_uv = (tc_type != GE_VTYPE_TC_NONE);

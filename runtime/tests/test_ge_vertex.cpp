@@ -862,6 +862,40 @@ static void test_through_s16_z_unsigned() {
     std::free(ram);
 }
 
+// A reused output vector must not leak the previous draw's vertices: resize()
+// kept their fields, and fog is only written when fog is on, so a through draw
+// decoded into it inherited the old fog factor.
+static void test_decode_resets_reused_vector() {
+    const size_t kRam = 0x08000000u;
+    uint8_t* ram = static_cast<uint8_t*>(std::calloc(kRam, 1));
+    const uint32_t vaddr = 0x08800000u;
+    const uint16_t p[3] = {0xFFF0u, 10u, 0xFFFFu};
+    std::memcpy(ram + (vaddr & 0x07FFFFFFu), p, sizeof(p));
+    GeState s;
+    s.reset();
+    s.vertex_type = 0x00800100u;  // through, s16 position
+    s.vertex_addr = vaddr;
+    std::vector<DecodedVertex> out(2);
+    for (DecodedVertex& v : out) {
+        v.fog = 0.25f;
+        v.has_uv = true;
+    }
+    ge_decode_vertices(ram, s, 0, 1, out);
+    tests_run++;
+    if (out.size() != 1) {
+        std::fprintf(stderr, "FAIL: reused vector: decoded %zu vertices\n", out.size());
+        failures++;
+    } else {
+        ASSERT_NEAR(out[0].fog, 1.0f, "reused vector fog reset");
+        tests_run++;
+        if (out[0].has_uv) {
+            std::fprintf(stderr, "FAIL: reused vector kept has_uv\n");
+            failures++;
+        }
+    }
+    std::free(ram);
+}
+
 // Through-mode u16 texture coordinates are raw texel units, unsigned (PPSSPP
 // Step_TcU16ThroughToFloat). Patapon 3's mission command list ("Avanzar: ...")
 // is a 126-vertex sprite run with vtype 0x800102 and u,v = 65,22 for its first
@@ -906,6 +940,7 @@ int main() {
     test_tiny_prim_no_overtrigger();
     test_zero_scale_without_fallback_collapses();
     test_through_s16_z_unsigned();
+    test_decode_resets_reused_vector();
     test_through_u16_uv_raw_texels();
     test_rect_expand_divides_by_w();
     test_rect_expand_drops_nonpositive_w();
