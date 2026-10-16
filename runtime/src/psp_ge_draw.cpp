@@ -19,6 +19,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <mutex>
 #include <vector>
 #include <cstdio>
@@ -102,6 +103,9 @@ struct PackedVertex {
 };
 static_assert(sizeof(PackedVertex) == 32,
               "PackedVertex must be 32 bytes");
+static_assert(offsetof(PackedVertex, uv) == 16 && offsetof(PackedVertex, color) == 24 &&
+                  offsetof(PackedVertex, fog) == 28,
+              "PackedVertex layout must match the shader attributes");
 
 // PSP render-target dimensions. The runtime renders into an FBO of PSP size
 // x render scale; window upscaling happens later at present (blit). The PSP
@@ -404,32 +408,32 @@ void ge_draw_init() {
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
 
     // Vertex attributes for PackedVertex layout
-    // location 0: position (4 floats, offset 0)
+    // location 0: position (4 floats)
     glVertexAttribPointer(
         0, 4, GL_FLOAT, GL_FALSE,
         sizeof(PackedVertex),
-        reinterpret_cast<void*>(0));
+        reinterpret_cast<void*>(offsetof(PackedVertex, pos)));
     glEnableVertexAttribArray(0);
 
-    // location 1: texcoord (2 floats, offset 16)
+    // location 1: texcoord (2 floats)
     glVertexAttribPointer(
         1, 2, GL_FLOAT, GL_FALSE,
         sizeof(PackedVertex),
-        reinterpret_cast<void*>(16));
+        reinterpret_cast<void*>(offsetof(PackedVertex, uv)));
     glEnableVertexAttribArray(1);
 
-    // location 2: color (4 bytes normalized, offset 24)
+    // location 2: color (4 bytes normalized)
     glVertexAttribPointer(
         2, 4, GL_UNSIGNED_BYTE, GL_TRUE,
         sizeof(PackedVertex),
-        reinterpret_cast<void*>(24));
+        reinterpret_cast<void*>(offsetof(PackedVertex, color)));
     glEnableVertexAttribArray(2);
 
-    // location 3: fog factor (1 float, offset 28)
+    // location 3: fog factor (1 float)
     glVertexAttribPointer(
         3, 1, GL_FLOAT, GL_FALSE,
         sizeof(PackedVertex),
-        reinterpret_cast<void*>(28));
+        reinterpret_cast<void*>(offsetof(PackedVertex, fog)));
     glEnableVertexAttribArray(3);
 
     glBindVertexArray(0);
