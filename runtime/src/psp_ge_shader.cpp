@@ -1,6 +1,7 @@
 #include "psp_ge_shader.h"
 #include "psp_ge.h"
 #include "psp_ge_constants.h"
+#include "psp_ge_fog.h"
 #include "psp_gl_state.h"
 
 #include <glad/glad.h>
@@ -14,9 +15,11 @@ static const char* const k_vertex_shader_src = R"GLSL(
 layout(location = 0) in vec4 a_position;
 layout(location = 1) in vec2 a_texcoord;
 layout(location = 2) in vec4 a_color;
+layout(location = 3) in float a_fog;
 
 out vec2 v_texcoord;
 out vec4 v_color;
+out float v_fog;
 
 void main() {
     // CPU sends clip-space (x,y,z,w) in transform mode (GL's own
@@ -26,6 +29,7 @@ void main() {
     gl_Position = a_position;
     v_texcoord = a_texcoord;
     v_color = a_color;
+    v_fog = a_fog;
 }
 )GLSL";
 
@@ -34,6 +38,7 @@ static const char* const k_fragment_shader_src = R"GLSL(
 
 in vec2 v_texcoord;
 in vec4 v_color;
+in float v_fog;
 
 uniform bool u_texture_enable;
 uniform sampler2D u_texture;
@@ -47,6 +52,8 @@ uniform int u_alpha_test_func;
 uniform int u_src1_rgb;
 uniform int u_src1_a;
 uniform vec3 u_fix_a;
+uniform bool u_fog_enable;
+uniform vec3 u_fog_color;
 
 layout(location = 0, index = 0) out vec4 frag_color;
 layout(location = 0, index = 1) out vec4 frag_color1;
@@ -81,6 +88,12 @@ void main() {
             color.rgb *= 2.0;
         }
         color = clamp(color, 0.0, 1.0);
+    }
+
+    // Fog (PPSSPP FragmentShaderGenerator.cpp:866): after the texture function and doubling,
+    // before the alpha test. 1 = no fog, 0 = only the fog colour.
+    if (u_fog_enable) {
+        color.rgb = mix(u_fog_color, color.rgb, clamp(v_fog, 0.0, 1.0));
     }
 
     // Alpha test
@@ -223,6 +236,8 @@ void ge_shader_init() {
             glGetUniformLocation(g_program, "u_src1_a");
         g_uniforms.u_fix_a =
             glGetUniformLocation(g_program, "u_fix_a");
+        g_uniforms.u_fog_enable = glGetUniformLocation(g_program, "u_fog_enable");
+        g_uniforms.u_fog_color = glGetUniformLocation(g_program, "u_fog_color");
 
         std::fprintf(stderr,
             "[SHADER] Uber-shader compiled and linked "
@@ -268,6 +283,15 @@ void ge_shader_set_uniforms(const GeState& state) {
         float ref = ref_byte / 255.0f;
         gl_state_uniform1f(g_uniforms.u_alpha_test_ref, ref);
         gl_state_uniform1i(g_uniforms.u_alpha_test_func, func);
+    }
+
+    // Fog: transformed draws only (PPSSPP ShaderId.cpp:326).
+    const bool fog_on = ge_fog_active(state.fog_enable, ge_vtype_through(state.vertex_type));
+    gl_state_uniform1i(g_uniforms.u_fog_enable, fog_on ? 1 : 0);
+    if (fog_on) {
+        float fc[3];
+        ge_fog_color_rgb(state.fog_color, fc);
+        gl_state_uniform3f(g_uniforms.u_fog_color, fc[0], fc[1], fc[2]);
     }
 }
 

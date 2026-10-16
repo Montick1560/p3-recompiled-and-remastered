@@ -92,15 +92,16 @@ enum SsReqState { SS_IDLE = 0, SS_PENDING = 1, SS_DONE = 2, SS_FAILED = 3 };
 static int g_ss_req_state = SS_IDLE;
 
 // ---- Packed vertex for VBO upload ----
-// Layout: 4 floats (clip pos) + 2 floats (uv) + 4 bytes (color)
-// Total: 16 + 8 + 4 = 28 bytes
+// Layout: 4 floats (clip pos) + 2 floats (uv) + 4 bytes (color) + 1 float (fog factor)
+// Total: 16 + 8 + 4 + 4 = 32 bytes
 struct PackedVertex {
     float pos[4];   // Clip-space (x,y,z,w); GL does the perspective divide
     float uv[2];
     uint8_t color[4];
+    float fog;      // GE fog factor, unclamped (1 = none); the fragment shader clamps
 };
-static_assert(sizeof(PackedVertex) == 28,
-              "PackedVertex must be 28 bytes");
+static_assert(sizeof(PackedVertex) == 32,
+              "PackedVertex must be 32 bytes");
 
 // PSP render-target dimensions. The runtime renders into an FBO of PSP size
 // x render scale; window upscaling happens later at present (blit). The PSP
@@ -423,6 +424,13 @@ void ge_draw_init() {
         sizeof(PackedVertex),
         reinterpret_cast<void*>(24));
     glEnableVertexAttribArray(2);
+
+    // location 3: fog factor (1 float, offset 28)
+    glVertexAttribPointer(
+        3, 1, GL_FLOAT, GL_FALSE,
+        sizeof(PackedVertex),
+        reinterpret_cast<void*>(28));
+    glEnableVertexAttribArray(3);
 
     glBindVertexArray(0);
 
@@ -922,7 +930,8 @@ void ge_draw_prim(
                     {v.pos[0], v.pos[1], v.pos[2], v.w},
                     {v.uv[0], v.uv[1]},
                     {v.color[0], v.color[1],
-                     v.color[2], v.color[3]}
+                     v.color[2], v.color[3]},
+                    v.fog
                 });
             }
         }
@@ -935,7 +944,8 @@ void ge_draw_prim(
                 {v.pos[0], v.pos[1], v.pos[2], v.w},
                 {v.uv[0], v.uv[1]},
                 {v.color[0], v.color[1],
-                 v.color[2], v.color[3]}
+                 v.color[2], v.color[3]},
+                v.fog
             };
         }
     }

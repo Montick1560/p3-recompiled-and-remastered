@@ -16,6 +16,8 @@ struct ShaderUniforms {
     GLint u_src1_rgb;
     GLint u_src1_a;
     GLint u_fix_a;
+    GLint u_fog_enable;
+    GLint u_fog_color;
 };
 
 /// Compile and link the uber-shader pair. Call after GL init.

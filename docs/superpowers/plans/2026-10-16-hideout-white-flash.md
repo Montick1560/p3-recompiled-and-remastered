@@ -733,3 +733,27 @@ return to the hideout. No push until they confirm, and the push leaves out `f639
   (`perf_hideout`), so no visible cost is expected. Measure, do not assume.
 - **Rectangles.** Sprites are rectangles in transform mode and go through `ge_expand_rectangle`;
   missing the fog there would leave exactly the Patapon parts unfogged (Review Focus 3).
+
+## Evidence (2026-10-16, Tasks 2-4 done)
+
+- **Finding:** GE fog (see "Task 1 finding"); the white silhouettes are at the end of every mission,
+  just before MISIÓN COMPLETADA.
+- **White frames, after the fix:** `build/tour/white/after/white{0,1,2}_rt.png` (same hook as Task 1):
+  the Patapons, Hero, flag and signpost are white like PPSSPP; before the fix only the signpost's
+  red mouth showed. Side by side: `build/tour/white/comparacion.png` (before / after / PPSSPP).
+- **Scale 4 + HD pack** (`PSPRECOMP_RENDER_SCALE=4`, `TOUR_TEXTURES=<pack>`):
+  `build/tour/white/hd/white*.png` (1920x1088): the replaced signpost texture turns white and fades
+  back, as on PPSSPP (fog runs after the texture sample). In that run the camera sat further left
+  and the army had already walked out of frame.
+- **ctest:** 70/70 (69 + `ge_fog_tests`; `test_ge_vertex` 197/197 with the 5 new fog cases).
+- **rt_regress** `relevo_base` vs `fog_after` (RTC fixed): PASS, all 21 gated checkpoints 0.00 %
+  struct. Info-only mission points move as usual (random tips, reward rolls, beat timing).
+- **gfx_score** `fog_after` vs `relevo_base_pp`: hideout/menu checkpoints equal (±0.1). Mission
+  points that moved (`21_loading_tip` other random tip, `23`/`24`/`26` wind streaks and animation
+  phase, `31_after_reward` other reward item) were checked by eye: none is a fog difference.
+  `build/tour/white/gfx_score_compare.txt`, `worse_sheet.png`.
+- **perf_hideout** interleaved A/B (`psprecomp_runtime_prefog.exe` = 417eb98 vs fog):
+  30.0 fps both, draws 1422 both, ge_ms/frame 4.2 -> 4.15 and 4.3 -> 4.1: no change above noise.
+- Tools (outside the repo): `gelist.py` prints fog/colour test/logic op/lighting/texfunc/blend
+  fixed registers per PRIM; `p3drive.py` takes `P3DRIVE_EXE` (A/B exe); `gfx_tour.py` takes
+  `TOUR_TEXTURES` and downsizes runtime frames to 480x272 when the render scale is > 1.

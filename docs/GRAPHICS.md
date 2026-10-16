@@ -68,6 +68,7 @@ Key files:
 | `runtime/include/psp_ge_blend.h` | PSP blend factor/equation -> GL blend mapping (pure) |
 | `runtime/include/psp_ge_mask.h` | `MASKRGB`/`MASKALPHA` -> per-channel color write enables (pure) |
 | `runtime/include/psp_ge_stencil.h` | `STENCILTEST`/`STENCILOP`/`MASKALPHA` + framebuffer format -> stencil func/ops/write mask, clear-mode stencil (pure, PPSSPP `ConvertStencilFuncState` port) |
+| `runtime/include/psp_ge_fog.h` | `FOG1`/`FOG2` float24 coefficients (non-finite -> +-65535), fog factor, `FOGCOLOR` -> RGB, through-mode gate (pure, PPSSPP `UpdateFogCoef` / shader semantics) |
 
 ## Display-List Interpretation
 
@@ -408,7 +409,8 @@ and render targets are never replaced. Without `PSPRECOMP_TEXTURES` no thread st
 | `SCISSOR1` / `SCISSOR2` | `glEnable(GL_SCISSOR_TEST)` + `glScissor` | inclusive `x1,y1` / `x2,y2` (10 bits each, top-left origin, y flipped for GL); applies to clears too; all-zero disables scissor |
 | `MASKRGB` / `MASKALPHA` | `glColorMask` | `ge_color_write_mask` (`psp_ge_mask.h`) derives per-channel writes (a set GE bit means "do not write") |
 | `STENCILTESTENABLE` + `STENCILTEST` + `STENCILOP` | `glEnable(GL_STENCIL_TEST)` + `glStencilFunc` / `glStencilOp` / `glStencilMask` | `ge_stencil_state` (`psp_ge_stencil.h`): write mask = `~MASKALPHA`; RGB-masked REPLACE-only draws test ALWAYS; 565 never writes; 5551 (one stencil bit) rewrites the compare for a buffer holding only 0x00/0xFF, as PPSSPP |
-| Region, color test, logic op, dither, MINZ/MAXZ, fog | none | registers tracked (or ignored); no GL calls are emitted |
+| `FOGENABLE` + `FOG1` / `FOG2` + `FOGCOLOR` | vertex attribute `a_fog` + `u_fog_enable` / `u_fog_color` | `ge_transform_vertices` sets `fog = (view z + FOG1) * FOG2` per transformed vertex (PPSSPP `VertexShaderGenerator.cpp`); rectangles take the bottom-right vertex's factor; the fragment shader does `rgb = mix(FOGCOLOR, rgb, clamp(fog, 0, 1))` after the texture function, before the alpha test; through-mode draws and the NDC-direct fallback are never fogged. Patapon 3 uses it for the white silhouettes at the end of a mission (FOGCOLOR white, factor <= 0) |
+| Region, color test, logic op, dither, MINZ/MAXZ | none | registers tracked (or ignored); no GL calls are emitted |
 
 ### Clear mode
 
@@ -586,7 +588,6 @@ consequence of each. "Tracked" means the register value is stored in `GeState`.
 | Region (`REGION1`/`REGION2`) | tracked, never applied | region clipping missing (scissor *is* applied) |
 | Color test, logic op, dither | ignored | corresponding per-fragment effects missing |
 | `MINZ`/`MAXZ` (depth-range clamp) | stored; active depth range derived from viewport Z (PPSSPP non-accurate-depth path) | per-fragment depth clamp not applied |
-| Fog (`FOG1`/`FOG2` ignored; `FOGCOLOR` stored) | no shader fog | fogged scenes render unfogged |
 | `DOUBLE_DST_ALPHA` blend factors (8/9), `ABSDIFF` blend op | approximated in `ge_blend_setup` (non-doubled `GL_DST_ALPHA`; `GL_FUNC_ADD`) | subtle blending differences vs. hardware |
 | Clear-mode rectangle extent | full-buffer `glClear` (only `SCISSOR1`/`SCISSOR2` crops it) | partial clears clear the whole screen |
 | `sceGeGetCmd` | returns 0 | games introspecting GE state get nothing |
