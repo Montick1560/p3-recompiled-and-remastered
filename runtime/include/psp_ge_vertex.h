@@ -9,6 +9,7 @@
 struct DecodedVertex {
     float pos[3];       // Position (x, y, z)
     float w = 1.0f;     // Clip-space w (1.0 = already NDC/screen-space)
+    float fog = 1.0f;   // GE fog factor (view z + FOG1) * FOG2, unclamped; 1 = no fog
     float uv[2];        // Texture coordinates (u, v)
     uint8_t color[4];   // RGBA color
     float normal[3];    // Normal vector

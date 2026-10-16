@@ -758,6 +758,63 @@ static void test_fixed_point_positions_scaled_in_transform_mode() {
     std::free(ram);
 }
 
+// Fog: (view z + FOG1) * FOG2 per transformed vertex (PPSSPP VertexShaderGenerator.cpp:904);
+// fog off, through mode and the NDC fallback stay at 1.
+static void test_transform_fills_fog_factor() {
+    GeState s = make_perspective_state();
+    s.fog_enable = true;
+    s.fog1 = 10.0f;
+    s.fog2 = 0.5f;
+    std::vector<DecodedVertex> verts = {make_pos_vertex(0.0f, 0.0f, -10.0f)};   // view z = -10
+    ge_transform_vertices(verts, s);
+    ASSERT_NEAR(verts[0].fog, 0.0f, "fog: (-10 + 10) * 0.5");
+    std::vector<DecodedVertex> near_v = {make_pos_vertex(0.0f, 0.0f, -2.0f)};
+    ge_transform_vertices(near_v, s);
+    ASSERT_NEAR(near_v[0].fog, 4.0f, "fog: (-2 + 10) * 0.5, unclamped");
+}
+static void test_fog_off_leaves_factor_one() {
+    GeState s = make_perspective_state();
+    s.fog_enable = false; s.fog1 = 10.0f; s.fog2 = 0.5f;
+    std::vector<DecodedVertex> verts = {make_pos_vertex(0.0f, 0.0f, -10.0f)};
+    ge_transform_vertices(verts, s);
+    ASSERT_NEAR(verts[0].fog, 1.0f, "fog off: factor 1");
+}
+static void test_fog_inactive_through() {
+    GeState s = make_through_state(false);
+    s.fog_enable = true; s.fog1 = 10.0f; s.fog2 = 0.5f;
+    std::vector<DecodedVertex> verts = {make_pos_vertex(10.0f, 10.0f, 0.0f)};
+    ge_transform_vertices(verts, s);
+    ASSERT_NEAR(verts[0].fog, 1.0f, "through mode: never fogged");
+}
+// PPSSPP ExpandRectangles (SoftwareTransformCommon.cpp) starts every corner from the
+// bottom-right vertex, so the whole rectangle takes v1's fog.
+static void test_rect_expand_keeps_fog() {
+    DecodedVertex v0 = make_pos_vertex(-0.5f, 0.5f, -1.0f);
+    DecodedVertex v1 = make_pos_vertex(0.5f, -0.5f, -1.0f);
+    v0.w = 1.0f; v1.w = 1.0f;
+    v0.fog = 0.25f; v1.fog = 0.75f;
+    DecodedVertex out[6];
+    tests_run++;
+    if (!ge_expand_rectangle(v0, v1, out)) {
+        std::fprintf(stderr, "FAIL: rect fog: expansion dropped the rectangle\n");
+        failures++;
+        return;
+    }
+    for (int k = 0; k < 6; k++) ASSERT_NEAR(out[k].fog, 0.75f, "rect: every corner takes v1 fog");
+}
+// The NDC-direct path only runs with a game-installed fallback (an all-zero view without one
+// takes the real transform), so install the sentinel for this case.
+static void test_fallback_path_has_no_fog() {
+    ge_vertex_set_degenerate_fallback(sentinel_fallback);
+    GeState s = make_perspective_state();
+    for (float& m : s.view_matrix) m = 0.0f;   // all-zero view -> NDC-direct fallback
+    s.fog_enable = true; s.fog1 = 10.0f; s.fog2 = 0.5f;
+    std::vector<DecodedVertex> verts = {make_pos_vertex(0.0f, 0.0f, -10.0f)};
+    ge_transform_vertices(verts, s);
+    ASSERT_NEAR(verts[0].fog, 1.0f, "NDC fallback: no fog");
+    ge_vertex_set_degenerate_fallback(nullptr);
+}
+
 // A game hides an object by scaling it to zero (Patapon 3 hero-attack burst:
 // view rotation all zero, translation set). Without a game-installed
 // degenerate fallback the real transform must run (PPSSPP): every vertex
@@ -864,6 +921,11 @@ int main() {
     test_skinning_blends_bone_matrices();
     test_morph_blends_targets();
     test_fixed_point_positions_scaled_in_transform_mode();
+    test_transform_fills_fog_factor();
+    test_fog_off_leaves_factor_one();
+    test_fog_inactive_through();
+    test_rect_expand_keeps_fog();
+    test_fallback_path_has_no_fog();
 
     if (failures == 0) {
         std::printf("test_ge_vertex: %d/%d PASS\n", tests_run, tests_run);

@@ -136,6 +136,8 @@ struct GeState {
     // -- Fog --
     bool fog_enable;
     uint32_t fog_color;
+    float fog1;   // GE_CMD_FOG1 fog end (float24, non-finite -> +-65535; ge_fog_coef)
+    float fog2;   // GE_CMD_FOG2 fog slope
 
     // -- Log-once tracking --
     bool cmd_warned[256];     // One flag per command ID

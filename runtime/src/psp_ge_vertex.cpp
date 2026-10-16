@@ -1,6 +1,7 @@
 #include "psp_ge_vertex.h"
 #include "psp_ge.h"
 #include "psp_ge_constants.h"
+#include "psp_ge_fog.h"
 #include "psp_ge_lighting.h"
 #include "recomp.h"
 
@@ -678,6 +679,8 @@ void ge_transform_vertices(
             !view_zero && !proj_bad && ge_mvp_collapses(state, verts);
         bool ndc_direct = view_zero || proj_bad || mvp_collapsed;
 
+        const bool fog_on = ge_fog_active(state.fog_enable, through);
+
         GeLightingState light_state;
         const bool do_lighting = state.lighting_enable;
         if (do_lighting) ge_build_lighting_state(state, light_state);
@@ -727,6 +730,8 @@ void ge_transform_vertices(
                 v.pos[1] = clip[1];
                 v.pos[2] = clip[2];
                 v.w = clip[3];
+                // Fog from the view-space z (PPSSPP VertexShaderGenerator.cpp:904).
+                if (fog_on) v.fog = ge_fog_factor(vpos[2], state.fog1, state.fog2);
                 // Range culling like the hardware (PPSSPP sets the vertex
                 // to NaN so GL drops every primitive that uses it).
                 if (ge_vertex_range_culled(state, clip)) {
@@ -788,6 +793,9 @@ bool ge_expand_rectangle(
     }
     a.w = 1.0f;
     b.w = 1.0f;
+    // Fog is flat across a rectangle: PPSSPP builds every corner from the bottom-right
+    // vertex (SoftwareTransformCommon.cpp ExpandRectangles).
+    a.fog = v1.fog;
 
     // 4 corners from the 2 diagonal vertices (same mixing as the
     // historical expansion: z from v0 except the pure-v1 corner).

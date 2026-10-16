@@ -6,6 +6,7 @@
 #include "psp_texrep.h"
 #include "psp_ge_vertex.h"
 #include "psp_ge_constants.h"
+#include "psp_ge_fog.h"
 #include "psp_ge_draw.h"
 #include "psp_ge_transfer.h"
 #include "psp_ge_texture.h"
@@ -768,8 +769,11 @@ GeListResult ge_process_display_list(
             g_ge_state.fog_color = data;
             break;
         case GE_CMD_FOG1:
+            g_ge_state.fog1 = ge_fog_coef(data);
+            break;
         case GE_CMD_FOG2:
-            break;  // Store if needed later
+            g_ge_state.fog2 = ge_fog_coef(data);
+            break;
 
         // ---- Region / scissor ----
         case GE_CMD_REGION1:
