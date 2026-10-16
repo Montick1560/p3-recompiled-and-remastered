@@ -664,6 +664,12 @@ target_include_directories(test_patch_sets PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/i
 target_compile_options(test_patch_sets PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME patch_sets_tests COMMAND test_patch_sets)
 
+# Pose blending for smooth animation (two whole-frame samples). Header-only.
+add_executable(test_anim_blend tests/test_anim_blend.cpp)
+target_include_directories(test_anim_blend PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_anim_blend PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME anim_blend_tests COMMAND test_anim_blend)
+
 add_executable(test_wheel tests/test_wheel.cpp src/psp_wheel.cpp)
 target_include_directories(test_wheel PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_wheel PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
