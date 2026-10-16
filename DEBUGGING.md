@@ -418,6 +418,8 @@ names `gelist.py` prints; `f1`/`f2` are the decoded coefficients, a non-finite r
 +-65535), and each logged vertex with its fog factor `fog=` (1 = no fog, <= 0 = all fog colour).
 The end-of-mission white silhouettes show as `fog=1 f1=1 f2=9.99976 fc=0xFFFFFF` (the game writes
 FOG2 = 0x411FFF, the float24 just below 10) with vertex factors far below 0.
+After the fog state, `cull=<enable>/<face>` is GE_CMD_CULLFACEENABLE / GE_CMD_CULL (0 = CW,
+1 = CCW) as the game set them.
 
 ### `PSPRECOMP_HW_WATCH` (Windows hardware write watch)
 

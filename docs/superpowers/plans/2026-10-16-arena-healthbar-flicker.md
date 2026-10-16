@@ -338,3 +338,48 @@ format as Task 2 (failing test first, built from the logged values), and execute
    `PSPRECOMP_BANK_DIRS`, `PSPRECOMP_FFMPEG_DIR`, `PSPRECOMP_OUTPUT_DIR` as in `build/rtw/CMakeCache.txt`
    (no `PSPRECOMP_ICON`). `ctest` there: one fewer than local (no icon test).
 5. `git push p3 push-p3-N:main`, then `git worktree remove .claude/worktrees/wt-push-N`.
+
+## Task 1 findings (2026-10-16, Opus 5.5)
+
+- **Route** (`build/tools/gfx_arena.json`, save copy `build/save_arena`): hideout `R,R` → obelisk,
+  `X` → world map (opens on "Campo de los Gigantes Iracundos"), `R` → "Arena del Valor", `X` →
+  mission list (first entry "Campos de pruebas y luna creciente"), `X` → Cuartel, `START`, `U,X` →
+  loading tip, `X` → arena, eight `X` through the dialogue, then `PPPO----` x4 marches into the fight.
+- **The bars** are the HUD strip at the top (unit icons with a green HP fill), not bars over the
+  units on the field. Each bar is three through-mode sprites: a textured frame (`vt=0x800102`,
+  `ta=0x001424C0`), the green fill and a textured overlay. The fill is
+  `prim=6 n=2 vt=0x800180 thr=1 tex=0 lit=0 mat=0x00B229/FF` (ally) or `mat=0x008E20/CC` (enemy):
+  **float positions, no colour (material ambient), no texture coordinates**, `zt=0`, `cull=0/0`.
+- **Counts** (40 frames back to back, green HUD pixels): PPSSPP 240-245 on 40/40 frames; runtime
+  0-213, at ≥ 90 % of its max on only 10/40 frames (two frames with no green at all).
+- **Culling ruled out:** every bar PRIM has `cull=0/0` (the game disables culling for its HUD).
+- **Cause:** the green fill's vertices carry garbage z. Over 20 logged lists the fills printed NDC
+  z = 0 most of the time, but in 11 of 20 lists one to four fills printed z far outside [-1, 1]
+  (`-2.25e+15`, `5.37e+08`, `1.35e+08`, `128`, `-8`, ...); the game writes only x and y of these
+  12-byte float vertices. The runtime decodes a through-mode float z as is and divides it by 65535,
+  so GL's near/far clipping drops the sprite whenever the leftover memory is out of range. PPSSPP
+  clamps it in the decoder (`GPU/Common/VertexDecoderCommon.cpp:905` `Step_PosFloatThrough`:
+  "Depth is an integer in through mode: truncate, and clamp to 16 bits (NaN becomes 0)",
+  `v[2] = z >= 65535 ? 65535 : (z > 0 ? (int)z : 0)`), so its bars are drawn every frame.
+- **Branch: B**, check 4 (vertices clipped). Not fixed here: PPSSPP's `Step_PosS8Through` decodes
+  8-bit through positions as all zero; the runtime reads them. No evidence it matters for P3.
+
+### Task 2B: truncate and clamp through-mode float depth (TDD)
+
+**Files:**
+- Modify: `runtime/tests/test_ge_vertex.cpp` (new `test_through_float_z_clamped`, wired in `main`)
+- Modify: `runtime/src/psp_ge_vertex.cpp` (`read_pos`, the `GE_VTYPE_POS_FLOAT` branch)
+
+- [ ] **Step 1: Failing test.** Five through float vertices (`vertex_type = 0x00800180`, stride 12)
+  with z = -1.4757e20 (the logged bar), 3.52e13, NaN, 1234.75 and 65535.5, x/y = 100/37. Expect
+  z = 0, 65535, 0, 1234, 65535 and x/y unchanged.
+- [ ] **Step 2: Run it.** `cmake --build DECO/build/rtw --target test_ge_vertex && DECO/build/rtw/test_ge_vertex.exe`.
+  Expected: FAIL lines for the -1.4757e20, 3.52e13, 1234.75 and 65535.5 cases (NaN may print as
+  a FAIL too: `fabs(NaN - 0) > eps` is false, so assert NaN explicitly with `== 0.0f`).
+- [ ] **Step 3: Implement** PPSSPP's rule in the float branch when `through`.
+- [ ] **Step 4: Run it.** Expected: `test_ge_vertex: N/N PASS`. `ctest`: 70/70.
+- [ ] **Step 5: Arena check.** Task 1 Step 5 again, out `build/tour/arena_fix`. Expected: the
+  runtime at ≥ 90 % of its max green on 40/40 frames, as PPSSPP; side-by-side PNG in
+  `build/tour/arena_fix/comparacion.png`.
+- [ ] **Step 6: Regression.** Task 2 Step 8 (`arena_after` vs `arena_base`, `RT_REGRESS PASS`).
+- [ ] **Step 7: Commit** `fix(ge): truncate and clamp through-mode float depth like PPSSPP`.

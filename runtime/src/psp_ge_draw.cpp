@@ -538,7 +538,7 @@ static void drawlog_prim(const GeState& s, int index, int prim_type, int count) 
         "tfn=0x%X blend=%d bm=0x%03X fa=0x%06X fb2=0x%06X at=%d atv=0x%06X "
         "zt=%d zf=%u zw=%d st=%d stt=0x%06X sop=0x%06X mrgb=0x%06X ma=0x%02X fmt=%u cf=%u "
         "lit=%d mat=0x%06X/%02X amb=0x%06X sc=0x%06X/0x%06X "
-        "fog=%d f1=%g f2=%g fc=0x%06X\n",
+        "fog=%d f1=%g f2=%g fc=0x%06X cull=%d/%u\n",
         index, prim_type, count, s.vertex_type, s.vertex_addr, s.base_addr, s.offset_addr,
         s.framebuf_ptr,
         s.clear_mode ? 1 : 0, ge_vtype_through(s.vertex_type) ? 1 : 0,
@@ -552,7 +552,8 @@ static void drawlog_prim(const GeState& s, int index, int prim_type, int count) 
         s.mask_alpha & 0xFF, s.framebuf_format, s.clear_flags,
         s.lighting_enable ? 1 : 0, s.material_ambient, s.material_alpha,
         s.ambient_color, s.scissor1, s.scissor2,
-        s.fog_enable ? 1 : 0, s.fog1, s.fog2, s.fog_color & 0xFFFFFF);
+        s.fog_enable ? 1 : 0, s.fog1, s.fog2, s.fog_color & 0xFFFFFF,
+        s.cull_enable ? 1 : 0, s.cull_face);
     if (!ge_vtype_through(s.vertex_type)) {
         const float* w = s.world_matrix;
         const float* v = s.view_matrix;
