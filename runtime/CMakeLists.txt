@@ -670,6 +670,16 @@ target_include_directories(test_anim_blend PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/i
 target_compile_options(test_anim_blend PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME anim_blend_tests COMMAND test_anim_blend)
 
+add_executable(test_cpu_close tests/test_cpu_close.cpp src/psp_cpu.cpp src/psp_perf.cpp)
+target_include_directories(test_cpu_close PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_cpu_close PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME cpu_close_tests COMMAND test_cpu_close)
+add_test(NAME cpu_close_nolock_tests COMMAND test_cpu_close --nolock)
+set_tests_properties(cpu_close_nolock_tests PROPERTIES ENVIRONMENT "PSPRECOMP_NO_CPU_LOCK=1")
+add_test(NAME cpu_close_closer_tests COMMAND test_cpu_close --closer)
+set_tests_properties(cpu_close_closer_tests PROPERTIES
+    PASS_REGULAR_EXPRESSION "the closing thread asked for the CPU after close: exiting now")
+
 add_executable(test_wheel tests/test_wheel.cpp src/psp_wheel.cpp)
 target_include_directories(test_wheel PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_wheel PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)

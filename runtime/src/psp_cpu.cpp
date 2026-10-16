@@ -37,6 +37,9 @@ int g_holder = -2;
 uint64_t g_next_ticket = 0;
 std::set<Waiter> g_waiters;
 std::atomic<int> g_best_waiting_prio{INT_MAX};
+std::atomic<bool> g_closed{false};
+std::atomic<int> g_parked{0};
+std::atomic<const void*> g_closer{nullptr};
 thread_local bool t_held = false;
 thread_local char t_token;  // its address identifies this host thread
 
@@ -85,6 +88,22 @@ void publish_best_locked() {
                               std::memory_order_relaxed);
 }
 
+// Never returns: the thread stays blocked until the process exits. The closer exits instead
+// (parking it would hang the shutdown it is running).
+[[noreturn]] void park_forever() {
+    if (g_closer.load() == &t_token) {
+        std::fprintf(stderr, "[CPU] the closing thread asked for the CPU after close: exiting now\n");
+        std::fflush(nullptr);
+        std::_Exit(0);
+    }
+    g_parked.fetch_add(1);
+    g_cv.notify_all();
+    std::mutex m;
+    std::unique_lock<std::mutex> l(m);
+    std::condition_variable never;
+    for (;;) never.wait(l);
+}
+
 }  // namespace
 
 void psp_cpu_set_thread_info(int (*priority)(), int (*id)()) {
@@ -93,6 +112,10 @@ void psp_cpu_set_thread_info(int (*priority)(), int (*id)()) {
 }
 
 void psp_cpu_acquire(bool front) {
+    if (g_closed.load(std::memory_order_acquire)) {
+        psp_cpu_release();
+        park_forever();
+    }
     if (!enabled() || t_held) return;
     const int prio = psp_current_thread_priority();
     std::unique_lock<std::mutex> lock(g_m);
@@ -109,7 +132,14 @@ void psp_cpu_acquire(bool front) {
     // back-edge: report it once per wait (deadlock diagnostics).
     const auto start = std::chrono::steady_clock::now();
     bool reported = false;
-    while (!ready()) {
+    for (;;) {
+        if (g_closed.load(std::memory_order_acquire)) {
+            g_waiters.erase(me);
+            publish_best_locked();
+            lock.unlock();
+            park_forever();
+        }
+        if (ready()) break;
         g_cv.wait_for(lock, g_res.empty() ? std::chrono::milliseconds(100)
                                           : std::chrono::milliseconds(1));
         if (!reported && std::chrono::steady_clock::now() - start > std::chrono::seconds(5)) {
@@ -171,6 +201,10 @@ bool psp_cpu_held() {
 
 void psp_cpu_yield_if_contended() {
     if (!t_held) return;
+    if (g_closed.load(std::memory_order_relaxed)) {
+        psp_cpu_release();
+        park_forever();
+    }
     if (g_best_waiting_prio.load(std::memory_order_relaxed) > psp_current_thread_priority()) {
         return;  // nobody waiting, or only worse-priority threads
     }
@@ -194,4 +228,22 @@ int psp_cpu_describe(char* buf, int size) {
     }
     if (n < size) n += std::snprintf(buf + n, size - n, "]");
     return n;
+}
+
+void psp_cpu_close() {
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        g_closer.store(&t_token);
+        g_closed.store(true, std::memory_order_release);
+    }
+    g_cv.notify_all();
+}
+
+bool psp_cpu_wait_released(std::chrono::milliseconds limit) {
+    std::unique_lock<std::mutex> lock(g_m);
+    return g_cv.wait_for(lock, limit, [] { return !g_held; });
+}
+
+int psp_cpu_parked() {
+    return g_parked.load();
 }

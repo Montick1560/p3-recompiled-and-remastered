@@ -1,5 +1,7 @@
 #pragma once
 
+#include <chrono>
+
 /// The guest CPU: the PSP runs one thread at a time and its games rely on it
 /// (allocators, task lists and loaders without locks). Guest threads here are
 /// host threads, so a guest thread must own this token while it runs guest
@@ -38,6 +40,21 @@ bool psp_cpu_held();
 /// At a guest loop back-edge: let a waiting thread of better or equal
 /// priority run, then take the CPU back. Cheap when nobody waits.
 void psp_cpu_yield_if_contended();
+
+/// Shutdown: close the CPU for good. Every later psp_cpu_acquire, and a holder's
+/// psp_cpu_yield_if_contended, parks its host thread forever (no guest code runs again; the OS
+/// ends parked threads at process exit). The calling thread is the closer: it never parks. If
+/// it asks for the CPU after close it exits the process at once (it is closing anyway).
+/// Idempotent.
+void psp_cpu_close();
+
+/// After psp_cpu_close: wait until no thread holds the CPU (the last holder reached an HLE
+/// call or a contended back-edge and parked). False when `limit` passes first, e.g. a guest
+/// loop that never calls the HLE.
+bool psp_cpu_wait_released(std::chrono::milliseconds limit);
+
+/// Threads parked by psp_cpu_close so far (diagnostics, tests).
+int psp_cpu_parked();
 
 /// Releases the CPU for the scope if this thread owns it (HLE calls).
 struct PspCpuReleaseScope {
