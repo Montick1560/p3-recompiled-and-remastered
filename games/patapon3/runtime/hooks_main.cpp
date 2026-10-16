@@ -23,6 +23,7 @@
 // the language cursor two rows). The whole update runs at most once per two
 // vblanks; a frame in between keeps the held words and clears the edge words,
 // so each press, release and repeat reaches one frame, at the 30 fps timing.
+#include "psp_anim_blend.h"
 #include "psp_game_module.h"
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_intr.h"
@@ -37,6 +38,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 void psp_print_host_backtrace(const char* tag);  // runtime/src/psp_backtrace.cpp
 
@@ -180,11 +182,9 @@ void motion_scope(uint8_t* rdram, recomp_context* ctx) {
     g_scope_motions = outer_motions;
 }
 
-// PSPRECOMP_P3_ANIM_SMOOTH_DIAG (diagnostic): "time" keeps only the fractional playhead (the
-// evaluator still rounds it, so poses stay whole frames, shifted by the rounding), "flag" keeps
-// only the interpolate flag (the playhead stays whole, so the factor is 0). Unset = both.
-bool g_diag_no_flag = false;
-bool g_diag_no_time = false;
+// PSPRECOMP_P3_ANIM_SMOOTH_DIAG=interp (A/B only): the earlier smooth mode — the player's
+// fractional clock as the playhead plus the model's interpolate flag (see pose_eval_interp).
+bool g_diag_interp = false;
 
 void playhead_set_smooth(uint8_t* rdram, recomp_context* ctx) {
     const uint32_t motion = static_cast<uint32_t>(ctx->r[4]);
@@ -195,18 +195,18 @@ void playhead_set_smooth(uint8_t* rdram, recomp_context* ctx) {
         g_scope_motions.whole[g_scope_motions.n] = whole;
         g_scope_motions.n++;
     }
-    if (g_diag_no_time) return;
     // Only replace the value the player itself asked for (same whole frame), so a nested
     // caller with another frame keeps its own.
-    if (g_smooth_scope && motion != 0 && whole == static_cast<float>(psp_f2i(g_smooth_time))) {
+    if (g_diag_interp && g_smooth_scope && motion != 0 && whole == static_cast<float>(psp_f2i(g_smooth_time))) {
         std::memcpy(rdram + ((motion + 0x1C) & 0x07FFFFFFu), &g_smooth_time, 4);
     }
 }
 
 // PSPRECOMP_P3_ANIM_PROBE=<dir> (diagnostic): when <dir>/probe.trigger exists, the next model
 // evaluated in scope with a fractional clock is evaluated three times — playheads whole (a),
-// whole + 1 (b), and the shipped fractional clock + interpolate flag (mid) — and each bone block
-// is written to <dir>/probe_<n>_{a,b,mid}.bin. The model keeps the shipped (mid) result.
+// whole + 1 (b), and the current smooth mode (mid: the two-sample blend, or the interpolate-flag
+// path with PSPRECOMP_P3_ANIM_SMOOTH_DIAG=interp) — and each bone block is written to
+// <dir>/probe_<n>_{a,b,mid}.bin. The model keeps the mid result.
 std::string g_probe_dir;
 int g_probe_seq = 0;
 
@@ -261,35 +261,12 @@ void eval_at(uint8_t* rdram, recomp_context* ctx, const recomp_context& args, F 
     std::memcpy(flags, &f0, 4);
 }
 
-void pose_eval_smooth(uint8_t* rdram, recomp_context* ctx) {
+// The earlier smooth mode (PSPRECOMP_P3_ANIM_SMOOTH_DIAG=interp): evaluate at the fractional
+// playhead with model +0x28 bit 4 set. FUN_089DB1E0 then interpolates some channels and not
+// others (the barracks Hero: rotations at the fraction, translations held at the whole frame),
+// which gives poses the game never shows — the Hero rose off the ground.
+void pose_eval_interp(uint8_t* rdram, recomp_context* ctx) {
     const uint32_t model = static_cast<uint32_t>(ctx->r[4]);
-    uint16_t count = 0;
-    if (model != 0) std::memcpy(&count, rdram + ((model + 0x18) & 0x07FFFFFFu), 2);
-    const float alpha = g_smooth_time - static_cast<float>(psp_f2i(g_smooth_time));
-    if (model != 0 && g_smooth_scope && g_scope_motions.n > 0 && probe_due(count, alpha)) {
-        const uint32_t bones = rd32(rdram, model + 4);
-        const recomp_context args = *ctx;
-        eval_at(rdram, ctx, args, [](int i) { return g_scope_motions.whole[i]; }, false);
-        probe_dump(rdram, bones, count, "a");
-        eval_at(rdram, ctx, args, [](int i) { return g_scope_motions.whole[i] + 1.0f; }, false);
-        probe_dump(rdram, bones, count, "b");
-        eval_at(rdram, ctx, args, [](int) { return g_smooth_time; }, true);
-        probe_dump(rdram, bones, count, "mid");
-        char path[512];
-        std::snprintf(path, sizeof path, "%s/probe_%d.txt", g_probe_dir.c_str(), g_probe_seq++);
-        if (std::FILE* f = std::fopen(path, "w")) {
-            std::fprintf(f, "model=0x%08X bones=0x%08X count=%u alpha=%.4f clock=%.4f motions=%d\n",
-                         model, bones, count, alpha, g_smooth_time, g_scope_motions.n);
-            for (int i = 0; i < g_scope_motions.n; i++)
-                std::fprintf(f, "motion=0x%08X whole=%.1f\n", g_scope_motions.addr[i], g_scope_motions.whole[i]);
-            std::fclose(f);
-        }
-        return;
-    }
-    if (!g_smooth_scope || model == 0 || g_diag_no_flag) {
-        g_pose_eval(rdram, ctx);
-        return;
-    }
     uint8_t* flags = rdram + ((model + 0x28) & 0x07FFFFFFu);
     uint32_t f;
     std::memcpy(&f, flags, 4);
@@ -303,6 +280,98 @@ void pose_eval_smooth(uint8_t* rdram, recomp_context* ctx) {
     std::memcpy(&f, flags, 4);
     f &= ~kModelInterpolate;
     std::memcpy(flags, &f, 4);
+}
+
+// Per-word blend kinds of one 0x100-byte GMO bone block (FUN_089DB1E0 outputs), from
+// anim_probe.py over six barracks models incl. the Hero (hero-ground plan, Evidence): +0x50
+// translation, +0x60 rotation quaternion, +0x70 scale (vec4 each) are blended; +0x4C (not a
+// float) and the rest are kept.
+constexpr uint8_t kBoneKinds[64] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+// The shipped smooth mode for one GMO evaluation in a player tick/draw scope.
+void pose_eval_blend(uint8_t* rdram, recomp_context* ctx, uint32_t model, uint16_t count, float alpha) {
+    if (!g_smooth_scope || model == 0 || g_scope_motions.n == 0) {
+        g_pose_eval(rdram, ctx);
+        return;
+    }
+    if (g_diag_interp) {
+        pose_eval_interp(rdram, ctx);
+        return;
+    }
+    if ((rd32(rdram, model + 0x28) & kModelInterpolate) || !(alpha > 0.0f && alpha < 1.0f)) {
+        g_pose_eval(rdram, ctx);  // the game interpolates this model itself, or on a whole frame
+        return;
+    }
+    // Next whole frame of every motion the player set at its own frame; any other motion (set by
+    // a nested caller at another frame) and a one-shot at its end are the same in both samples.
+    const int32_t whole = psp_f2i(g_smooth_time);
+    float next[8];
+    bool any = false;
+    for (int i = 0; i < g_scope_motions.n; i++) {
+        const uint32_t m = g_scope_motions.addr[i];
+        const float w = g_scope_motions.whole[i];
+        next[i] = w;
+        if (w != static_cast<float>(whole)) continue;
+        float start, end;
+        std::memcpy(&start, rdram + ((m + 0x10) & 0x07FFFFFFu), 4);
+        std::memcpy(&end, rdram + ((m + 0x14) & 0x07FFFFFFu), 4);
+        int16_t loop;
+        std::memcpy(&loop, rdram + ((m + 0x0E) & 0x07FFFFFFu), 2);
+        const int32_t n = psp_anim_next_frame(whole, start, end, loop != 0);
+        if (n >= 0 && n != whole) {
+            next[i] = static_cast<float>(n);
+            any = true;
+        }
+    }
+    if (!any) {
+        g_pose_eval(rdram, ctx);
+        return;
+    }
+    // Sample b (next frame) first and the original whole frame last, so everything else the
+    // evaluator writes (material colours, morph weights, playheads) ends as the original left it.
+    const uint32_t bones = rd32(rdram, model + 4);
+    const size_t words = static_cast<size_t>(count) * 64;
+    thread_local std::vector<float> sample_b, sample_a;
+    sample_b.resize(words);
+    sample_a.resize(words);
+    const recomp_context args = *ctx;
+    eval_at(rdram, ctx, args, [&](int i) { return next[i]; }, false);
+    std::memcpy(sample_b.data(), rdram + (bones & 0x07FFFFFFu), words * 4);
+    eval_at(rdram, ctx, args, [](int i) { return g_scope_motions.whole[i]; }, false);
+    std::memcpy(sample_a.data(), rdram + (bones & 0x07FFFFFFu), words * 4);
+    for (uint32_t bone = 0; bone < count; bone++) {
+        psp_blend_pose(sample_a.data() + bone * 64, sample_b.data() + bone * 64, kBoneKinds, 64, alpha);
+    }
+    std::memcpy(rdram + (bones & 0x07FFFFFFu), sample_a.data(), words * 4);
+}
+
+void pose_eval_smooth(uint8_t* rdram, recomp_context* ctx) {
+    const uint32_t model = static_cast<uint32_t>(ctx->r[4]);
+    uint16_t count = 0;
+    if (model != 0) std::memcpy(&count, rdram + ((model + 0x18) & 0x07FFFFFFu), 2);
+    const float alpha = g_smooth_time - static_cast<float>(psp_f2i(g_smooth_time));
+    if (model != 0 && g_smooth_scope && g_scope_motions.n > 0 && probe_due(count, alpha)) {
+        const uint32_t bones = rd32(rdram, model + 4);
+        const recomp_context args = *ctx;
+        eval_at(rdram, ctx, args, [](int i) { return g_scope_motions.whole[i]; }, false);
+        probe_dump(rdram, bones, count, "a");
+        eval_at(rdram, ctx, args, [](int i) { return g_scope_motions.whole[i] + 1.0f; }, false);
+        probe_dump(rdram, bones, count, "b");
+        *ctx = args;
+        pose_eval_blend(rdram, ctx, model, count, alpha);
+        probe_dump(rdram, bones, count, "mid");
+        char path[512];
+        std::snprintf(path, sizeof path, "%s/probe_%d.txt", g_probe_dir.c_str(), g_probe_seq++);
+        if (std::FILE* f = std::fopen(path, "w")) {
+            std::fprintf(f, "model=0x%08X bones=0x%08X count=%u alpha=%.4f clock=%.4f motions=%d\n",
+                         model, bones, count, alpha, g_smooth_time, g_scope_motions.n);
+            for (int i = 0; i < g_scope_motions.n; i++)
+                std::fprintf(f, "motion=0x%08X whole=%.1f\n", g_scope_motions.addr[i], g_scope_motions.whole[i]);
+            std::fclose(f);
+        }
+        return;
+    }
+    pose_eval_blend(rdram, ctx, model, count, alpha);
 }
 
 // Smooth bone attachments (same switch as above). FUN_08878D38 (a1 = bone) and FUN_08878C8C
@@ -339,8 +408,7 @@ void bone_smooth(uint8_t* rdram, recomp_context* ctx) {
     std::memcpy(&end, &end_bits, 4);
     const int32_t frame = psp_f2i(t);
     const float alpha = t - static_cast<float>(frame);
-    int32_t next = frame + 1;
-    if (static_cast<float>(next) > end) next = rdram[(player + 0x7B) & 0x07FFFFFFu] ? psp_f2i(start) : -1;
+    const int32_t next = psp_anim_next_frame(frame, start, end, rdram[(player + 0x7B) & 0x07FFFFFFu] != 0);
     if (!(alpha > 0.0f && alpha < 1.0f) || next < 0 || next == frame) {
         (*Orig)(rdram, ctx);
         return;
@@ -358,7 +426,8 @@ void bone_smooth(uint8_t* rdram, recomp_context* ctx) {
     (*Orig)(rdram, ctx);
     std::memcpy(rdram + ((player + 0x68) & 0x07FFFFFFu), &clock_bits, 4);
     std::memcpy(m1, rdram + (out & 0x07FFFFFFu), sizeof m1);
-    for (int i = 0; i < 16; i++) m0[i] += (m1[i] - m0[i]) * alpha;
+    static const uint8_t kMatrix[16] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+    psp_blend_pose(m0, m1, kMatrix, 16, alpha);
     std::memcpy(rdram + (out & 0x07FFFFFFu), m0, sizeof m0);
 }
 
@@ -379,11 +448,10 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
         psp_dispatch_register(kBoneAt, bone_smooth<&g_bone_at>);
         psp_dispatch_register(kBoneNamed, bone_smooth<&g_bone_named>);
         const char* diag = std::getenv("PSPRECOMP_P3_ANIM_SMOOTH_DIAG");
-        g_diag_no_flag = diag && std::strcmp(diag, "time") == 0;
-        g_diag_no_time = diag && std::strcmp(diag, "flag") == 0;
-        if (g_diag_no_flag || g_diag_no_time) std::fprintf(stderr, "[P3] smooth animation diag: %s only\n", diag);
+        g_diag_interp = diag && std::strcmp(diag, "interp") == 0;
+        if (g_diag_interp) std::fprintf(stderr, "[P3] smooth animation diag: interpolate-flag path\n");
         if (const char* p = std::getenv("PSPRECOMP_P3_ANIM_PROBE")) g_probe_dir = p;
-        std::fprintf(stderr, "[P3] smooth animation: poses sampled at the fractional frame\n");
+        std::fprintf(stderr, "[P3] smooth animation: poses blended from two whole frames\n");
     }
     const char* trace = std::getenv("PSPRECOMP_P3_ANIM_TRACE");
     if (trace && trace[0] == '1') {
