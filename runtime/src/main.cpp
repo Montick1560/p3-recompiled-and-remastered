@@ -1,4 +1,5 @@
 #include "psp_cpu.h"
+#include "psp_host_io.h"
 #include "recomp.h"
 #include "funcs.h"
 #include "psp_memory.h"
@@ -46,6 +47,7 @@
 #define RECOMP_BOOT_PATH "disc0:/PSP_GAME/SYSDIR/BOOT.BIN"
 #endif
 
+#include <chrono>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -519,15 +521,40 @@ int main(int argc, char* argv[]) {
     // 11. RUNTIME-08: Enter event loop — blocks until shutdown
     psp_event_loop(rdram);
 
-    // 12. RUNTIME-10: Clean shutdown
+    // 12. Shutdown. The guest stops first (psp_cpu_close parks every guest thread at its next
+    // HLE return or loop back-edge), host file writes finish, then the host tears down and the
+    // process ends with _Exit: guest threads are never joined (they never return), and static
+    // destructors must not run under parked threads. Memory, textures and the GE state are
+    // left to the OS.
+    const auto t_quit = std::chrono::steady_clock::now();
+    auto stage = [&](const char* what) {
+        const long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - t_quit).count();
+        std::fprintf(stderr, "[RT] shutdown +%lldms %s\n", ms, what);
+    };
+    stage("quit requested");
     psp_debug_socket_stop();
-    ge_draw_shutdown();
-    ge_texture_shutdown();
-    ge_shutdown();
+    psp_cpu_close();
+    psp_scheduler_wake_all();
+    if (!psp_cpu_wait_released(std::chrono::seconds(1)))
+        stage("a guest thread still holds the CPU (loop without HLE calls); exiting anyway");
+    {
+        char buf[64];
+        std::snprintf(buf, sizeof buf, "guest stopped (%d threads parked)", psp_cpu_parked());
+        stage(buf);
+    }
+    if (!psp_host_writes_wait_idle(std::chrono::seconds(10))) {
+        char buf[96];
+        std::snprintf(buf, sizeof buf, "%d host writes still in flight after 10 s; exiting anyway",
+                      psp_host_writes_in_flight());
+        stage(buf);
+    }
+    stage("host writes idle");
+    psp_audio_out_shutdown();
+    ge_draw_shutdown();  // also writes frame.tga for the Patapon 1 scripts
     psp_runtime_shutdown();
-
-    psp_memory_cleanup(rdram);
-
+    stage("host torn down");
     std::fprintf(stderr, "[RT] Exit 0\n");
-    return 0;
+    std::fflush(nullptr);
+    std::_Exit(0);
 }

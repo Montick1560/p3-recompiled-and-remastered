@@ -115,8 +115,10 @@ void sched_preempt(recomp_context* ctx);
 /// Mark current thread DEAD, decrement g_alive_threads, wake next thread.
 void psp_thread_exit_current();
 
-/// Shutdown scheduler — set exit flag, wake all threads, join with timeout.
-void psp_scheduler_shutdown();
+/// Shutdown: set the exit flag and wake every scheduler wait. Guest threads are never
+/// joined (a PSP game does not end its threads); after psp_cpu_close they park at their next
+/// acquire and the OS ends them at process exit.
+void psp_scheduler_wake_all();
 
 /// Returns the PspThread* for the calling OS thread (thread-local).
 PspThread* psp_get_current_thread();

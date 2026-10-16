@@ -286,58 +286,16 @@ void psp_thread_exit_current() {
 }
 
 // ---------------------------------------------------------------------------
-// psp_scheduler_shutdown — signal exit, wake all, join with timeout
+// psp_scheduler_wake_all — shutdown: set the exit flag and wake every scheduler wait. Guest
+// threads are never joined: a PSP game does not end its threads, and after psp_cpu_close
+// they park at their next acquire; the OS ends them at process exit.
 // ---------------------------------------------------------------------------
-void psp_scheduler_shutdown() {
+void psp_scheduler_wake_all() {
     g_should_exit.store(true);
-
-    // Wake all threads so they can observe the exit flag
-    {
-        std::unique_lock<std::mutex> lock(g_sched_mutex);
-        for (int i = 0; i < MAX_THREADS; i++) {
-            if (g_threads[i].in_use) {
-                g_threads[i].cv.notify_all();
-            }
-        }
-    }
-
-    // Join all threads with 2-second timeout (detach as fallback)
+    std::unique_lock<std::mutex> lock(g_sched_mutex);
     for (int i = 0; i < MAX_THREADS; i++) {
-        PspThread& t = g_threads[i];
-        if (t.in_use && t.host_thread.joinable()) {
-            // Use a helper thread to implement join-with-timeout
-            std::atomic<bool> joined{false};
-            std::thread joiner([&] {
-                t.host_thread.join();
-                joined.store(true);
-            });
-
-            // Wait up to 2 seconds
-            auto deadline = std::chrono::steady_clock::now()
-                          + std::chrono::seconds(2);
-            while (!joined.load() &&
-                   std::chrono::steady_clock::now() < deadline) {
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(10)
-                );
-            }
-
-            if (joined.load()) {
-                joiner.join();
-            } else {
-                // Thread did not join in time — detach (process is exiting)
-                std::fprintf(
-                    stderr,
-                    "SCHED: thread %d (%s) did not join in 2s, "
-                    "detaching\n",
-                    t.id, t.name
-                );
-                joiner.detach();
-                t.host_thread.detach();
-            }
-
-            t.status = DEAD;
-            t.in_use = false;
+        if (g_threads[i].in_use) {
+            g_threads[i].cv.notify_all();
         }
     }
 }

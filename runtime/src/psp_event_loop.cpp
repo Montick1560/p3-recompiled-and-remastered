@@ -382,8 +382,11 @@ void psp_event_loop(uint8_t* rdram) {
         }
     }
 
-    // Final drain to unblock any game thread blocked in render_queue_post
-    render_queue_process();
+    // Quit requested: the window goes away now; the rest of shutdown runs behind it.
+    if (g_window) {
+        SDL_HideWindow(g_window);
+        SDL_PumpEvents();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -409,7 +412,8 @@ void psp_install_signal_handlers() {
 }
 
 // ---------------------------------------------------------------------------
-// psp_runtime_shutdown — clean shutdown: threads, render queue, SDL/GL
+// psp_runtime_shutdown — host teardown: controllers, GL, window, SDL (guest threads are
+// stopped by psp_cpu_close before this and never joined)
 // ---------------------------------------------------------------------------
 SDL_Window* psp_get_sdl_window() {
     return g_window;
@@ -419,29 +423,23 @@ void psp_runtime_shutdown() {
     // 1. Ensure exit flag is set (in case called without signal)
     g_should_exit.store(true);
 
-    // 2. Shutdown scheduler — wake all threads, join with timeout
-    psp_scheduler_shutdown();
-
-    // 3. Final render queue drain
-    render_queue_process();
-
-    // 3b. Close game controllers
+    // 2. Close game controllers
     for (auto& [id, c] : g_controllers) SDL_GameControllerClose(c);
     g_controllers.clear();
 
-    // 4. Destroy GL context
+    // 3. Destroy GL context
     if (g_gl_context) {
         SDL_GL_DeleteContext(g_gl_context);
         g_gl_context = nullptr;
     }
 
-    // 5. Destroy SDL window
+    // 4. Destroy SDL window
     if (g_window) {
         SDL_DestroyWindow(g_window);
         g_window = nullptr;
     }
 
-    // 6. Quit SDL
+    // 5. Quit SDL
     SDL_Quit();
 
     std::fprintf(stderr, "[RT] Shutdown complete\n");
