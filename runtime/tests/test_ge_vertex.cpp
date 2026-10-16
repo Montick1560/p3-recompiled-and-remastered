@@ -896,6 +896,22 @@ static void test_decode_resets_reused_vector() {
     std::free(ram);
 }
 
+// A zero-count (or zero-stride) decode returns early: it must still empty a
+// reused vector instead of handing back the previous draw's vertices.
+static void test_decode_zero_count_empties_reused_vector() {
+    GeState s;
+    s.reset();
+    s.vertex_type = 0x00800100u;  // through, s16 position
+    s.vertex_addr = 0x08800000u;
+    std::vector<DecodedVertex> out(2);
+    ge_decode_vertices(nullptr, s, 0, 0, out);
+    tests_run++;
+    if (!out.empty()) {
+        std::fprintf(stderr, "FAIL: zero-count decode kept %zu vertices\n", out.size());
+        failures++;
+    }
+}
+
 // Through-mode u16 texture coordinates are raw texel units, unsigned (PPSSPP
 // Step_TcU16ThroughToFloat). Patapon 3's mission command list ("Avanzar: ...")
 // is a 126-vertex sprite run with vtype 0x800102 and u,v = 65,22 for its first
@@ -941,6 +957,7 @@ int main() {
     test_zero_scale_without_fallback_collapses();
     test_through_s16_z_unsigned();
     test_decode_resets_reused_vector();
+    test_decode_zero_count_empties_reused_vector();
     test_through_u16_uv_raw_texels();
     test_rect_expand_divides_by_w();
     test_rect_expand_drops_nonpositive_w();

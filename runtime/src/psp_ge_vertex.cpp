@@ -160,7 +160,10 @@ void ge_decode_vertices(
     const GeVertexLayout layout = ge_vertex_layout(vtype);
     int stride = layout.stride;
 
-    if (stride <= 0 || count <= 0) return;
+    if (stride <= 0 || count <= 0) {
+        out.clear();
+        return;
+    }
 
     int tc_type  = ge_vtype_tc(vtype);
     int col_type = ge_vtype_col(vtype);

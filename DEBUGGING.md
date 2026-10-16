@@ -413,10 +413,11 @@ is on, and its vertices: all of them (up to 256) when the bbox contains the scre
 contain a pixel and interpolate their colours (2026-10-10 hero-attack black box: a zero-scaled
 object pushed through the degenerate-matrix passthrough).
 
-The PRIM line ends with the fog registers, `fog=<enable> f1=<FOG1> f2=<FOG2> fc=<FOGCOLOR>` (the
-names `gelist.py` prints), and each logged vertex with its fog factor `fog=` (1 = no fog, <= 0 =
-all fog colour). The end-of-mission white silhouettes show as `fog=1 f1=1 f2=9.99976 fc=0xFFFFFF`
-(FOG2 = 10 in float24) with vertex factors far below 0.
+The PRIM line ends with the fog state, `fog=<enable> f1=<FOG1> f2=<FOG2> fc=<FOGCOLOR>` (the
+names `gelist.py` prints; `f1`/`f2` are the decoded coefficients, a non-finite register shows as
++-65535), and each logged vertex with its fog factor `fog=` (1 = no fog, <= 0 = all fog colour).
+The end-of-mission white silhouettes show as `fog=1 f1=1 f2=9.99976 fc=0xFFFFFF` (the game writes
+FOG2 = 0x411FFF, the float24 just below 10) with vertex factors far below 0.
 
 ### `PSPRECOMP_HW_WATCH` (Windows hardware write watch)
 
