@@ -203,6 +203,35 @@ Agent: <model>"
 
 **Decision gate:** fog confirmed → Task 2. Anything else → "If it is not fog".
 
+#### Task 1 finding (2026-10-16)
+
+**GE fog.** The white phase is not in the hideout but at the very end of the mission, right after
+the victory chant (the user's "when they finish singing and the victory song plays"): the field
+darkens and the Patapons, Hero, flag and signpost turn into white silhouettes for ~2 s, then
+MISIÓN COMPLETADA and the reward chest. PPSSPP paints them white; the runtime painted them black
+(invisible on the dark field). The game enables fog with a white colour on those models only:
+
+```
+pp 337 p=4 n=15 vt=014783 thr=0 tex=1 ta=041A5C40 ... fog=1 f1=3F8000 f2=411FFF fc=FFFFFF cte=0 lop=0 lit=0 tfn=000100
+pp 338 p=4 n=7  vt=014783 thr=0 tex=1 ta=041A5C40 ... fog=1 f1=3F8000 f2=411FFF fc=FFFFFF cte=0 lop=0 lit=0 tfn=000100
+rt 337 p=4 n=15 vt=014783 thr=0 tex=1 ta=041A5C40 ... fog=1 f1=3F8000 f2=411FFF fc=FFFFFF cte=0 lop=0 lit=0 tfn=000100
+rt 338 p=4 n=7  vt=014783 thr=0 tex=1 ta=041A5C40 ... fog=1 f1=3F8000 f2=411FFF fc=FFFFFF cte=0 lop=0 lit=0 tfn=000100
+```
+
+FOG1 = float24 0x3F8000 = 1.0, FOG2 = 0x411FFF ≈ 9.99, FOGCOLOR = 0xFFFFFF: factor
+`(view_z + 1) * 10` is <= 0 for every model at view z <= -1, i.e. the whole unit is the fog colour.
+White frame: 54 fogged PRIMs (pp) / 47 (rt, the dump caught a slightly different frame); normal
+field frame before the end: 0 fogged PRIMs, FOG1/FOG2/FOGCOLOR still 0 on both sides. Colour test,
+logic op, lighting and the texture function are the same in both dumps (cte=0, lop=0, tfn=000100).
+Lost mission: not reached in this session (the user says the effect happens on every return).
+Evidence: `build/tour/white/dump/{normal,white0,white1,white2}_{pp,rt}.{txt,png}`,
+`pp_sheet.png`, `rt_sheet.png`; PPSSPP frame sequence `build/tour/white2/seq`.
+
+How it was caught: per-side tours (`gfx_tour.py --only rt|pp --to attack_combo --keep --serve`)
+with a serve hook (`build/tour/cmd/wh_<side>.py.txt`) that captures every ~0.2 s and dumps the
+list on the first dark frame after the bright field; the two sides reach the end ~45 s apart, so
+a two-sided serve step misses it on one side.
+
 #### If the white phase is not reached
 
 The return to the hideout after `after_reward` may need more presses (dialogue, the AUTOSAVE
