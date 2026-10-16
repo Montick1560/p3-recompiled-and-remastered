@@ -36,6 +36,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 void psp_print_host_backtrace(const char* tag);  // runtime/src/psp_backtrace.cpp
 
@@ -153,6 +154,14 @@ FuncPtr g_playhead_set = nullptr;
 // Game threads run one at a time on the host (cooperative scheduler), but keep it per thread.
 thread_local bool g_smooth_scope = false;
 thread_local float g_smooth_time = 0.0f;
+// Motions whose playhead the player set inside the current tick/draw scope, with the whole frame
+// it asked for (FUN_089DAF74's f12). Saved/restored by motion_scope like the clock.
+struct ScopeMotions {
+    uint32_t addr[8];
+    float whole[8];
+    int n;
+};
+thread_local ScopeMotions g_scope_motions = {};
 
 template <FuncPtr* Orig>
 void motion_scope(uint8_t* rdram, recomp_context* ctx) {
@@ -161,17 +170,32 @@ void motion_scope(uint8_t* rdram, recomp_context* ctx) {
     std::memcpy(&t, &clock, 4);
     const bool outer = g_smooth_scope;
     const float outer_time = g_smooth_time;
+    const ScopeMotions outer_motions = g_scope_motions;
     g_smooth_scope = true;
     g_smooth_time = t;
+    g_scope_motions.n = 0;
     (*Orig)(rdram, ctx);
     g_smooth_scope = outer;
     g_smooth_time = outer_time;
+    g_scope_motions = outer_motions;
 }
+
+// PSPRECOMP_P3_ANIM_SMOOTH_DIAG (diagnostic): "time" keeps only the fractional playhead (the
+// evaluator still rounds it, so poses stay whole frames, shifted by the rounding), "flag" keeps
+// only the interpolate flag (the playhead stays whole, so the factor is 0). Unset = both.
+bool g_diag_no_flag = false;
+bool g_diag_no_time = false;
 
 void playhead_set_smooth(uint8_t* rdram, recomp_context* ctx) {
     const uint32_t motion = static_cast<uint32_t>(ctx->r[4]);
     const float whole = ctx->f[12];
     g_playhead_set(rdram, ctx);
+    if (g_smooth_scope && motion != 0 && g_scope_motions.n < 8) {
+        g_scope_motions.addr[g_scope_motions.n] = motion;
+        g_scope_motions.whole[g_scope_motions.n] = whole;
+        g_scope_motions.n++;
+    }
+    if (g_diag_no_time) return;
     // Only replace the value the player itself asked for (same whole frame), so a nested
     // caller with another frame keeps its own.
     if (g_smooth_scope && motion != 0 && whole == static_cast<float>(psp_f2i(g_smooth_time))) {
@@ -179,9 +203,90 @@ void playhead_set_smooth(uint8_t* rdram, recomp_context* ctx) {
     }
 }
 
+// PSPRECOMP_P3_ANIM_PROBE=<dir> (diagnostic): when <dir>/probe.trigger exists, the next model
+// evaluated in scope with a fractional clock is evaluated three times — playheads whole (a),
+// whole + 1 (b), and the shipped fractional clock + interpolate flag (mid) — and each bone block
+// is written to <dir>/probe_<n>_{a,b,mid}.bin. The model keeps the shipped (mid) result.
+std::string g_probe_dir;
+int g_probe_seq = 0;
+
+// The trigger file may hold a minimum bone count and a skip count ("10 2": the third model in
+// scope with >= 10 bones and a fractional clock); default "0 0" = the first such model.
+int g_probe_min = -1;
+int g_probe_skip = 0;
+
+bool probe_due(uint32_t count, float alpha) {
+    static int calls = 0;
+    if (!g_probe_dir.empty() && g_probe_min < 0 && (++calls & 255) == 0) {
+        const std::string trig = g_probe_dir + "/probe.trigger";
+        if (std::FILE* f = std::fopen(trig.c_str(), "rb")) {
+            int min = 0, skip = 0;
+            if (std::fscanf(f, "%d %d", &min, &skip) < 1) min = 0;
+            std::fclose(f);
+            std::remove(trig.c_str());
+            g_probe_min = min;
+            g_probe_skip = skip;
+        }
+    }
+    if (g_probe_min < 0 || static_cast<int>(count) < g_probe_min || !(alpha > 0.0f && alpha < 1.0f)) return false;
+    if (g_probe_skip-- > 0) return false;
+    g_probe_min = -1;
+    return true;
+}
+
+void probe_dump(uint8_t* rdram, uint32_t bones, uint32_t count, const char* tag) {
+    char path[512];
+    std::snprintf(path, sizeof path, "%s/probe_%d_%s.bin", g_probe_dir.c_str(), g_probe_seq, tag);
+    if (std::FILE* f = std::fopen(path, "wb")) {
+        std::fwrite(rdram + (bones & 0x07FFFFFFu), 1, count * 0x100u, f);
+        std::fclose(f);
+    }
+}
+
+// Runs the evaluation with every scope motion's playhead at `t_of(i)`, flag as given.
+template <typename F>
+void eval_at(uint8_t* rdram, recomp_context* ctx, const recomp_context& args, F t_of, bool flag) {
+    const uint32_t model = static_cast<uint32_t>(args.r[4]);
+    for (int i = 0; i < g_scope_motions.n; i++) {
+        const float t = t_of(i);
+        std::memcpy(rdram + ((g_scope_motions.addr[i] + 0x1C) & 0x07FFFFFFu), &t, 4);
+    }
+    uint8_t* flags = rdram + ((model + 0x28) & 0x07FFFFFFu);
+    uint32_t f0;
+    std::memcpy(&f0, flags, 4);
+    const uint32_t f1 = flag ? (f0 | kModelInterpolate) : (f0 & ~kModelInterpolate);
+    std::memcpy(flags, &f1, 4);
+    *ctx = args;
+    g_pose_eval(rdram, ctx);
+    std::memcpy(flags, &f0, 4);
+}
+
 void pose_eval_smooth(uint8_t* rdram, recomp_context* ctx) {
     const uint32_t model = static_cast<uint32_t>(ctx->r[4]);
-    if (!g_smooth_scope || model == 0) {
+    uint16_t count = 0;
+    if (model != 0) std::memcpy(&count, rdram + ((model + 0x18) & 0x07FFFFFFu), 2);
+    const float alpha = g_smooth_time - static_cast<float>(psp_f2i(g_smooth_time));
+    if (model != 0 && g_smooth_scope && g_scope_motions.n > 0 && probe_due(count, alpha)) {
+        const uint32_t bones = rd32(rdram, model + 4);
+        const recomp_context args = *ctx;
+        eval_at(rdram, ctx, args, [](int i) { return g_scope_motions.whole[i]; }, false);
+        probe_dump(rdram, bones, count, "a");
+        eval_at(rdram, ctx, args, [](int i) { return g_scope_motions.whole[i] + 1.0f; }, false);
+        probe_dump(rdram, bones, count, "b");
+        eval_at(rdram, ctx, args, [](int) { return g_smooth_time; }, true);
+        probe_dump(rdram, bones, count, "mid");
+        char path[512];
+        std::snprintf(path, sizeof path, "%s/probe_%d.txt", g_probe_dir.c_str(), g_probe_seq++);
+        if (std::FILE* f = std::fopen(path, "w")) {
+            std::fprintf(f, "model=0x%08X bones=0x%08X count=%u alpha=%.4f clock=%.4f motions=%d\n",
+                         model, bones, count, alpha, g_smooth_time, g_scope_motions.n);
+            for (int i = 0; i < g_scope_motions.n; i++)
+                std::fprintf(f, "motion=0x%08X whole=%.1f\n", g_scope_motions.addr[i], g_scope_motions.whole[i]);
+            std::fclose(f);
+        }
+        return;
+    }
+    if (!g_smooth_scope || model == 0 || g_diag_no_flag) {
         g_pose_eval(rdram, ctx);
         return;
     }
@@ -273,6 +378,11 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
         g_bone_named = RECOMP_LOOKUP(kBoneNamed);
         psp_dispatch_register(kBoneAt, bone_smooth<&g_bone_at>);
         psp_dispatch_register(kBoneNamed, bone_smooth<&g_bone_named>);
+        const char* diag = std::getenv("PSPRECOMP_P3_ANIM_SMOOTH_DIAG");
+        g_diag_no_flag = diag && std::strcmp(diag, "time") == 0;
+        g_diag_no_time = diag && std::strcmp(diag, "flag") == 0;
+        if (g_diag_no_flag || g_diag_no_time) std::fprintf(stderr, "[P3] smooth animation diag: %s only\n", diag);
+        if (const char* p = std::getenv("PSPRECOMP_P3_ANIM_PROBE")) g_probe_dir = p;
         std::fprintf(stderr, "[P3] smooth animation: poses sampled at the fractional frame\n");
     }
     const char* trace = std::getenv("PSPRECOMP_P3_ANIM_TRACE");

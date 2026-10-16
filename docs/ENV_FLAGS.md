@@ -625,6 +625,25 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
 - **Set it when:** looking for the pose path of a model that does not animate
   smoothly.
 
+### `PSPRECOMP_P3_ANIM_SMOOTH_DIAG`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`time` or `flag`; unset = normal).
+- **Effect:** With smooth animation on, keep only one half of it: `time` stores the fractional
+  playhead but never sets the interpolate flag; `flag` sets the flag but leaves the playhead whole.
+- **Set it when:** localizing a pose difference between the smooth and the stepped animation.
+
+### `PSPRECOMP_P3_ANIM_PROBE`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (a directory; unset = off). Only with smooth animation on.
+- **Effect:** Diagnostics only. When `<dir>/probe.trigger` appears (optional content
+  `"<min bones> <skip>"`), the next GMO model evaluated in a motion tick/draw with a fractional
+  clock (at least `<min bones>` bones, after skipping `<skip>` such models) is evaluated three
+  times: playheads at the whole frame (`a`), whole + 1 (`b`) and the smooth clock with the
+  interpolate flag (`mid`). Its bone blocks (0x100 bytes per bone) go to
+  `<dir>/probe_<n>_{a,b,mid}.bin`, a header to `<dir>/probe_<n>.txt`; the model keeps `mid`.
+  The trigger file is removed when read. `build/tools/anim_probe.py <dir> <n>` compares them.
+- **Set it when:** checking whether interpolated poses stay between the two whole-frame poses.
+
 ### `PSPRECOMP_P3_GMO_GUARD`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`.
 - **Type:** env (`=1`; first character `'1'`). **Game-specific: patapon3.**
