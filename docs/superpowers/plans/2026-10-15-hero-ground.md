@@ -711,7 +711,8 @@ git commit -m "fix(p3): smooth GMO poses from two whole-frame samples (Hero stay
 ## Evidence
 
 Executed 2026-10-15 (inline, executing-plans). Commits 75c7d2e (diagnostics), 9343e86 (helper),
-182a785 (fix), plus the docs commit.
+182a785 (fix), plus the docs commit. The user played with `jugar_60fps.bat` and confirmed the
+Hero stays on the ground (2026-10-16).
 
 **Where it shows.** The user sees the lift "everywhere the Hero appears (mission and barracks)".
 In the barracks the Hero's feet are behind the name bar (bar from y=232.0), so `foot_gap.py`
