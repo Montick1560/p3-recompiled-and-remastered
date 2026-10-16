@@ -533,7 +533,8 @@ static void drawlog_prim(const GeState& s, int index, int prim_type, int count) 
         "tex=%d ta=0x%08X tf=%u tsz=0x%04X bw=%u clut=0x%08X cf=0x%06X "
         "tfn=0x%X blend=%d bm=0x%03X fa=0x%06X fb2=0x%06X at=%d atv=0x%06X "
         "zt=%d zf=%u zw=%d st=%d stt=0x%06X sop=0x%06X mrgb=0x%06X ma=0x%02X fmt=%u cf=%u "
-        "lit=%d mat=0x%06X/%02X amb=0x%06X sc=0x%06X/0x%06X\n",
+        "lit=%d mat=0x%06X/%02X amb=0x%06X sc=0x%06X/0x%06X "
+        "fog=%d f1=%g f2=%g fc=0x%06X\n",
         index, prim_type, count, s.vertex_type, s.vertex_addr, s.base_addr, s.offset_addr,
         s.framebuf_ptr,
         s.clear_mode ? 1 : 0, ge_vtype_through(s.vertex_type) ? 1 : 0,
@@ -546,7 +547,8 @@ static void drawlog_prim(const GeState& s, int index, int prim_type, int count) 
         s.stencil_test & 0xFFFFFF, s.stencil_op & 0xFFFFFF, s.mask_rgb & 0xFFFFFF,
         s.mask_alpha & 0xFF, s.framebuf_format, s.clear_flags,
         s.lighting_enable ? 1 : 0, s.material_ambient, s.material_alpha,
-        s.ambient_color, s.scissor1, s.scissor2);
+        s.ambient_color, s.scissor1, s.scissor2,
+        s.fog_enable ? 1 : 0, s.fog1, s.fog2, s.fog_color & 0xFFFFFF);
     if (!ge_vtype_through(s.vertex_type)) {
         const float* w = s.world_matrix;
         const float* v = s.view_matrix;
@@ -968,10 +970,10 @@ void ge_draw_prim(
         for (size_t i = 0; i < nlog; i++) {
             const PackedVertex& pv = packed[i];
             std::fprintf(stderr,
-                "[DL]   v%zu/%zu pos=%.3f,%.3f,%.3f,%.3f uv=%.3f,%.3f rgba=%u,%u,%u,%u\n",
+                "[DL]   v%zu/%zu pos=%.3f,%.3f,%.3f,%.3f uv=%.3f,%.3f rgba=%u,%u,%u,%u fog=%.3f\n",
                 i, packed.size(), pv.pos[0], pv.pos[1], pv.pos[2], pv.pos[3],
                 pv.uv[0], pv.uv[1], pv.color[0], pv.color[1], pv.color[2],
-                pv.color[3]);
+                pv.color[3], pv.fog);
         }
         if (x0 <= x1) {
             std::fprintf(stderr, "[DL]   bbox x=%.0f..%.0f y=%.0f..%.0f\n", x0, x1, y0, y1);
