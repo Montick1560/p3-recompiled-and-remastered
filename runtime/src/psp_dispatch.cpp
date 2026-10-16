@@ -1,4 +1,5 @@
 #include "recomp.h"
+#include "psp_exit.h"
 #include "psp_overlay.h"
 #include "psp_scheduler.h"
 #include "hle/psp_hle.h"
@@ -287,7 +288,7 @@ FuncPtr psp_on_lookup_miss(uint32_t vaddr) {
     // Register atexit handler on first miss
     if (!g_miss_atexit_registered) {
         g_miss_atexit_registered = true;
-        std::atexit(psp_dump_lookup_misses);
+        psp_on_exit(psp_dump_lookup_misses);
     }
 
     // Per-address miss counting -- log on first hit only
@@ -360,7 +361,7 @@ void psp_trace_checkpoint(uint32_t addr) {
         func_watch_parse();
         g_pc_trace_checked = true;
         if (g_pc_trace) {
-            std::atexit(psp_dump_pc_trace);
+            psp_on_exit(psp_dump_pc_trace);
         }
     }
     for (int i = 0; i < g_func_watch_count; i++) {

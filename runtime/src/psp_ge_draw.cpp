@@ -1,4 +1,5 @@
 #include "psp_osk_overlay.h"
+#include "psp_exit.h"
 #include "psp_ge_draw.h"
 #include "psp_perf.h"
 #include "psp_ge_blend.h"
@@ -600,7 +601,7 @@ void ge_draw_prim(
     // debug socket's I command can snapshot them via ge_draw_get_stats.)
     static bool prim_detail_atexit_installed = false;
     if (!prim_detail_atexit_installed) {
-        std::atexit([]() {
+        psp_on_exit([]() {
             std::fprintf(stderr,
                 "[GE_PRIM_DETAIL_SUMMARY] total_observed=%d zero_count=%d\n",
                 g_prim_total_observed, g_prim_type_zero_count);

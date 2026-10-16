@@ -523,9 +523,9 @@ int main(int argc, char* argv[]) {
 
     // 12. Shutdown. The guest stops first (psp_cpu_close parks every guest thread at its next
     // HLE return or loop back-edge), host file writes finish, then the host tears down and the
-    // process ends with _Exit: guest threads are never joined (they never return), and static
-    // destructors must not run under parked threads. Memory, textures and the GE state are
-    // left to the OS.
+    // process ends with quick_exit: guest threads are never joined (they never return), and
+    // static destructors must not run under parked threads; exit-time diagnostics registered with
+    // psp_on_exit still run. Memory, textures and the GE state are left to the OS.
     const auto t_quit = std::chrono::steady_clock::now();
     auto stage = [&](const char* what) {
         const long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -556,5 +556,5 @@ int main(int argc, char* argv[]) {
     stage("host torn down");
     std::fprintf(stderr, "[RT] Exit 0\n");
     std::fflush(nullptr);
-    std::_Exit(0);
+    std::quick_exit(0);  // runs the psp_on_exit diagnostics (psp_exit.h), then _Exit
 }

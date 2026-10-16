@@ -15,6 +15,7 @@
 // hooks carry REMOVAL CRITERION comments per issue #46 acceptance.
 
 #include "recomp.h"
+#include "psp_exit.h"
 #include "psp_memory.h"
 #include "psp_game_module.h"
 #include "hle/psp_hle.h"
@@ -2175,7 +2176,7 @@ void patapon_register_hooks(uint8_t* rdram) {
                             g_bnd_short_total++;
                             if (!g_bnd_short_atexit_registered) {
                                 g_bnd_short_atexit_registered = true;
-                                std::atexit(dump_bnd_short_total);
+                                psp_on_exit(dump_bnd_short_total);
                             }
                             if (g_bnd_short_total <= 8
                                     || g_bnd_short_total % 500 == 0) {

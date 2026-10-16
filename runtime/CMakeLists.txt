@@ -686,6 +686,13 @@ target_include_directories(test_host_io PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/incl
 target_compile_options(test_host_io PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME host_io_tests COMMAND test_host_io)
 
+add_executable(test_on_exit tests/test_on_exit.cpp)
+target_include_directories(test_on_exit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME on_exit_quick_tests COMMAND test_on_exit --quick)
+set_tests_properties(on_exit_quick_tests PROPERTIES PASS_REGULAR_EXPRESSION "on_exit handler ran")
+add_test(NAME on_exit_normal_tests COMMAND test_on_exit)
+set_tests_properties(on_exit_normal_tests PROPERTIES PASS_REGULAR_EXPRESSION "on_exit handler ran")
+
 add_executable(test_wheel tests/test_wheel.cpp src/psp_wheel.cpp)
 target_include_directories(test_wheel PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_wheel PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)

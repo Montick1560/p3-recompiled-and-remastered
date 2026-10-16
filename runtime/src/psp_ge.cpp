@@ -1,4 +1,5 @@
 #include "psp_cpu.h"
+#include "psp_exit.h"
 #include "psp_perf.h"
 #include "psp_ge.h"
 #include "psp_ge_patch.h"
@@ -128,7 +129,7 @@ void ge_init() {
     g_total_lists = 0;
     g_total_prims = 0;
     g_first_prim_logged = false;
-    std::atexit(ge_atexit_summary);
+    psp_on_exit(ge_atexit_summary);
     std::fprintf(stderr, "[GE] Initialized\n");
 }
 
