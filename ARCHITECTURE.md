@@ -228,6 +228,24 @@ Who takes and drops the token:
   `sceKernelDelayThread`, semaphore / mutex / lwmutex / event-flag waits, and
   the audio blocking paths in `psp_hle_utility.cpp`.
 
+Shutdown closes the token (`psp_cpu_close`). After that, every acquire, and a
+holder's contended back-edge, parks its host thread for good, so no guest code
+runs while the host tears down. Guest threads are never joined: a PSP game
+does not end its threads, and the old one-by-one join with a 2 s timeout cost
+about 15 s per exit. `main` then:
+
+1. waits for the last holder (`psp_cpu_wait_released`, 1 s);
+2. waits for host file writes in flight (`psp_host_io.h`: savedata, `sceIoWrite`,
+   data install, ad hoc MAC; 10 s), so a save is never cut halfway;
+3. tears down audio, the GE draw state and SDL;
+4. ends with `quick_exit(0)`: no static destructors run under the parked
+   threads, but exit-time diagnostics registered with `psp_on_exit`
+   (`psp_exit.h`: GE summary, lookup-miss dump) still print.
+
+The window is hidden as soon as quit is requested. The closing thread never
+parks: if it asks for the CPU after close, it exits the process. The log shows
+each step as `[RT] shutdown +<ms>ms <stage>`.
+
 ## Code Overlays (banks)
 
 Some titles (Patapon 3) load extra code at run time: overlay files that all
