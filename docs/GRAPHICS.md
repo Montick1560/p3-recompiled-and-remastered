@@ -441,10 +441,10 @@ rasterization (diamond-exit) covers the pixel *left* of an integer-x vertical li
 the game's menu shadows and beat outline one pixel left of PPSSPP; expand-and-triangles lands
 them on the same pixel at every render scale. Transform-mode lines keep plain `GL_LINES`.
 
-Draws go through one streaming VBO: vertices are packed into a 28-byte `PackedVertex` (4 floats
-clip-space position, 2 floats UV, 4 bytes color), uploaded with `GL_STREAM_DRAW`, and rendered
+Draws go through one streaming VBO: vertices are packed into a 32-byte `PackedVertex` (4 floats
+clip-space position, 2 floats UV, 4 bytes color, 1 float fog factor), uploaded with `GL_STREAM_DRAW`, and rendered
 with a single `glDrawArrays` per PRIM command. There is no batching across PRIMs. The vertex
-shader is a pure pass-through (`gl_Position = a_position`) because all transformation already
+shader is a pure pass-through (`gl_Position = a_position`, `v_fog = a_fog`) because all transformation already
 happened on the CPU.
 
 The render target is a 480x272 × render scale RGBA8 FBO (`PSPRECOMP_RENDER_SCALE`, default 1)
