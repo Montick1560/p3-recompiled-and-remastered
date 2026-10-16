@@ -134,6 +134,7 @@ set(RUNTIME_SOURCES
     src/psp_subintr.cpp
     src/psp_backtrace.cpp
     src/psp_cpu.cpp
+    src/psp_host_io.cpp
     src/psp_perf.cpp
     src/psp_scheduler.cpp
     src/psp_render_queue.cpp
@@ -680,6 +681,11 @@ add_test(NAME cpu_close_closer_tests COMMAND test_cpu_close --closer)
 set_tests_properties(cpu_close_closer_tests PROPERTIES
     PASS_REGULAR_EXPRESSION "the closing thread asked for the CPU after close: exiting now")
 
+add_executable(test_host_io tests/test_host_io.cpp src/psp_host_io.cpp)
+target_include_directories(test_host_io PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_host_io PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME host_io_tests COMMAND test_host_io)
+
 add_executable(test_wheel tests/test_wheel.cpp src/psp_wheel.cpp)
 target_include_directories(test_wheel PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_wheel PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
@@ -706,7 +712,7 @@ target_include_directories(test_stack_layout PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 target_compile_options(test_stack_layout PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME stack_layout_tests COMMAND test_stack_layout)
 
-add_executable(test_adhoc_config tests/test_adhoc_config.cpp src/net/adhoc_config.cpp)
+add_executable(test_adhoc_config tests/test_adhoc_config.cpp src/net/adhoc_config.cpp src/psp_host_io.cpp)
 target_include_directories(test_adhoc_config PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_adhoc_config PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME adhoc_config_tests COMMAND test_adhoc_config)
@@ -840,7 +846,7 @@ target_compile_options(test_atrac_ctx PRIVATE
 
 # sceUtilitySavedata back end unit test (pure: PSF writer/parser, savedata
 # modes against a temp directory and a fake guest RAM) -- no SDL, no game files.
-add_executable(test_savedata tests/test_savedata.cpp src/hle/psp_savedata.cpp)
+add_executable(test_savedata tests/test_savedata.cpp src/hle/psp_savedata.cpp src/psp_host_io.cpp)
 
 target_include_directories(test_savedata PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -863,6 +869,7 @@ add_executable(test_gamedata_install
     tests/test_gamedata_install.cpp
     src/hle/psp_gamedata_install.cpp
     src/hle/psp_savedata.cpp  # Psf writer/parser for the SFO assertions
+    src/psp_host_io.cpp
 )
 
 target_include_directories(test_gamedata_install PRIVATE
@@ -965,6 +972,7 @@ add_executable(test_hle_net
     src/hle/psp_hle_net.cpp
     src/hle/psp_hle_net_matching.cpp
     src/net/adhoc_config.cpp
+    src/psp_host_io.cpp
     src/net/adhocctl.cpp
     src/net/pdp.cpp
     src/net/ptp.cpp

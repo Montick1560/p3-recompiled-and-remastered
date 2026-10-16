@@ -1,4 +1,5 @@
 #include "net/adhoc_config.h"
+#include "psp_host_io.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -65,6 +66,7 @@ static bool read_mac_file(const std::string& path, AdhocMac* out) {
 }
 
 static void write_mac_file(const std::string& path, const AdhocMac& mac) {
+    PspHostWriteScope host_write;
     std::ofstream out(path, std::ios::trunc);
     if (out) out << adhoc_format_mac(mac) << "\n";
 }

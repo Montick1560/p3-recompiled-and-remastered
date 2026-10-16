@@ -2,6 +2,7 @@
 // Core/Dialog/PSPGamedataInstallDialog.cpp + Core/HLE/sceIo.cpp.
 
 #include "psp_gamedata_install.h"
+#include "psp_host_io.h"
 
 #include "hle/psp_savedata.h"
 
@@ -189,6 +190,7 @@ void Installer::copy_chunks() {
             file_left_ = 0;
             break;
         }
+        PspHostWriteScope host_write;
         out_.write(buf.data(), got);
         if (!out_) {
             file_left_ = 0;
@@ -204,6 +206,7 @@ void Installer::copy_chunks() {
 
 void Installer::close_current() {
     if (out_.is_open()) {
+        PspHostWriteScope host_write;  // close flushes the stream buffer
         out_.close();
     }
     if (in_.is_open()) {
@@ -240,6 +243,7 @@ void Installer::write_sfo() {
     std::vector<uint8_t> bytes = sfo.serialize();
     std::error_code ec;
     fs::create_directories(dst_dir_, ec);
+    PspHostWriteScope host_write;  // the PARAM.SFO write and its rename
     fs::path tmp = sfo_path;
     tmp += ".tmp";
     {

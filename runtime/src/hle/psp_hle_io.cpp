@@ -3,6 +3,7 @@
 #include "hle/psp_hle_kernel.h"
 #include "hle/psp_savedata.h"
 #include "psp_gamedata_install.h"
+#include "psp_host_io.h"
 #include "psp_memory.h"
 #include "psp_scheduler.h"
 #include "recomp.h"
@@ -500,7 +501,11 @@ static void hle_sceIoWrite(
     }
 
     const uint8_t* src = rdram + (buf_ptr & PSP_ADDR_MASK);
-    ssize_t written = ::write(it->second.host_fd, src, size);
+    ssize_t written;
+    {
+        PspHostWriteScope host_write;
+        written = ::write(it->second.host_fd, src, size);
+    }
     ctx->r[2] = static_cast<int32_t>(written);
     sched_yield_point();
 }

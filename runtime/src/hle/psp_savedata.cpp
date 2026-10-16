@@ -3,6 +3,7 @@
 // See psp_savedata.h for the list of deliberate deviations.
 
 #include "hle/psp_savedata.h"
+#include "psp_host_io.h"
 
 #include <algorithm>
 #include <chrono>
@@ -303,6 +304,7 @@ constexpr uint32_t kFileListEntrySize = 32;  // name[13] + hash[16] + pad[3]
 constexpr uint32_t kFileListTotalSize = kFileListEntrySize * kFileListCountMax;
 
 bool write_file_atomic(const fs::path& path, const uint8_t* data, size_t n) {
+    PspHostWriteScope host_write;  // shutdown waits for the write, flush and rename
     fs::path tmp = path;
     tmp += ".tmp";
     {
