@@ -200,6 +200,63 @@ void pose_eval_smooth(uint8_t* rdram, recomp_context* ctx) {
     std::memcpy(flags, &f, 4);
 }
 
+// Smooth bone attachments (same switch as above). FUN_08878D38 (a1 = bone) and FUN_08878C8C
+// (bone from the model's +0x48) take a player (a0) and an out 4x4 (a2): they read the bone of the
+// player's model at the whole frame (int)+0x68 through FUN_08878494 and compose it with the
+// player's matrix. Units assembled from parts (a Patapon's body, eye, weapon, helmet) hang the
+// parts on the bones of a baked skeleton: model class vtable 0x08A82BB0, whose bone getter
+// (+0x50 = FUN_0887A988 -> FUN_08858FC0) reads one bone matrix per whole frame from a table.
+// Those reads run outside the player tick/draw, so in the barracks the Patapons kept stepping
+// (~10 pose changes/s at 30 and at 60 fps) while the Hero, a GMO model, was smooth. When the
+// clock lies between frames, read the next frame too and blend the two matrices. The baked
+// getters only read tables (+0x40 = bone count), so the second read has no side effects.
+constexpr uint32_t kBoneAt = 0x08878D38u;
+constexpr uint32_t kBoneNamed = 0x08878C8Cu;
+constexpr uint32_t kBakedModelVtbl = 0x08A82BB0u;
+FuncPtr g_bone_at = nullptr;
+FuncPtr g_bone_named = nullptr;
+
+template <FuncPtr* Orig>
+void bone_smooth(uint8_t* rdram, recomp_context* ctx) {
+    const uint32_t player = static_cast<uint32_t>(ctx->r[4]);
+    const uint32_t model = player ? rd32(rdram, player + 0x44) : 0;
+    const bool baked = model && rd32(rdram, model) == kBakedModelVtbl && rd32(rdram, player + 0x48) == 0 &&
+                       rd32(rdram, player + 0x60) != 0;
+    if (!baked) {
+        (*Orig)(rdram, ctx);
+        return;
+    }
+    const uint32_t clock_bits = rd32(rdram, player + 0x68);
+    float t, start, end;
+    std::memcpy(&t, &clock_bits, 4);
+    const uint32_t start_bits = rd32(rdram, player + 0x6C), end_bits = rd32(rdram, player + 0x70);
+    std::memcpy(&start, &start_bits, 4);
+    std::memcpy(&end, &end_bits, 4);
+    const int32_t frame = psp_f2i(t);
+    const float alpha = t - static_cast<float>(frame);
+    int32_t next = frame + 1;
+    if (static_cast<float>(next) > end) next = rdram[(player + 0x7B) & 0x07FFFFFFu] ? psp_f2i(start) : -1;
+    if (!(alpha > 0.0f && alpha < 1.0f) || next < 0 || next == frame) {
+        (*Orig)(rdram, ctx);
+        return;
+    }
+    const uint64_t a0 = ctx->r[4], a1 = ctx->r[5], a2 = ctx->r[6];
+    const uint32_t out = static_cast<uint32_t>(a2);
+    float m0[16], m1[16];
+    (*Orig)(rdram, ctx);
+    std::memcpy(m0, rdram + (out & 0x07FFFFFFu), sizeof m0);
+    const float next_t = static_cast<float>(next);
+    std::memcpy(rdram + ((player + 0x68) & 0x07FFFFFFu), &next_t, 4);
+    ctx->r[4] = a0;
+    ctx->r[5] = a1;
+    ctx->r[6] = a2;
+    (*Orig)(rdram, ctx);
+    std::memcpy(rdram + ((player + 0x68) & 0x07FFFFFFu), &clock_bits, 4);
+    std::memcpy(m1, rdram + (out & 0x07FFFFFFu), sizeof m1);
+    for (int i = 0; i < 16; i++) m0[i] += (m1[i] - m0[i]) * alpha;
+    std::memcpy(rdram + (out & 0x07FFFFFFu), m0, sizeof m0);
+}
+
 void patapon3_register_hooks(uint8_t* /*rdram*/) {
     const char* smooth = std::getenv("PSPRECOMP_P3_ANIM_SMOOTH");
     const bool smooth_on = (smooth && smooth[0]) ? smooth[0] == '1' : psp_patch_set_active("60fps");
@@ -212,6 +269,10 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
         psp_dispatch_register(kMotionDraw, motion_scope<&g_motion_draw>);
         psp_dispatch_register(kPlayheadSet, playhead_set_smooth);
         psp_dispatch_register(kPoseEval, pose_eval_smooth);
+        g_bone_at = RECOMP_LOOKUP(kBoneAt);
+        g_bone_named = RECOMP_LOOKUP(kBoneNamed);
+        psp_dispatch_register(kBoneAt, bone_smooth<&g_bone_at>);
+        psp_dispatch_register(kBoneNamed, bone_smooth<&g_bone_named>);
         std::fprintf(stderr, "[P3] smooth animation: poses sampled at the fractional frame\n");
     }
     const char* trace = std::getenv("PSPRECOMP_P3_ANIM_TRACE");

@@ -255,3 +255,51 @@ slow sheet `build/tour/anim_smooth/hide_slow1.png` shows the Hero animating norm
 Not checked by tooling (for the user's play test): looping idles for a pop at the wrap,
 FEVER worm, bosses, cutscenes, minigames. Units whose model is not reached through
 FUN_08878A18/FUN_08878B18 keep the stepped animation.
+
+## Follow-up 2026-10-15 evening: Patapons in the barracks (bone attachments)
+
+User report after playing: in the barracks (Cuartel) the Hero moves smoothly but Kan, Chin and
+Ton (the Patapons) still step.
+
+- Measured (`track.py`, per-unit region diff, ~50 captures/s): at 30 fps (no patch) every unit
+  changes ~9.6 times/s; at 60 fps + smooth the Hero reaches ~32/s but the three Patapons stay
+  at ~9.5/s, in sync, ~300 px per step.
+- A setPose/playhead/eval trace in the barracks showed no new motions: the Patapons are not
+  GMO-evaluated. `[DL]` dump: each Patapon is ~5 flat CLUT4 quads (eye, body, weapon) whose world
+  matrix origin moves; the same value repeats for 2-3 frames.
+- `FUNC_WATCH` on the GE matrix upload (`FUN_08805EC4` -> `FUN_08806BDC`) and on the node
+  transform (`FUN_0887AF68` -> `FUN_0888E7FC`) led to `FUN_088F3888` / `FUN_088F3B88`: a node
+  attached to a bone of a parent player reads it with `FUN_08878D38(player, bone, out)`
+  (`FUN_08878C8C` = same by the model's bone id), which calls
+  `FUN_08878494(player + 0x40, out, bone, motion, (int)clock)`.
+- The Patapon skeleton is the second model class (vtable 0x08A82BB0, drawn by +0x3C =
+  FUN_0887A814 from baked lists): its bone getter +0x50 = FUN_0887A988 -> FUN_08858FC0 reads
+  one bone matrix per whole frame from a table (bounds-checked; +0x40 = FUN_08858EE4 is the bone
+  count). Those reads run outside the player tick/draw scope, at the truncated frame.
+- Fix (game module, same switch): wrap FUN_08878D38 and FUN_08878C8C. For a baked model
+  (vtable 0x08A82BB0, no precomputed bone block at player +0x48) whose clock is between frames,
+  read the bone at the whole frame, then at the next one (the clock word is set to the next
+  frame for the second call and restored; next = start frame past the end of a loop, none past
+  the end of a one-shot), and write the element-wise blend. Getters only read tables, so the
+  second call has no side effects. GMO models (the Hero) are left alone.
+
+Measurements (port 9998, `build/tour_save`, barracks, 60fps set):
+
+| Unit | before (changes/s) | after |
+|---|---|---|
+| Kan | 9.5 | 42.9 |
+| Chin | 9.5 | 45.2 |
+| Ton | 9.5 | 43.5 |
+| Hero | 32.1 | 33.7 |
+
+(captures ~51/s, so "after" is capture-limited.) Zoomed burst: no detached or distorted parts.
+
+- Full gfx tour with `60fps` (`build/tour/bone_smooth60`): all 31 checkpoints through drum
+  march, attack, combo, mission clear and rewards; `rt_regress anim_smooth/full60 bone_smooth60`
+  PASS (21 gated), mission frames show the army intact.
+- Flag off: `rt_regress relevo_base bone_smooth_off` PASS (21 gated); ctest 61/61.
+- `perf_hideout --diff anim_on60 bone_on60`: fps 59.95 -> 59.7, ge_ms 4.2 = 4.2, CPU 68.5 ->
+  65.9 % of one core (noise).
+- Side note: `PSPRECOMP_NO_AUDIO=1` boots again stay black after the opening movie (the 11 Oct
+  T0 symptom; same with and without the 60fps set, movie runs at ~20 fps with cpu_wait ~1.7 s/s).
+  With audio the movie hands off to the title normally. Not touched here.

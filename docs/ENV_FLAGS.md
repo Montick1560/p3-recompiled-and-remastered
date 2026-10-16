@@ -602,8 +602,12 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   `0x08878B18` runs, the playhead setter `0x089DAF74` stores the player's
   clock (+0x68) and the GMO evaluation `0x089DBD2C` runs with the model's
   interpolate flag (model +0x28 bit 4) set, so `0x089DB1E0` skips its
-  round-to-whole-frame. The clock and frame-keyed events are untouched. Install
-  prints `[P3] smooth animation: poses sampled at the fractional frame`.
+  round-to-whole-frame. Bone reads `0x08878D38` / `0x08878C8C` of a baked
+  skeleton (model vtable `0x08A82BB0`, one bone matrix per whole frame; the
+  Patapons in the barracks hang body, eye and weapon on it) blend the bone at
+  the whole frame with the next one by the clock's fraction. The clock and
+  frame-keyed events are untouched. Install prints
+  `[P3] smooth animation: poses sampled at the fractional frame`.
 - **Set it when:** `0` to compare against the stepped animation at 60 fps; `1`
   to try it at 30 fps.
 
