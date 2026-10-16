@@ -597,17 +597,22 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
 - **Type:** env (`1` on, `0` off; unset or empty = follow the `60fps` patch set).
   **Game-specific: patapon3.**
 - **Default:** on when `PSPRECOMP_PATCHES` enables `60fps`, off otherwise.
-- **Effect:** Character poses are sampled at the motion player's fractional
-  clock instead of a whole frame. While the motion tick `0x08878A18` or draw
-  `0x08878B18` runs, the playhead setter `0x089DAF74` stores the player's
-  clock (+0x68) and the GMO evaluation `0x089DBD2C` runs with the model's
-  interpolate flag (model +0x28 bit 4) set, so `0x089DB1E0` skips its
-  round-to-whole-frame. Bone reads `0x08878D38` / `0x08878C8C` of a baked
-  skeleton (model vtable `0x08A82BB0`, one bone matrix per whole frame; the
-  Patapons in the barracks hang body, eye and weapon on it) blend the bone at
-  the whole frame with the next one by the clock's fraction. The clock and
-  frame-keyed events are untouched. Install prints
-  `[P3] smooth animation: poses sampled at the fractional frame`.
+- **Effect:** Character poses are blended from the two whole frames around the
+  motion player's clock (+0x68). While the motion tick `0x08878A18` or draw
+  `0x08878B18` runs, each GMO evaluation `0x089DBD2C` runs twice on the
+  original whole-frame path — the playheads the player set (`0x089DAF74`)
+  moved to the next frame (loop start past the end; a one-shot at its end
+  holds), then at the game's own frame — and the bone blocks (0x100 bytes per
+  bone: translation +0x50, rotation quaternion +0x60, scale +0x70) are blended
+  by the clock's fraction (`runtime/include/psp_anim_blend.h`). The model's own
+  interpolate flag (model +0x28 bit 4) is not used: `0x089DB1E0` honours it
+  for some channels and rounds others, so the Hero lifted off the ground. Bone
+  reads `0x08878D38` / `0x08878C8C` of a baked skeleton (model vtable
+  `0x08A82BB0`, one bone matrix per whole frame; the Patapons in the barracks
+  hang body, eye and weapon on it) blend the bone at the whole frame with the
+  next one by the clock's fraction. The clock and frame-keyed events are
+  untouched. Install prints
+  `[P3] smooth animation: poses blended from two whole frames`.
 - **Set it when:** `0` to compare against the stepped animation at 60 fps; `1`
   to try it at 30 fps.
 
@@ -627,10 +632,13 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
 
 ### `PSPRECOMP_P3_ANIM_SMOOTH_DIAG`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
-- **Type:** env (`time` or `flag`; unset = normal).
-- **Effect:** With smooth animation on, keep only one half of it: `time` stores the fractional
-  playhead but never sets the interpolate flag; `flag` sets the flag but leaves the playhead whole.
-- **Set it when:** localizing a pose difference between the smooth and the stepped animation.
+- **Type:** env (`interp`; unset = normal).
+- **Effect:** With smooth animation on, `interp` uses the earlier smooth mode instead of the
+  two-frame blend: the player's fractional clock as the playhead and the model's interpolate
+  flag (+0x28 bit 4) set around the evaluation. Prints
+  `[P3] smooth animation diag: interpolate-flag path`.
+- **Set it when:** comparing the blend against the earlier mode (the Hero rose slightly off the
+  ground with it).
 
 ### `PSPRECOMP_P3_ANIM_PROBE`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
@@ -638,8 +646,8 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
 - **Effect:** Diagnostics only. When `<dir>/probe.trigger` appears (optional content
   `"<min bones> <skip>"`), the next GMO model evaluated in a motion tick/draw with a fractional
   clock (at least `<min bones>` bones, after skipping `<skip>` such models) is evaluated three
-  times: playheads at the whole frame (`a`), whole + 1 (`b`) and the smooth clock with the
-  interpolate flag (`mid`). Its bone blocks (0x100 bytes per bone) go to
+  times: playheads at the whole frame (`a`), whole + 1 (`b`) and the current smooth mode
+  (`mid`: the blend, or the interpolate-flag path with `PSPRECOMP_P3_ANIM_SMOOTH_DIAG=interp`). Its bone blocks (0x100 bytes per bone) go to
   `<dir>/probe_<n>_{a,b,mid}.bin`, a header to `<dir>/probe_<n>.txt`; the model keeps `mid`.
   The trigger file is removed when read. `build/tools/anim_probe.py <dir> <n>` compares them.
 - **Set it when:** checking whether interpolated poses stay between the two whole-frame poses.

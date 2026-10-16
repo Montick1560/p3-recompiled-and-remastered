@@ -710,5 +710,64 @@ git commit -m "fix(p3): smooth GMO poses from two whole-frame samples (Hero stay
 
 ## Evidence
 
-(fill in while executing: Task 1 table, Task 2 split, Task 3 probe findings + kBoneKinds,
-Task 5/6 numbers)
+Executed 2026-10-15 (inline, executing-plans). Commits 75c7d2e (diagnostics), 9343e86 (helper),
+182a785 (fix), plus the docs commit.
+
+**Where it shows.** The user sees the lift "everywhere the Hero appears (mission and barracks)".
+In the barracks the Hero's feet are behind the name bar (bar from y=232.0), so `foot_gap.py`
+measures from y=180 and also prints the top row and the dark-pixel centroid. `gfx_tour` cannot
+land at render scale 4 (it matches 480x272 references): `tour_scaled.py` / `hero_march.py`
+downscale only for matching.
+
+**Task 1 (pixels, idle).** No lift was measurable at idle with the frozen tour save:
+
+| scene (scale 4) | config | metric | median | p10 | p90 |
+|---|---|---|---|---|---|
+| barracks, Hero slot | fg30 | centroid_y | 211.06 | 211.05 | 211.18 |
+| barracks, Hero slot | fg60on | centroid_y | 211.08 | 210.98 | 211.19 |
+| mission start, legs (150,214)-(166,232) | m30 / m60on | lowest_y | 231.75 | 231.75 | 231.75 |
+
+Per-column gap above the ground at the Hero's legs (x 152-157, 250 frames): 0.00 px median and
+max in m30, m60off and m60on. After the march command the Hero is hidden by the wall.
+
+**Task 3 (bone probes) — the cause.** Bone block layout (0x100 per bone): +0x50 translation
+vec4, +0x60 rotation quaternion (|q| = 1 in every bone), +0x70 scale vec4, +0x4C not a float.
+With the interpolate-flag path, FUN_089DB1E0 treats channels differently:
+- barracks Hero (27 bones, clock 8.333): rotations +0x68/+0x6C at 0.333 of a->b, translations
+  +0x50/+0x54/+0x5C at 0.000 (held at the whole frame);
+- a 20-bone model at clock x.75: every varying word at 1.000 (snapped to the next frame);
+- other models: some words linear at alpha, scale words 0.26..0.52 at alpha 0.5.
+So each pose mixed two frames per channel; no single word left [a, b] (out-of-range 0 in all
+probes), but the combination is a pose the game never shows. The evaluator's call closure
+(Task 3 Step 4): GMO lib 0x089D5664..0x089DEB94, memset 0x088129EC, memcpy 0x0881260C; indirect
+calls only in the GMO allocator (lazy, one-time). DBD2C with f12 = 0 freezes slot crossfades,
+and key search walks both ways from its cached index, so a repeated evaluation is idempotent.
+
+kBoneKinds (OR of six barracks models, +0x58 added as the translation's z):
+lerp +0x50..+0x5C, quaternion at +0x60, lerp +0x70..+0x7C, the rest kept.
+
+**Task 5 (blend).** Probe with `mid` = shipped mode, 20-bone model at alpha 0.75: blend puts
+every varying word at 0.750 (interp: 1.000). Barracks crops, scale 1, 300 captures, Hero slot
+changes per 60 captures at thresholds >24x3 / >12x1 / >6x1 and mean |diff| per step:
+
+| config | >24x3 | >12x1 | >6x1 | step |diff| |
+|---|---|---|---|---|
+| 30 fps | 10.4 | 10.4 | 10.4 | 1152 |
+| 60 fps, smooth off | 9.8 | 9.8 | 9.8 | 1073 |
+| 60 fps, blend | 11.8 | 35.7 | 49.8 | 1251 |
+| 60 fps, interp (old) | 16.9 | 40.9 | 54.2 | 1998 |
+
+The Hero idles with sub-pixel motion, so only the fine threshold sees the in-between poses
+(blend 5x smooth-off). The old mode moves ~1.6x more per step than 30 fps (the per-channel
+jitter); the blend moves like 30 fps. Kan/Chin/Ton (bone_smooth on the shared helper):
+43.7/47.2/46.4 vs 9.6 off.
+
+**Task 6 (gates).** ctest 62/62. Tours at night first failed rt_regress on 11-20 (hideout sky
+follows the RTC, identical with and without the hook); rerun with
+`PSPRECOMP_RTC_FIXED=2026-10-11T18:32:00`: flag-off `ground_off_rtc` vs `relevo_base` PASS 21/21;
+60 fps `ground60_rtc` vs `bone_smooth60` PASS 21/21, 31/31 checkpoints, march/attack army intact.
+perf_hideout `ground_on60` vs `bone_on60`: fps 59.45 (-0.4 %), CPU one core 63.5 % (-3.6 %),
+ge_ms -3.6 %. Barracks Kan/Chin/Ton stay ~45 changes per 60 captures. Final review: self-review
+against Review Focus 1-5 (FUN_089DAF74 is a plain store to motion +0x1C, so writing playheads
+directly is faithful).
+
