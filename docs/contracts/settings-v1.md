@@ -120,8 +120,9 @@ runtime default (the variable stays unset) and logs `[SETTINGS] <section>.<key>:
 ```
 
 All values are strings (`"true"` / `"false"` for bools). `map` turns a value into the
-environment value (`null` = leave unset); without `map` the value is copied as is. A `map` onto
-`PSPRECOMP_PATCHES` appends to the patch list (comma-separated) instead of replacing it.
+environment value (`null` = leave unset); without `map` the value is copied as is. Precedence
+applies to catalog keys too: `fps = 60` sets `PSPRECOMP_PATCHES=60fps` only when
+`PSPRECOMP_PATCHES` is not already set.
 
 ## Command line
 

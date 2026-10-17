@@ -142,6 +142,8 @@ set(RUNTIME_SOURCES
     src/psp_ge.cpp
     src/psp_ge_transfer.cpp
     src/psp_ge_rtt.cpp
+    src/psp_ini.cpp
+    src/psp_settings.cpp
     src/psp_present.cpp
     src/psp_fpu.cpp
     src/psp_ge_sampler.cpp
@@ -355,6 +357,7 @@ endforeach()
 target_include_directories(psprecomp_runtime PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb  # stb_image (texture replacement PNGs)
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann  # json.hpp (settings.ini game catalog)
     ${PSPRECOMP_OUTPUT_DIR}/include  # recomp.h
     ${PSPRECOMP_OUTPUT_DIR}          # funcs.h
     ${SDL2_INCLUDE_DIRS}
@@ -591,6 +594,16 @@ add_executable(test_ge_rtt tests/test_ge_rtt.cpp src/psp_ge_rtt.cpp)
 target_include_directories(test_ge_rtt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_ge_rtt PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME ge_rtt_tests COMMAND test_ge_rtt)
+
+# settings.ini v1 (docs/contracts/settings-v1.md): INI parser + key resolution. Pure.
+add_executable(test_settings tests/test_settings.cpp src/psp_ini.cpp src/psp_settings.cpp)
+target_include_directories(test_settings PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                           ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
+target_compile_definitions(test_settings PRIVATE
+    PSP_CONTRACT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../docs/contracts"
+    PSP_GAME_OPTIONS_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/game_options.json")
+target_compile_options(test_settings PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME settings_tests COMMAND test_settings)
 
 # Present rectangle (aspect fit) and window scale parsing.
 add_executable(test_present tests/test_present.cpp src/psp_present.cpp)

@@ -1,0 +1,141 @@
+// Unit tests for settings.ini v1 (docs/contracts/settings-v1.md): the INI parser and the
+// resolution of keys into PSPRECOMP_* environment variables.
+#include "psp_ini.h"
+#include "psp_settings.h"
+
+#include <cstdio>
+#include <fstream>
+#include <map>
+#include <sstream>
+#include <string>
+
+static int failures = 0;
+#define CHECK(cond, msg) \
+    do { if (!(cond)) { std::fprintf(stderr, "FAIL: %s (line %d)\n", msg, __LINE__); failures++; } } while (0)
+
+static std::string slurp(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+static const std::string kFix = std::string(PSP_CONTRACT_DIR) + "/fixtures/";
+static const std::string kCatalog = slurp(PSP_GAME_OPTIONS_JSON);
+
+// env name -> value of a resolution; "<unset>" when not set.
+static std::string val(const SettingsResolution& r, const char* env) {
+    std::string v = "<unset>";
+    for (const auto& kv : r.set) if (kv.first == env) v = kv.second;
+    return v;
+}
+static bool logged(const SettingsResolution& r, const char* needle) {
+    for (const auto& l : r.log) if (l.find(needle) != std::string::npos) return true;
+    return false;
+}
+static const EnvGetter kNoEnv = [](const char*) -> const char* { return nullptr; };
+
+static void parser_rules() {
+    IniDoc d = psp_ini_parse("; c\n# c\n[Display]\n Render_Scale = 4 \nx=a=b\nbad line\n[online]\nnick=\n");
+    CHECK(d.get("display", "render_scale") && *d.get("display", "render_scale") == "4",
+          "sections and keys are lowercased, values trimmed");
+    CHECK(d.get("display", "x") && *d.get("display", "x") == "a=b", "split at the first '='");
+    CHECK(d.get("online", "nick") && d.get("online", "nick")->empty(), "empty value kept");
+    CHECK(d.warnings.size() == 1, "one warning for the line without '='");
+    d = psp_ini_parse("[a]\nk = 1\nk = 2\n");
+    CHECK(*d.get("a", "k") == "2", "repeated key keeps the last value");
+    d = psp_ini_parse(slurp(kFix + "bom_crlf.ini"));
+    CHECK(d.get("display", "render_scale") && *d.get("display", "render_scale") == "5",
+          "BOM and CRLF are accepted");
+    CHECK(*d.get("online", "nickname") == "\xC3\x91" "and\xC3\xBA", "UTF-8 value kept");
+}
+
+static void defaults_fixture() {
+    const SettingsResolution r = psp_settings_resolve(slurp(kFix + "defaults.ini"), kCatalog,
+                                                      "C:/Juegos/Patapon 3", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_UI_LANG") == "es", "language");
+    CHECK(val(r, "PSPRECOMP_DISC0") == "C:/Juegos/Patapon 3/disc0", "disc0 resolved (spaces)");
+    CHECK(val(r, "PSPRECOMP_SAVEDATA") == "C:/Juegos/Patapon 3/savedata", "savedata resolved");
+    CHECK(val(r, "PSPRECOMP_FULLSCREEN") == "1", "fullscreen true -> 1");
+    CHECK(val(r, "PSPRECOMP_WINDOW_SCALE") == "2", "window scale");
+    CHECK(val(r, "PSPRECOMP_RENDER_SCALE") == "4", "render scale");
+    CHECK(val(r, "PSPRECOMP_PRESENT_FILTER") == "linear", "present filter");
+    CHECK(val(r, "PSPRECOMP_TEX_FILTER") == "auto", "texture filter");
+    CHECK(val(r, "PSPRECOMP_TEXTURES") == "C:/Juegos/Patapon 3/textures/INFN00001", "pack on");
+    CHECK(val(r, "PSPRECOMP_PATCHES") == "<unset>", "fps 30 -> no patch");
+    CHECK(val(r, "PSPRECOMP_P3_ANIM_SMOOTH") == "1", "smooth on");
+    CHECK(val(r, "PSPRECOMP_P3_FAST_LOAD") == "1", "fast load on");
+    CHECK(val(r, "PSPRECOMP_ADHOC_SERVER") == "127.0.0.1", "server");
+    CHECK(val(r, "PSPRECOMP_ADHOC_NICK") == "Patapon", "nick");
+    CHECK(val(r, "PSPRECOMP_ADHOC_RELAY") == "<unset>", "relay off -> unset");
+    CHECK(val(r, "PSPRECOMP_ADHOC_PORT_OFFSET") == "10000", "port offset");
+    CHECK(val(r, "PSPRECOMP_ADHOC_MAC_FILE") == "C:/Juegos/Patapon 3/adhoc_mac.txt", "mac file");
+}
+
+static void custom_fixture() {
+    const SettingsResolution r = psp_settings_resolve(slurp(kFix + "custom.ini"), kCatalog,
+                                                      "D:/P3", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_UI_LANG") == "en", "en");
+    CHECK(val(r, "PSPRECOMP_DISC0") == "D:/P3/../data/disc0", "relative with ..");
+    CHECK(val(r, "PSPRECOMP_SAVEDATA") == "D:/P3/Partidas Guardadas", "spaces in value");
+    CHECK(val(r, "PSPRECOMP_FULLSCREEN") == "<unset>", "fullscreen no -> unset");
+    CHECK(val(r, "PSPRECOMP_TEXTURES") == "<unset>", "hd off -> unset");
+    CHECK(val(r, "PSPRECOMP_PATCHES") == "60fps", "fps 60 -> patch");
+    CHECK(val(r, "PSPRECOMP_P3_ANIM_SMOOTH") == "0", "smooth false -> 0");
+    CHECK(val(r, "PSPRECOMP_P3_FAST_LOAD") == "1", "TRUE accepted");
+    CHECK(val(r, "PSPRECOMP_ADHOC_RELAY") == "1", "yes -> 1");
+    CHECK(val(r, "PSPRECOMP_ADHOC_PORT_OFFSET") == "0", "offset 0");
+}
+
+static void invalid_fixture() {
+    const SettingsResolution r = psp_settings_resolve(slurp(kFix + "invalid.ini"), kCatalog,
+                                                      "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_FULLSCREEN") == "1", "bad bool -> default (true)");
+    CHECK(logged(r, "display.fullscreen"), "bad bool logged");
+    CHECK(val(r, "PSPRECOMP_RENDER_SCALE") == "3", "last duplicate (3) wins");
+    CHECK(val(r, "PSPRECOMP_WINDOW_SCALE") == "2", "bad int -> default");
+    CHECK(val(r, "PSPRECOMP_PRESENT_FILTER") == "linear", "bad enum -> default");
+    CHECK(val(r, "PSPRECOMP_PATCHES") == "<unset>", "fps 45 -> default 30 -> unset");
+    CHECK(logged(r, "game.fps"), "bad fps logged");
+    CHECK(logged(r, "game.unknown_key"), "unknown key logged");
+    CHECK(logged(r, "nosuchsection"), "unknown section logged");
+    CHECK(val(r, "PSPRECOMP_ADHOC_NICK") == "Patapon", "empty nick -> default");
+    CHECK(val(r, "PSPRECOMP_ADHOC_PORT_OFFSET") == "10000", "offset out of range -> default");
+    CHECK(logged(r, "garbage line"), "ignored line logged");
+}
+
+static void env_precedence() {
+    std::map<std::string, std::string> env = {{"PSPRECOMP_RENDER_SCALE", "1"},
+                                              {"PSPRECOMP_PATCHES", "60fps"}};
+    const EnvGetter get = [&](const char* n) -> const char* {
+        auto it = env.find(n);
+        return it == env.end() ? nullptr : it->second.c_str();
+    };
+    const SettingsResolution r = psp_settings_resolve(slurp(kFix + "defaults.ini"), kCatalog,
+                                                      "C:/P", get);
+    CHECK(val(r, "PSPRECOMP_RENDER_SCALE") == "<unset>", "env already set: not touched");
+    CHECK(val(r, "PSPRECOMP_PATCHES") == "<unset>", "env PATCHES already set: not touched");
+    CHECK(logged(r, "PSPRECOMP_RENDER_SCALE already set"), "precedence logged");
+}
+
+static void future_and_empty() {
+    SettingsResolution r = psp_settings_resolve(slurp(kFix + "future.ini"), kCatalog, "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_RENDER_SCALE") == "6", "known key of a future version applied");
+    CHECK(logged(r, "version 2"), "future version warned");
+    r = psp_settings_resolve("", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_RENDER_SCALE") == "4", "empty ini -> defaults");
+    CHECK(val(r, "PSPRECOMP_PATCHES") == "<unset>", "no catalog -> no game keys");
+    r = psp_settings_resolve("[display]\nrender_scale=2\n", "{not json", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_RENDER_SCALE") == "2", "bad catalog does not stop core keys");
+    CHECK(logged(r, "game_options.json"), "bad catalog logged");
+}
+
+int main() {
+    parser_rules();
+    defaults_fixture();
+    custom_fixture();
+    invalid_fixture();
+    env_precedence();
+    future_and_empty();
+    if (failures == 0) std::printf("test_settings: all passed\n");
+    return failures == 0 ? 0 : 1;
+}
