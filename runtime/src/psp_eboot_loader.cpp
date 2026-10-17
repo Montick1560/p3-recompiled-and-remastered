@@ -150,7 +150,9 @@ void psp_eboot_load_or_exit(uint8_t* rdram, const PspExpectedImage& want) {
         std::fprintf(stderr, "[EBOOT] %s: %s (%s); exit 11\n", g_boot_file.c_str(),
                      psp_eboot_status_name(st), detail.c_str());
         std::fflush(stderr);
-        std::exit(11);
+        // quick_exit, like the fast shutdown (psp_exit.h): std::exit would run static destructors
+        // while the debug-socket thread is still joinable and abort instead of returning 11.
+        std::quick_exit(11);
     }
     size_t at = 0;
     for (uint32_t i = 0; i < want.count; i++) {
