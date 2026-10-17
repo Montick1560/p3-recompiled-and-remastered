@@ -431,7 +431,31 @@ void bone_smooth(uint8_t* rdram, recomp_context* ctx) {
     std::memcpy(rdram + (out & 0x07FFFFFFu), m0, sizeof m0);
 }
 
+// Fast loading (on by default, PSPRECOMP_P3_FAST_LOAD=0 turns it off): the tip screen's loader
+// takes one file per two or three frames, so a load whose reads are instant on the host still
+// took 2-3 s at 59.94 Hz. FUN_08A18834 draws the "CARGANDO" icon and runs on every frame of
+// a tip-screen load and never elsewhere (function census over the graphics tour: the Continue
+// load and a mission load, not the boot spinner, menus, the "press any button" page or
+// gameplay). While it runs, the vblank waits do not sleep and the FileThread's 10 ms queue
+// polls (sceKernelDelayThreadCB(10000)) sleep 1 ms (runtime display fast-forward), so the
+// loader runs at host speed: Continue went from ~2.3 s of "CARGANDO" to ~0.5-0.8 s (150-230
+// vblanks at ~3 ms each). The budget lapses a few vblanks after the icon stops.
+constexpr uint32_t kLoadingIconDraw = 0x08A18834u;
+constexpr int kFastLoadVblanks = 8;
+FuncPtr g_loading_icon_draw = nullptr;
+
+void loading_icon_draw(uint8_t* rdram, recomp_context* ctx) {
+    g_loading_icon_draw(rdram, ctx);
+    psp_display_fast_forward().request(kFastLoadVblanks);
+}
+
 void patapon3_register_hooks(uint8_t* /*rdram*/) {
+    const char* fast_load = std::getenv("PSPRECOMP_P3_FAST_LOAD");
+    if (!(fast_load && fast_load[0] == '0')) {
+        g_loading_icon_draw = RECOMP_LOOKUP(kLoadingIconDraw);
+        psp_dispatch_register(kLoadingIconDraw, loading_icon_draw);
+        std::fprintf(stderr, "[P3] fast loading: tip-screen loads skip the vblank waits\n");
+    }
     const char* smooth = std::getenv("PSPRECOMP_P3_ANIM_SMOOTH");
     const bool smooth_on = (smooth && smooth[0]) ? smooth[0] == '1' : psp_patch_set_active("60fps");
     if (smooth_on) {

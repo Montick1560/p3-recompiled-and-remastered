@@ -293,6 +293,14 @@ them (issue #43 tracks a proper registry/channel system).
 
 - **PPSSPP crashes when paused/stepping** — poll-only oracle work (§4).
 - **Stale `output/`** after emitter changes — §2 trap; regenerate first.
+- **Timing on a Patapon 3 tip screen ("CARGANDO") is fast-forwarded** — vblank waits do not
+  sleep, the display clock jumps, presents drop to one per real frame and thread delays are cut
+  to 1 ms until the icon stops (`PSPRECOMP_P3_FAST_LOAD`, docs/ENV_FLAGS.md). Debug anything
+  timed there with `PSPRECOMP_P3_FAST_LOAD=0`. The icon draw `0x08A18834` was found with a
+  per-function entry census (count entries per guest function every 0.5 s in
+  `psp_trace_checkpoint`, keep the functions present in every loading window and absent
+  everywhere else); the full HLE trace (`PSPRECOMP_HLE_TRACE`) slows that load from 2 s to
+  75 s (70k `sceKernelMemcpy` calls on the FileThread) and is useless for timing.
 - **`g_last_func_addr` in HLE logs is NOT a return address** — it's the last dispatched
   function; misread twice historically.
 - **Band-aid stacks fabricate phantom blockers** — verify in CLEANROOM.

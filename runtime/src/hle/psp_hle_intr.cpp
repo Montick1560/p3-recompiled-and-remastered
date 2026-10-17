@@ -11,10 +11,19 @@ PspSubIntrTable& psp_subintr_table() {
     return *table;
 }
 
-int64_t psp_display_elapsed_us() {
+PspFastForward& psp_display_fast_forward() {
+    static PspFastForward ff;
+    return ff;
+}
+
+int64_t psp_display_real_us() {
     static const auto start = std::chrono::steady_clock::now();
     return std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now() - start).count();
+}
+
+int64_t psp_display_elapsed_us() {
+    return psp_display_real_us() + psp_display_fast_forward().warp_us();
 }
 
 void psp_intr_dispatch_vblank(uint8_t* rdram, recomp_context* ctx) {

@@ -2,6 +2,7 @@
 // Interrupt-manager HLE glue: the shared sub-interrupt table and the
 // vblank dispatch that runs the game's enabled PSP_VBLANK_INT handlers.
 
+#include "psp_fast_forward.h"
 #include "psp_subintr.h"
 #include "recomp.h"
 
@@ -9,9 +10,17 @@
 
 PspSubIntrTable& psp_subintr_table();
 
-/// Microseconds since the display clock started (first use). Shared by the
-/// vblank waits, sceDisplayGetVcount and the vblank interrupt dispatch.
+/// Microseconds since the display clock started (first use), plus the time
+/// fast-forward skipped. Shared by the vblank waits, sceDisplayGetVcount and
+/// the vblank interrupt dispatch.
 int64_t psp_display_elapsed_us();
+
+/// Host microseconds since the display clock started, without fast-forward.
+int64_t psp_display_real_us();
+
+/// The display fast-forward (psp_fast_forward.h): game modules request it
+/// while a loading screen shows; the vblank waits and presents consult it.
+PspFastForward& psp_display_fast_forward();
 
 /// Run every enabled vblank sub-interrupt handler once for the current
 /// display frame (60 Hz, wall clock). Called from the vblank waits; extra

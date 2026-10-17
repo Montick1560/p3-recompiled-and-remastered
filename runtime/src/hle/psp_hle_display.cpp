@@ -36,6 +36,13 @@ static void hle_sceDisplaySetFrameBuf(
         "[HLE] sceDisplaySetFrameBuf(0x%08X, %u, %u)\n",
         fb_addr, stride, format);
 
+    // Fast-forward (loading screens): at most one present per real display
+    // period, so a vsynced swap does not pace the skipped frames.
+    if (!psp_display_fast_forward().present_due(psp_display_real_us())) {
+        ctx->r[2] = SCE_OK;
+        return;
+    }
+
     // Post a FramePresent render request to the render queue
     RenderRequest req;
     req.type = RenderRequestType::FramePresent;
@@ -57,8 +64,24 @@ static void hle_sceDisplayWaitVblankStart(
     // (not a fixed period after the call: the frame's own work time is
     // part of the frame, as on hardware).
     psp_cpu_block_begin();  // a real wait: let any ready thread run
-    std::this_thread::sleep_for(std::chrono::microseconds(
-        psp_us_until_next_vblank(psp_display_elapsed_us())));
+    const int64_t wait_us = psp_us_until_next_vblank(psp_display_elapsed_us());
+    static int64_t ff_start_us = -1;  // real time of the first skipped wait of a run
+    static int ff_skips = 0;
+    if (psp_display_fast_forward().skip(wait_us)) {
+        // Fast-forward: the clock is already at the vblank. Yield so the
+        // threads this wait would have let run (a loader) can take the CPU.
+        if (ff_start_us < 0) ff_start_us = psp_display_real_us();
+        ff_skips++;
+        std::this_thread::yield();
+    } else {
+        if (ff_start_us >= 0) {
+            std::fprintf(stderr, "[DISPLAY] fast-forward: %d vblanks in %lld ms\n", ff_skips,
+                static_cast<long long>((psp_display_real_us() - ff_start_us) / 1000));
+            ff_start_us = -1;
+            ff_skips = 0;
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(wait_us));
+    }
     // Vblank interrupt: games hang per-frame work (e.g. waking a loader
     // thread) on PSP_VBLANK_INT sub-interrupt handlers.
     psp_intr_dispatch_vblank(rdram, ctx);

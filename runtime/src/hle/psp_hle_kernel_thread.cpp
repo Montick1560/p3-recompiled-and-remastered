@@ -309,7 +309,9 @@ static void hle_sceKernelDelayThread(
     psp_kernel_check_callbacks(rdram, ctx);
     sched_yield_point();
     psp_cpu_block_begin();  // a real wait: let any ready thread run
-    std::this_thread::sleep_for(std::chrono::microseconds(usec));
+    // Fast-forward (loading screens) cuts long delays to 1 ms.
+    std::this_thread::sleep_for(std::chrono::microseconds(
+        psp_display_fast_forward().delay_us(usec)));
     // The vblank interrupt fires every frame on hardware, whatever the
     // threads do. A thread that polls a flag set by a vblank handler with
     // short delays (a movie player shutting down while the main thread

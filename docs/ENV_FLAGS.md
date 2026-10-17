@@ -616,6 +616,23 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
 - **Set it when:** `0` to compare against the stepped animation at 60 fps; `1`
   to try it at 30 fps.
 
+### `PSPRECOMP_P3_FAST_LOAD`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`0` off; anything else or unset = on).
+- **Default:** on.
+- **Effect:** Tip-screen loads ("CARGANDO": Continue, entering a mission) run at host speed.
+  The game's loader takes one file per two or three frames, so instant host reads still took
+  ~2.3 s at 59.94 Hz. While the "CARGANDO" icon draw `0x08A18834` runs (it runs on every
+  frame of those loads and nowhere else), it requests the runtime display fast-forward
+  (`runtime/include/psp_fast_forward.h`): vblank waits return at once with the display clock
+  moved to that vblank, presents are limited to one per real 16.7 ms, and thread delays are
+  cut to 1 ms (the FileThread polls its queue every 10 ms). It lapses 8 vblanks after the
+  icon stops. Continue: ~2.3 s -> 0.5-0.8 s. Install prints
+  `[P3] fast loading: tip-screen loads skip the vblank waits`; each load ends with
+  `[DISPLAY] fast-forward: <n> vblanks in <ms> ms`.
+- **Set it when:** `0` to see the original load pace, or to debug anything timed during a
+  tip-screen load.
+
 ### Patapon 3 module — diagnostics
 
 Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
