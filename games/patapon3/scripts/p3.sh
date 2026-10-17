@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Patapon 3 build orchestration (Windows / Git Bash).
 #   p3.sh extract | analyze | recompile | overlays | build | run [seconds] | all
-# Env overrides: DECO (project root), P3_ISO, P3_EBOOT, JAVA_HOME.
+# Env overrides: DECO (project root), P3_ISO, P3_EBOOT, JAVA_HOME, P3_FFMPEG.
 # P3_VARIANT=<name> (e.g. v115b) builds another release of the game in its own
 # folders: build/<name>/{disc0,p3_output,ovl,rtw} and data/patapon3/<name>/.
 set -euo pipefail
@@ -15,6 +15,10 @@ TOOLS="$DECO/tools"
 GHIDRA="$TOOLS/ghidra_12.0.2_PUBLIC"
 SDL2_PKG="$TOOLS/SDL2-2.32.10/x86_64-w64-mingw32"
 ZLIB_SRC="$TOOLS/zlib-1.3.1"
+# FFmpeg LGPL shared package (include/, lib/, bin/): without it the runtime has no video decode
+# and every movie stays black. P3_FFMPEG overrides the one unpacked under tools/ffmpeg-7.1.1/.
+P3_FFMPEG="${P3_FFMPEG:-$(ls -d "$TOOLS"/ffmpeg-7.1.1/*/ 2>/dev/null | head -1 || true)}"
+P3_FFMPEG="${P3_FFMPEG%/}"
 VARIANT="${P3_VARIANT:-}"
 if [[ -n "$VARIANT" ]]; then
     [[ "$VARIANT" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "p3.sh: error: bad P3_VARIANT '$VARIANT'" >&2; exit 1; }
@@ -118,11 +122,13 @@ cmd_build() {
     [[ -f "$OUT/CMakeLists.txt" ]] || die "generated C++ missing — run: p3.sh recompile"
     [[ -d "$SDL2_PKG" ]] || die "SDL2 mingw package not found at $SDL2_PKG"
     [[ -d "$ZLIB_SRC" ]] || die "zlib source not found at $ZLIB_SRC"
+    [[ -n "$P3_FFMPEG" ]] || die "FFmpeg package not found under $TOOLS/ffmpeg-7.1.1/ (movies need it; set P3_FFMPEG=/path/to/ffmpeg-...-lgpl-shared)"
+    [[ -d "$P3_FFMPEG/include/libavcodec" ]] || die "P3_FFMPEG='$P3_FFMPEG' is not an FFmpeg package (no include/libavcodec)"
     cmake -G Ninja -B "$BUILD" -S "$REPO/runtime" -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
         -DPSPRECOMP_GAME=patapon3 -DPSPRECOMP_OUTPUT_DIR="$OUT" \
         -DSDL2_DIR="$SDL2_PKG/lib/cmake/SDL2" \
-        -DFETCHCONTENT_SOURCE_DIR_ZLIB="$ZLIB_SRC" \
+        -DFETCHCONTENT_SOURCE_DIR_ZLIB="$ZLIB_SRC"         -DPSPRECOMP_FFMPEG_DIR="$(cygpath -m "$P3_FFMPEG" 2>/dev/null || echo "$P3_FFMPEG")" \
         -DPSPRECOMP_BANK_DIRS="$(bank_dirs)" >/dev/null
     cmake --build "$BUILD" --target psprecomp_runtime
     cp -u "$SDL2_PKG/bin/SDL2.dll" "$BUILD/"

@@ -58,5 +58,45 @@ else
     fail "bad variant refused (rc=$rc, out: $out)"
 fi
 
+# Fake toolchain for the build tests: cmake records its arguments and creates the -B folder.
+mkdir -p "$TMP/bin"
+cat >"$TMP/bin/cmake" <<'SH'
+#!/usr/bin/env bash
+echo "$*" >>"$CMAKE_LOG"
+prev=""; for a in "$@"; do [[ "$prev" == "-B" ]] && mkdir -p "$a"; prev="$a"; done
+exit 0
+SH
+chmod +x "$TMP/bin/cmake"
+fake_deco() {   # $1 = deco root; with $2 = yes, also an FFmpeg package
+    mkdir -p "$1/build/p3_output" "$1/tools/SDL2-2.32.10/x86_64-w64-mingw32/bin" "$1/tools/zlib-1.3.1"
+    touch "$1/build/p3_output/CMakeLists.txt" "$1/tools/SDL2-2.32.10/x86_64-w64-mingw32/bin/SDL2.dll"
+    if [[ "${2:-}" == yes ]]; then mkdir -p "$1/tools/ffmpeg-7.1.1/ffmpeg-x-lgpl-shared/include/libavcodec"; fi
+}
+
+# 7. build passes the FFmpeg package to CMake; without one it stops and says how to fix it.
+fake_deco "$TMP/ff" yes
+out="$(PATH="$TMP/bin:$PATH" CMAKE_LOG="$TMP/ff.log" DECO="$TMP/ff" bash "$P3" build 2>&1)"; rc=$?
+if [[ $rc -eq 0 && "$(cat "$TMP/ff.log")" == *"-DPSPRECOMP_FFMPEG_DIR="*"ffmpeg-x-lgpl-shared"* ]]; then
+    pass "build passes FFmpeg"
+else
+    fail "build passes FFmpeg (rc=$rc, out: $out, cmake: $(cat "$TMP/ff.log" 2>/dev/null))"
+fi
+fake_deco "$TMP/noff"
+out="$(PATH="$TMP/bin:$PATH" CMAKE_LOG="$TMP/noff.log" DECO="$TMP/noff" bash "$P3" build 2>&1)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"FFmpeg"* && "$out" == *"P3_FFMPEG"* && ! -s "$TMP/noff.log" ]]; then
+    pass "build without FFmpeg refused"
+else
+    fail "build without FFmpeg refused (rc=$rc, out: $out)"
+fi
+
+# 8. A P3_FFMPEG folder that is not an FFmpeg package is refused before CMake runs.
+mkdir -p "$TMP/notff"
+out="$(PATH="$TMP/bin:$PATH" CMAKE_LOG="$TMP/bad.log" DECO="$TMP/ff" P3_FFMPEG="$TMP/notff" bash "$P3" build 2>&1)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"libavcodec"* && ! -s "$TMP/bad.log" ]]; then
+    pass "bad P3_FFMPEG refused"
+else
+    fail "bad P3_FFMPEG refused (rc=$rc, out: $out)"
+fi
+
 echo "$fails failure(s)"
 exit $((fails > 0))
