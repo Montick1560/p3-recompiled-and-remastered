@@ -141,6 +141,7 @@ set(RUNTIME_SOURCES
     src/psp_event_loop.cpp
     src/psp_ge.cpp
     src/psp_ge_transfer.cpp
+    src/psp_ge_rtt.cpp
     src/psp_present.cpp
     src/psp_fpu.cpp
     src/psp_ge_sampler.cpp
@@ -584,6 +585,12 @@ add_executable(test_ge_transfer tests/test_ge_transfer.cpp src/psp_ge_transfer.c
 target_include_directories(test_ge_transfer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_ge_transfer PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME ge_transfer_tests COMMAND test_ge_transfer)
+
+# Render-to-texture helpers (matcher, overlap, texture span, blit rect). Pure, no GL.
+add_executable(test_ge_rtt tests/test_ge_rtt.cpp src/psp_ge_rtt.cpp)
+target_include_directories(test_ge_rtt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_ge_rtt PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME ge_rtt_tests COMMAND test_ge_rtt)
 
 # Present rectangle (aspect fit) and window scale parsing.
 add_executable(test_present tests/test_present.cpp src/psp_present.cpp)
