@@ -809,3 +809,15 @@ any new pure helper; verify on the screen like Task 4 Step 6.
   33.6 %). `cpu_wait_ms/s` 111.5 → 140.0 / 131.5: that counter is guest threads waiting for the
   CPU lock (`psp_cpu.cpp`), not the render thread where the detector runs, and earlier
   `build/tour/perf_*` samples range 100-246 for it, so it is noise, not detector cost.
+
+### Task 3 (2026-10-16): the user's main save — branch D
+
+- The user's main save (PPSSPP `UCES01421_DATA04`, Hero Edson, Yumiyacha Lv 35, 1878 h) was
+  decrypted for the port (PPSSPP sceChnnlsv mode 5 with the game key, local tool outside the
+  repo) and played with `jugar_60fps.bat` (`build/logs/jugar_60fps.log`, ~198k lines: hideout,
+  8 tip-screen loads into missions, 3 autosaves). The user reports everything works.
+- `grep "[RTT]"`: **no line**. No `[GE] block transfer`, no `FBO pool overflow`; only the two
+  display buffers (`key=0x000000`, `key=0x044000`). Only the known boot `LOOKUP_MISS 0xDEADBEEF`.
+- **Branch D**: Patapon 3 never sampled, transferred or CPU-wrote a GL-rendered buffer in any
+  screen covered so far. Tasks 4-6 are not implemented (nothing to verify them against). The
+  always-on detector (Task 2) stays: it logs as soon as some screen needs RTT.
