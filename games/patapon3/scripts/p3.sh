@@ -128,7 +128,8 @@ cmd_build() {
         -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
         -DPSPRECOMP_GAME=patapon3 -DPSPRECOMP_OUTPUT_DIR="$OUT" \
         -DSDL2_DIR="$SDL2_PKG/lib/cmake/SDL2" \
-        -DFETCHCONTENT_SOURCE_DIR_ZLIB="$ZLIB_SRC"         -DPSPRECOMP_FFMPEG_DIR="$(cygpath -m "$P3_FFMPEG" 2>/dev/null || echo "$P3_FFMPEG")" \
+        -DFETCHCONTENT_SOURCE_DIR_ZLIB="$ZLIB_SRC" \
+        -DPSPRECOMP_FFMPEG_DIR="$(cygpath -m "$P3_FFMPEG" 2>/dev/null || echo "$P3_FFMPEG")" \
         -DPSPRECOMP_BANK_DIRS="$(bank_dirs)" >/dev/null
     cmake --build "$BUILD" --target psprecomp_runtime
     cp -u "$SDL2_PKG/bin/SDL2.dll" "$BUILD/"
