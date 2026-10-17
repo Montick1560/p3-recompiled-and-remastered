@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "game": "patapon3",
+  "options": [
+    {
+      "section": "game", "key": "fps", "type": "enum", "values": ["30", "60"], "default": "30",
+      "tab": "graphics", "env": "PSPRECOMP_PATCHES", "map": {"30": null, "60": "60fps"},
+      "label": {"es": "Fotogramas por segundo", "en": "Frame rate"},
+      "description": {"es": "60 usa el parche de 60 fps de la comunidad.", "en": "60 uses the community 60 fps patch."},
+      "display": {"30": {"es": "30 fps", "en": "30 fps"}, "60": {"es": "60 fps", "en": "60 fps"}}
+    },
+    {
+      "section": "game", "key": "smooth_animation", "type": "bool", "default": "true",
+      "tab": "graphics", "env": "PSPRECOMP_P3_ANIM_SMOOTH", "map": {"true": "1", "false": "0"},
+      "label": {"es": "Animación suave", "en": "Smooth animation"},
+      "description": {"es": "Muestra la pose intermedia entre dos fotogramas del juego.", "en": "Shows the in-between pose of two game frames."}
+    },
+    {
+      "section": "game", "key": "fast_loading", "type": "bool", "default": "true",
+      "tab": "graphics", "env": "PSPRECOMP_P3_FAST_LOAD", "map": {"true": "1", "false": "0"},
+      "label": {"es": "Cargas rápidas", "en": "Fast loading"},
+      "description": {"es": "Las pantallas de CARGANDO van a la velocidad del PC (nunca en sesiones online).", "en": "Loading screens run at PC speed (never in online sessions)."}
+    }
+  ]
+}
