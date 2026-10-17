@@ -7,6 +7,9 @@
 #include "psp_pad.h"
 #include "psp_wheel.h"
 #include "psp_osk_session.h"
+#include "psp_osk_overlay.h"
+#include "psp_menu_prompt.h"
+#include "psp_exit.h"
 #include "psp_perf.h"
 
 #include <SDL.h>
@@ -73,7 +76,9 @@ static std::map<SDL_JoystickID, SDL_GameController*> g_controllers;
 static constexpr int kStickDeadzone = 8000;
 
 static void publish_pads() {
-    g_pad_buttons.store(g_pads.buttons(), std::memory_order_relaxed);
+    // While the back-to-menu prompt is open the game sees no pad buttons.
+    g_pad_buttons.store(psp_menu_prompt().active() ? 0u : g_pads.buttons(),
+                        std::memory_order_relaxed);
     g_pad_analog.store(static_cast<uint16_t>(g_pads.analog_x() | (g_pads.analog_y() << 8)),
                        std::memory_order_relaxed);
 }
@@ -205,8 +210,79 @@ static void sync_osk_text_input() {
     }
 }
 
+// Back to the launcher menu: F1, or Select+Start held 1 s on a gamepad (the Guide button
+// too, when SDL delivers it) opens a Yes/No prompt; while it is open the game gets no input.
+// Yes ends the process with exit code 10 (docs/contracts/settings-v1.md).
+static ComboHold g_menu_combo(1000);
+
+static void open_menu_prompt() {
+    if (osk_session().active() || psp_menu_prompt().active()) return;
+    psp_menu_prompt().open();
+    g_host_buttons.store(0, std::memory_order_relaxed);
+    publish_pads();
+}
+
+static void finish_menu_prompt(PromptResult r) {
+    publish_pads();  // the prompt may have closed: the game sees the pads again
+    if (r != PromptResult::Confirmed) return;
+    std::fprintf(stderr, "[RT] back to the launcher menu (exit code 10)\n");
+    psp_requested_exit_code().store(10);
+    g_should_exit.store(true);
+}
+
+// Returns true when the event was consumed by the prompt (or opened it). Key and
+// button releases are not consumed: they still reach the normal handlers, so a
+// button held when the prompt opened (Select+Start) does not stay pressed after it.
+static bool handle_menu_prompt_event(const SDL_Event& ev) {
+    MenuPrompt& p = psp_menu_prompt();
+    if (!p.active()) {
+        if (ev.type == SDL_KEYDOWN && !ev.key.repeat && ev.key.keysym.sym == SDLK_F1) {
+            open_menu_prompt();
+            return true;
+        }
+        if (ev.type == SDL_CONTROLLERBUTTONDOWN && ev.cbutton.button == SDL_CONTROLLER_BUTTON_GUIDE) {
+            open_menu_prompt();
+            return true;
+        }
+        return false;
+    }
+    if (ev.type == SDL_KEYDOWN) {
+        if (ev.key.keysym.sym == SDLK_F11 ||
+            (ev.key.keysym.sym == SDLK_RETURN && (ev.key.keysym.mod & KMOD_ALT))) {
+            return false;  // fullscreen toggle still works
+        }
+        if (ev.key.repeat) return true;
+        switch (ev.key.keysym.sym) {
+        case SDLK_LEFT: finish_menu_prompt(p.handle(PromptAction::Left)); break;
+        case SDLK_RIGHT: finish_menu_prompt(p.handle(PromptAction::Right)); break;
+        case SDLK_UP: finish_menu_prompt(p.handle(PromptAction::Up)); break;
+        case SDLK_DOWN: finish_menu_prompt(p.handle(PromptAction::Down)); break;
+        case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_x:
+            finish_menu_prompt(p.handle(PromptAction::Confirm)); break;
+        case SDLK_ESCAPE: case SDLK_F1: case SDLK_z:
+            finish_menu_prompt(p.handle(PromptAction::Cancel)); break;
+        default: break;
+        }
+        return true;
+    }
+    if (ev.type == SDL_CONTROLLERBUTTONDOWN) {
+        switch (ev.cbutton.button) {
+        case SDL_CONTROLLER_BUTTON_DPAD_LEFT: finish_menu_prompt(p.handle(PromptAction::Left)); break;
+        case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: finish_menu_prompt(p.handle(PromptAction::Right)); break;
+        case SDL_CONTROLLER_BUTTON_DPAD_UP: finish_menu_prompt(p.handle(PromptAction::Up)); break;
+        case SDL_CONTROLLER_BUTTON_DPAD_DOWN: finish_menu_prompt(p.handle(PromptAction::Down)); break;
+        case SDL_CONTROLLER_BUTTON_A: finish_menu_prompt(p.handle(PromptAction::Confirm)); break;
+        case SDL_CONTROLLER_BUTTON_B: finish_menu_prompt(p.handle(PromptAction::Cancel)); break;
+        default: break;
+        }
+        return true;
+    }
+    return ev.type == SDL_TEXTINPUT || ev.type == SDL_MOUSEWHEEL;
+}
+
 // Handle one SDL event: window close + keyboard button state + controllers.
 static void handle_sdl_event(const SDL_Event& ev) {
+    if (handle_menu_prompt_event(ev)) return;
     if (handle_osk_event(ev)) return;
     if (handle_controller_event(ev)) return;
     if (ev.type == SDL_MOUSEWHEEL) {
@@ -340,6 +416,9 @@ void psp_event_loop(uint8_t* rdram) {
             handle_sdl_event(ev);
         }
         publish_wheel();  // timed wheel presses advance even without events
+        // Select (0x0001) + Start (0x0008) held on any pad for 1 s.
+        if (g_menu_combo.update((g_pads.buttons() & 0x0009u) == 0x0009u, steady_ms()))
+            open_menu_prompt();
         sync_osk_text_input();
 
         // 2. Drain render queue — execute pending GL work from game threads

@@ -1237,7 +1237,9 @@ static void present_blit(GLuint fbo) {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     // The overlay uses its own program, textures and enables while active;
     // drop the shadow so the next GE draw re-emits everything it needs.
-    if (psp_osk_overlay_draw(win_w, win_h, r.x, r.y, r.w, r.h)) {
+    const bool osk_drew = psp_osk_overlay_draw(win_w, win_h, r.x, r.y, r.w, r.h);
+    const bool prompt_drew = psp_menu_prompt_overlay_draw(win_w, win_h, r.x, r.y, r.w, r.h);
+    if (osk_drew || prompt_drew) {
         gl_state_invalidate();
     }
     SDL_GL_SwapWindow(window);

@@ -20,6 +20,7 @@
 #include "psp_vfpu.h"  // vfpu_init_context — VFPU prefix reset default
 #include "psp_patch_sets.h"
 #include "psp_settings.h"
+#include "psp_exit.h"
 
 // Build fingerprint of the output/ this binary was generated from (issue #36).
 // Guarded so pre-fingerprint output dirs still build (warning at configure
@@ -560,7 +561,8 @@ int main(int argc, char* argv[]) {
     ge_draw_shutdown();  // also writes frame.tga for the Patapon 1 scripts
     psp_runtime_shutdown();
     stage("host torn down");
-    std::fprintf(stderr, "[RT] Exit 0\n");
+    const int exit_code = psp_requested_exit_code().load();
+    std::fprintf(stderr, "[RT] Exit %d\n", exit_code);
     std::fflush(nullptr);
-    std::quick_exit(0);  // runs the psp_on_exit diagnostics (psp_exit.h), then _Exit
+    std::quick_exit(exit_code);  // runs the psp_on_exit diagnostics (psp_exit.h), then _Exit
 }

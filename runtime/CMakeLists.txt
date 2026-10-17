@@ -144,6 +144,7 @@ set(RUNTIME_SOURCES
     src/psp_ge_rtt.cpp
     src/psp_ini.cpp
     src/psp_settings.cpp
+    src/psp_menu_prompt.cpp
     src/psp_present.cpp
     src/psp_fpu.cpp
     src/psp_ge_sampler.cpp
@@ -612,6 +613,12 @@ target_compile_definitions(test_settings PRIVATE
     PSP_GAME_OPTIONS_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/game_options.json")
 target_compile_options(test_settings PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME settings_tests COMMAND test_settings)
+
+# Back-to-menu combo + prompt (pure).
+add_executable(test_menu_prompt tests/test_menu_prompt.cpp src/psp_menu_prompt.cpp)
+target_include_directories(test_menu_prompt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_menu_prompt PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME menu_prompt_tests COMMAND test_menu_prompt)
 
 # Present rectangle (aspect fit) and window scale parsing.
 add_executable(test_present tests/test_present.cpp src/psp_present.cpp)

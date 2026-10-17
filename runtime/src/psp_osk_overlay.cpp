@@ -280,3 +280,56 @@ bool psp_osk_overlay_draw(int win_w, int win_h, int rx, int ry, int rw, int rh) 
     glUseProgram(0);
     return true;
 }
+
+MenuPrompt& psp_menu_prompt() {
+    static MenuPrompt p;
+    return p;
+}
+
+bool psp_menu_prompt_overlay_draw(int win_w, int win_h, int rx, int ry, int rw, int rh) {
+    MenuPrompt& p = psp_menu_prompt();
+    if (!p.active() || win_w <= 0 || win_h <= 0 || rw <= 0 || rh <= 0) return false;
+    static TextTex question, yes, no, hint;
+    const PromptText t = menu_prompt_text(std::getenv("PSPRECOMP_UI_LANG"));
+    const float gx = static_cast<float>(rx), gy = static_cast<float>(win_h - (ry + rh));
+    const float pw = rw * 0.70f, ph = rh * 0.34f;
+    const float px = gx + (rw - pw) * 0.5f, py = gy + (rh - ph) * 0.5f, pad = rh * 0.035f;
+    update_text(question, t.question, static_cast<int>(rh * 0.060f));
+    update_text(yes, t.yes, static_cast<int>(rh * 0.070f));
+    update_text(no, t.no, static_cast<int>(rh * 0.070f));
+    update_text(hint, t.hint, static_cast<int>(rh * 0.040f));
+    Gl& g = gl();
+    glUseProgram(g.prog);
+    glBindVertexArray(g.vao);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_SCISSOR_TEST);
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glBlendEquation(GL_FUNC_ADD);
+    const float shade[4] = {0.0f, 0.0f, 0.0f, 0.55f}, panel[4] = {0.07f, 0.06f, 0.10f, 0.95f};
+    const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f}, grey[4] = {0.75f, 0.75f, 0.80f, 1.0f};
+    const float accent[4] = {1.0f, 0.82f, 0.30f, 1.0f}, sel[4] = {1.0f, 0.82f, 0.30f, 0.25f};
+    rect(win_w, win_h, gx, gy, static_cast<float>(rw), static_cast<float>(rh), shade, 0);
+    rect(win_w, win_h, px, py, pw, ph, panel, 0);
+    rect(win_w, win_h, px, py, pw, rh * 0.008f, accent, 0);
+    float y = py + pad;
+    rect(win_w, win_h, px + (pw - question.w) * 0.5f, y, static_cast<float>(question.w),
+         static_cast<float>(question.h), white, question.tex);
+    y += question.h + pad;
+    const float bw = pw * 0.30f, bh = yes.h + pad * 0.6f;
+    const float yx = px + pw * 0.5f - bw - pad, nx = px + pw * 0.5f + pad;
+    rect(win_w, win_h, p.yes_selected() ? yx : nx, y, bw, bh, sel, 0);
+    rect(win_w, win_h, yx + (bw - yes.w) * 0.5f, y + pad * 0.3f, static_cast<float>(yes.w),
+         static_cast<float>(yes.h), p.yes_selected() ? accent : white, yes.tex);
+    rect(win_w, win_h, nx + (bw - no.w) * 0.5f, y + pad * 0.3f, static_cast<float>(no.w),
+         static_cast<float>(no.h), p.yes_selected() ? white : accent, no.tex);
+    y += bh + pad;
+    rect(win_w, win_h, px + (pw - hint.w) * 0.5f, y, static_cast<float>(hint.w),
+         static_cast<float>(hint.h), grey, hint.tex);
+    glDisable(GL_BLEND);
+    glBindVertexArray(0);
+    glUseProgram(0);
+    return true;
+}

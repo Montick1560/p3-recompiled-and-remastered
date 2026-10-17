@@ -123,6 +123,12 @@ Read by the runtime binary at start-up or during execution.
   next to the executable). **Precedence:** a variable already set in the environment >
   `settings.ini` > the runtime default. Invalid values keep the default. Every action
   is logged as a `[SETTINGS]` line.
+- **Back to the launcher menu:** F1, Select+Start held 1 s on a gamepad, or the Guide
+  button when SDL delivers it, opens a "Back to the menu?" Yes/No box (starts on No;
+  arrows / d-pad choose, Enter / A confirm, Esc / B cancel; the game gets no input while
+  it is open). Yes quits with exit code 10.
+- **Exit codes:** 0 = the player quit, 10 = back to the launcher menu, anything else =
+  failure.
 
 ### `PSPRECOMP_UI_LANG`
 - **Read in:** the runtime's own dialogs (the "back to the menu" prompt).
