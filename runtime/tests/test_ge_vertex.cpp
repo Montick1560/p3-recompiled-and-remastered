@@ -862,6 +862,45 @@ static void test_through_s16_z_unsigned() {
     std::free(ram);
 }
 
+// Through-mode float depth is an integer: PPSSPP truncates it and clamps it to
+// [0, 65535], NaN -> 0 (VertexDecoderCommon.cpp Step_PosFloatThrough). The Arena
+// del Valor HUD bars leave z as garbage (-1.48e20 logged); unclamped, GL clipped
+// them on some frames.
+static void test_through_float_z_clamped() {
+    const size_t kRam = 0x08000000u;
+    uint8_t* ram = static_cast<uint8_t*>(std::calloc(kRam, 1));
+    const uint32_t vaddr = 0x08800000u;
+    const float zs[5] = {-1.4757e20f, 3.52e13f, std::nanf(""), 1234.75f, 65535.5f};
+    for (int i = 0; i < 5; i++) {
+        const float p[3] = {100.0f, 37.0f, zs[i]};
+        std::memcpy(ram + (vaddr & 0x07FFFFFFu) + 12 * i, p, sizeof(p));
+    }
+    GeState s;
+    s.reset();
+    s.vertex_type = 0x00800180u;  // through, float position, nothing else
+    s.vertex_addr = vaddr;
+    std::vector<DecodedVertex> out;
+    ge_decode_vertices(ram, s, GE_PRIM_RECTANGLES, 5, out);
+    tests_run++;
+    if (out.size() != 5) {
+        std::fprintf(stderr, "FAIL: through float z: decoded %zu vertices\n", out.size());
+        failures++;
+    } else {
+        ASSERT_NEAR(out[0].pos[0], 100.0f, "through float x kept");
+        ASSERT_NEAR(out[0].pos[1], 37.0f, "through float y kept");
+        ASSERT_NEAR(out[0].pos[2], 0.0f, "through float z: negative garbage -> 0");
+        ASSERT_NEAR(out[1].pos[2], 65535.0f, "through float z: huge -> 65535");
+        tests_run++;
+        if (!(out[2].pos[2] == 0.0f)) {
+            std::fprintf(stderr, "FAIL: through float z: NaN -> 0, got %g\n", out[2].pos[2]);
+            failures++;
+        }
+        ASSERT_NEAR(out[3].pos[2], 1234.0f, "through float z: truncated");
+        ASSERT_NEAR(out[4].pos[2], 65535.0f, "through float z: 65535.5 -> 65535");
+    }
+    std::free(ram);
+}
+
 // A reused output vector must not leak the previous draw's vertices: resize()
 // kept their fields, and fog is only written when fog is on, so a through draw
 // decoded into it inherited the old fog factor.
@@ -956,6 +995,7 @@ int main() {
     test_tiny_prim_no_overtrigger();
     test_zero_scale_without_fallback_collapses();
     test_through_s16_z_unsigned();
+    test_through_float_z_clamped();
     test_decode_resets_reused_vector();
     test_decode_zero_count_empties_reused_vector();
     test_through_u16_uv_raw_texels();

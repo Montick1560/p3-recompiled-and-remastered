@@ -276,6 +276,12 @@ void ge_decode_vertices(
             if (through) p[2] = static_cast<float>(read_u16(rdram, o + 4));  // z unsigned (PPSSPP)
         } else if (pos_type == GE_VTYPE_POS_FLOAT) {
             for (int k = 0; k < 3; k++) p[k] = read_float(rdram, o + 4 * k);
+            if (through) {
+                // Depth is an integer in through mode: truncate, clamp to 16 bits,
+                // NaN -> 0 (PPSSPP Step_PosFloatThrough).
+                const float z = p[2];
+                p[2] = z >= 65535.0f ? 65535.0f : (z > 0.0f ? static_cast<float>(static_cast<int>(z)) : 0.0f);
+            }
         } else {
             p[0] = p[1] = p[2] = 0.0f;
         }
