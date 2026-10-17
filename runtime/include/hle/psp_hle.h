@@ -30,6 +30,7 @@ constexpr int32_t SCE_ERROR_ERRNO_ENOSPC         = (int32_t)0x8001001CU;
 // Kernel errors
 constexpr int32_t SCE_KERNEL_ERROR_OK            = 0;
 constexpr int32_t SCE_KERNEL_ERROR_ERROR         = (int32_t)0x80020001U;
+constexpr int32_t SCE_KERNEL_ERROR_NODEV         = (int32_t)0x80020321U;
 constexpr int32_t SCE_KERNEL_ERROR_ACCESS_ERROR  = (int32_t)0x8000020DU;
 constexpr int32_t SCE_KERNEL_ERROR_NO_MEMORY     = (int32_t)0x800200D8U;
 constexpr int32_t SCE_KERNEL_ERROR_ILLEGAL_ATTR  = (int32_t)0x800200CBU;

@@ -833,10 +833,30 @@ static void hle_sceIoOpenAsync(
     const char* psp_path = reinterpret_cast<const char*>(
         rdram + (path_ptr & PSP_ADDR_MASK));
 
+    // host0: (devkit host filesystem) is not a device on retail hardware or
+    // in PPSSPP's ISO boot: NODEV at once, no fd (sceIo.cpp sceIoOpenAsync).
+    // Patapon 3 EU probes host0:/PSP_GAME/USRDIR/ in a loop and never reads
+    // a result back, so allocating an ENOENT fd here filled the fd table.
+    if (std::strncmp(psp_path, "host0:", 6) == 0) {
+        ctx->r[2] = SCE_KERNEL_ERROR_NODEV;
+        return;
+    }
+
     // Faithful fd-table cap: 64 slots minus 3 reserved on real firmware.
     if (g_fd_table.size() >= static_cast<size_t>(PSP_FD_MAX)) {
         std::fprintf(stderr,
             "[HLE] sceIoOpenAsync: fd table full -> SCE_KERNEL_ERROR_MFILE\n");
+        static bool dumped = false;
+        if (!dumped) {
+            dumped = true;
+            std::fprintf(stderr, "[IO_DIAG] fd table full opening \"%s\":\n", psp_path);
+            for (const auto& [fd, d] : g_fd_table) {
+                std::fprintf(stderr,
+                    "[IO_DIAG]   fd=%d host=%d pending=%d closePending=%d result=%lld %s\n",
+                    fd, d.host_fd, (int)d.asyncPending, (int)d.closePending,
+                    (long long)d.asyncResult, d.psp_path.c_str());
+            }
+        }
         ctx->r[2] = SCE_KERNEL_ERROR_MFILE;
         return;
     }
@@ -857,7 +877,7 @@ static void hle_sceIoOpenAsync(
         g_fd_table[psp_fd] = {
             -1, std::string(psp_path), false, nullptr,
             static_cast<int64_t>(SCE_ERROR_ERRNO_ENOENT),
-            true, false,
+            true, true,   // failed open: freed when its result is read (PPSSPP closePending)
             prereg_cbId, prereg_cbArg
         };
         // Do NOT notify callback here — sceIoSetAsyncCallback fires it
@@ -879,7 +899,7 @@ static void hle_sceIoOpenAsync(
         g_fd_table[psp_fd] = {
             -1, std::string(psp_path), false, nullptr,
             static_cast<int64_t>(SCE_ERROR_ERRNO_ENOENT),
-            true, false,
+            true, true,   // failed open: freed when its result is read (PPSSPP closePending)
             prereg_cbId, prereg_cbArg
         };
         ctx->r[2] = psp_fd;
@@ -919,7 +939,7 @@ static void hle_sceIoOpenAsync(
         g_fd_table[psp_fd] = {
             -1, std::string(psp_path), false, nullptr,
             static_cast<int64_t>(SCE_ERROR_ERRNO_ENOENT),
-            true, false,
+            true, true,   // failed open: freed when its result is read (PPSSPP closePending)
             prereg_cbId, prereg_cbArg
         };
         // Do NOT notify callback here — sceIoSetAsyncCallback fires it.
