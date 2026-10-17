@@ -13,6 +13,7 @@ class PspFastForward {
 public:
     /// Let the next `vblanks` waits skip (keeps the larger of the current and the new budget).
     void request(int vblanks) {
+        if (blocked_.load(std::memory_order_relaxed)) return;
         int cur = budget_.load(std::memory_order_relaxed);
         while (cur < vblanks && !budget_.compare_exchange_weak(cur, vblanks)) {
         }
@@ -43,6 +44,13 @@ public:
 
     bool active() const { return budget_.load(std::memory_order_relaxed) > 0; }
 
+    /// While blocked (an ad hoc session: peers and timeouts run in real time), requests are
+    /// ignored; blocking also cancels a running fast-forward.
+    void set_blocked(bool on) {
+        blocked_.store(on, std::memory_order_relaxed);
+        if (on) budget_.store(0, std::memory_order_relaxed);
+    }
+
     /// A thread delay of `usec` (sceKernelDelayThread): in full normally, at most 1 ms while
     /// fast-forwarding, so a loader thread polling its queue every 10 ms keeps up.
     int64_t delay_us(int64_t usec) const {
@@ -54,6 +62,7 @@ private:
     static constexpr int64_t kPeriodUs = 16684;  // one 59.94 Hz frame
     static constexpr int64_t kMaxDelayUs = 1000;
     std::atomic<int> budget_{0};
+    std::atomic<bool> blocked_{false};
     std::atomic<int64_t> warp_{0};
     std::atomic<int64_t> last_present_{kNever};
 };

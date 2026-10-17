@@ -2,6 +2,7 @@
 // over a PRO ad hoc server (runtime/src/net). Argument checks and return
 // codes follow PPSSPP Core/HLE/sceNet.cpp and sceNetAdhoc.cpp.
 #include "hle/psp_hle.h"
+#include "hle/psp_hle_intr.h"
 #include "hle/psp_hle_net.h"
 #include "psp_cpu.h"
 #include "psp_memory.h"
@@ -112,6 +113,12 @@ static void hle_sceNetAdhocctlInit(uint8_t* rdram, recomp_context* ctx) {
     }
     std::fprintf(stderr, "[ADHOC] sceNetAdhocctlInit(product=%s) -> 0x%08X\n", product.c_str(),
                  static_cast<uint32_t>(rc));
+    // Peers and network timeouts run in real time: no display fast-forward
+    // (loading screens) while the session is up.
+    if (rc == SCE_OK) {
+        psp_display_fast_forward().set_blocked(true);
+        std::fprintf(stderr, "[ADHOC] display fast-forward off for the session\n");
+    }
     ctx->r[2] = rc;
 }
 
@@ -121,6 +128,7 @@ static void hle_sceNetAdhocctlTerm(uint8_t* rdram, recomp_context* ctx) {
         PspCpuReleaseScope release;
         adhocctl::instance().term();
     }
+    psp_display_fast_forward().set_blocked(false);
     ctx->r[2] = SCE_OK;
 }
 

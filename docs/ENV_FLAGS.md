@@ -627,7 +627,10 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   (`runtime/include/psp_fast_forward.h`): vblank waits return at once with the display clock
   moved to that vblank, presents are limited to one per real 16.7 ms, and thread delays are
   cut to 1 ms (the FileThread polls its queue every 10 ms). It lapses 8 vblanks after the
-  icon stops. Continue: ~2.3 s -> 0.5-0.8 s. Install prints
+  icon stops. Never while an ad hoc session is up (`sceNetAdhocctlInit` until
+  `sceNetAdhocctlTerm`): peers and network timeouts run in real time, so loads there keep the
+  original pace (logs `[ADHOC] display fast-forward off for the session`). Continue: ~2.3 s ->
+  0.5-0.8 s. Install prints
   `[P3] fast loading: tip-screen loads skip the vblank waits`; each load ends with
   `[DISPLAY] fast-forward: <n> vblanks in <ms> ms`.
 - **Set it when:** `0` to see the original load pace, or to debug anything timed during a

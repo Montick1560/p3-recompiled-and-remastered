@@ -3,6 +3,7 @@
 // and sceNetAdhoc.cpp. No ad hoc server runs: the configured server port is
 // closed, so sceNetAdhocctlInit must still succeed quickly.
 #include "hle/psp_hle.h"
+#include "hle/psp_hle_intr.h"
 #include "hle/psp_hle_net.h"
 #include "net/guest_callbacks.h"
 #include "psp_memory.h"
@@ -28,6 +29,10 @@ static std::map<std::string, HleFunc>& registry() {
 void psp_hle_register(const char* nid_name, HleFunc fn) { registry()[nid_name] = fn; }
 void psp_cpu_acquire(bool) {}
 void psp_cpu_release_reserved() {}
+PspFastForward& psp_display_fast_forward() {
+    static PspFastForward ff;
+    return ff;
+}
 bool psp_cpu_held() { return false; }
 static int g_posted = 0;
 void guest_callbacks_post(uint8_t*, GuestCall) { g_posted++; }
@@ -93,10 +98,14 @@ static void adhoc_lifecycle() {
     CHECK(call("sceNetAdhocctlInit", 0x2000, 0x30, (int32_t)id) == 0, "AdhocctlInit without a server");
     CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::seconds(4), "returns promptly");
     CHECK(call("sceNetAdhocctlInit", 0x2000, 0x30, (int32_t)id) == (int32_t)0x80410B07, "AdhocctlInit twice");
+    psp_display_fast_forward().request(4);
+    CHECK(!psp_display_fast_forward().active(), "ad hoc session: no display fast-forward");
     CHECK(call("sceNetAdhocctlAddHandler", 0x08900000, 0x77) == 0, "AddHandler id 0");
     CHECK(call("sceNetAdhocctlAddHandler", 0, 0) == (int32_t)0x80410B04, "AddHandler null");
     CHECK(call("sceNetAdhocctlDelHandler", 0) == 0, "DelHandler");
     CHECK(call("sceNetAdhocctlTerm") == 0, "AdhocctlTerm");
+    psp_display_fast_forward().request(4);
+    CHECK(psp_display_fast_forward().active(), "after the session: fast-forward allowed again");
     CHECK(call("sceNetAdhocctlDelHandler", 0) == (int32_t)0x80410B08, "DelHandler after term");
     CHECK(call("sceNetAdhocTerm") == 0 && call("sceNetAdhocInit") == 0, "AdhocTerm allows re-init");
     CHECK(psp_net_config().nickname == "Tester", "nickname from env");

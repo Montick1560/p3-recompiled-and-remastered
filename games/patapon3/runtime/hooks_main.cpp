@@ -439,7 +439,8 @@ void bone_smooth(uint8_t* rdram, recomp_context* ctx) {
 // gameplay). While it runs, the vblank waits do not sleep and the FileThread's 10 ms queue
 // polls (sceKernelDelayThreadCB(10000)) sleep 1 ms (runtime display fast-forward), so the
 // loader runs at host speed: Continue went from ~2.3 s of "CARGANDO" to ~0.5-0.8 s (150-230
-// vblanks at ~3 ms each). The budget lapses a few vblanks after the icon stops.
+// vblanks at ~3 ms each). The budget lapses a few vblanks after the icon stops. The runtime
+// blocks it during an ad hoc session (network timeouts count real time).
 constexpr uint32_t kLoadingIconDraw = 0x08A18834u;
 constexpr int kFastLoadVblanks = 8;
 FuncPtr g_loading_icon_draw = nullptr;

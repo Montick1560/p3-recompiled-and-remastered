@@ -76,6 +76,18 @@ int main() {
         ASSERT_EQ(d.delay_us(10000), 1000, "fast-forwarding: a 10 ms poll delay sleeps 1 ms");
         ASSERT_EQ(d.delay_us(300), 300, "fast-forwarding: shorter delays unchanged");
         ASSERT_EQ(d.skip(1) && d.skip(1), true, "delays do not spend the vblank budget");
+        PspFastForward net;
+        net.request(4);
+        net.set_blocked(true);
+        ASSERT_EQ(net.active(), false, "blocking (ad hoc session) cancels a running fast-forward");
+        net.request(4);
+        ASSERT_EQ(net.skip(100), false, "blocked: requests are ignored, waits sleep");
+        ASSERT_EQ(net.delay_us(10000), 10000, "blocked: delays sleep in full");
+        ASSERT_EQ(net.warp_us(), 0, "blocked: no warp");
+        net.set_blocked(false);
+        ASSERT_EQ(net.active(), false, "unblocking does not restart it");
+        net.request(1);
+        ASSERT_EQ(net.skip(100), true, "unblocked: requests work again");
         PspFastForward one;
         const int64_t t = 10000;
         one.request(1);
