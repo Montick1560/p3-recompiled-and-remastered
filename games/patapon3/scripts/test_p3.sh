@@ -41,5 +41,22 @@ else
     fail "complete extract is skipped (rc=$rc, out: $out)"
 fi
 
+# 5. P3_VARIANT keeps another release in build/<variant>/, apart from the default one.
+mkdir -p "$TMP/deco/build/v9/disc0" && touch "$TMP/deco/build/v9/disc0/.complete"
+out="$(DECO="$TMP/deco" P3_VARIANT=v9 P3_ISO=/no/such.iso bash "$P3" extract 2>&1)"; rc=$?
+if [[ $rc -eq 0 && "$out" == *"already extracted at $TMP/deco/build/v9/disc0"* ]]; then
+    pass "variant uses its own folder"
+else
+    fail "variant uses its own folder (rc=$rc, out: $out)"
+fi
+
+# 6. A variant name that could escape build/ is refused.
+out="$(DECO="$TMP/deco" P3_VARIANT=../x bash "$P3" extract 2>&1)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"bad P3_VARIANT"* ]]; then
+    pass "bad variant refused"
+else
+    fail "bad variant refused (rc=$rc, out: $out)"
+fi
+
 echo "$fails failure(s)"
 exit $((fails > 0))

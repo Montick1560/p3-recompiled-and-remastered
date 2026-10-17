@@ -2,6 +2,8 @@
 # Patapon 3 build orchestration (Windows / Git Bash).
 #   p3.sh extract | analyze | recompile | overlays | build | run [seconds] | all
 # Env overrides: DECO (project root), P3_ISO, P3_EBOOT, JAVA_HOME.
+# P3_VARIANT=<name> (e.g. v115b) builds another release of the game in its own
+# folders: build/<name>/{disc0,p3_output,ovl,rtw} and data/patapon3/<name>/.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -13,15 +15,25 @@ TOOLS="$DECO/tools"
 GHIDRA="$TOOLS/ghidra_12.0.2_PUBLIC"
 SDL2_PKG="$TOOLS/SDL2-2.32.10/x86_64-w64-mingw32"
 ZLIB_SRC="$TOOLS/zlib-1.3.1"
-DISC0="${P3_DISC0:-$DECO/disc0}"
-ANALYSIS="$REPO/data/patapon3/analysis.json"
-OUT="$DECO/build/p3_output"
-BUILD="$DECO/build/rtw"
+VARIANT="${P3_VARIANT:-}"
+if [[ -n "$VARIANT" ]]; then
+    [[ "$VARIANT" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "p3.sh: error: bad P3_VARIANT '$VARIANT'" >&2; exit 1; }
+    WORK="$DECO/build/$VARIANT"
+    DATA="$REPO/data/patapon3/$VARIANT"
+    DISC0="${P3_DISC0:-$WORK/disc0}"
+else
+    WORK="$DECO/build"
+    DATA="$REPO/data/patapon3"
+    DISC0="${P3_DISC0:-$DECO/disc0}"
+fi
+ANALYSIS="$DATA/analysis.json"
+OUT="$WORK/p3_output"
+BUILD="$WORK/rtw"
 RUNTIME="${P3_RUNTIME:-$BUILD/psprecomp_runtime.exe}"   # overridable for tests
 RUNTIME_ARGS="${P3_RUNTIME_ARGS:-}"
 LOGS="$DECO/build/logs"
 OVERLAYS=(Azito Mission Title)
-OVL="$DECO/build/ovl"
+OVL="$WORK/ovl"
 
 die() { echo "p3.sh: error: $*" >&2; exit 1; }
 need_file() { [[ -f "$1" ]] || die "$2"; }
@@ -80,13 +92,13 @@ cmd_overlays() {
         lower="$(echo "$name" | tr '[:upper:]' '[:lower:]')"
         python -I "$REPO/scripts/overlay_elf.py" "$P3_EBOOT" \
             "$DISC0/PSP_GAME/USRDIR/overlay/OL_$name.bin" "OL_$name.bin" "$OVL/$lower.elf"
-        mkdir -p "$REPO/data/patapon3/ov_$lower"
+        mkdir -p "$DATA/ov_$lower"
         (cd "$REPO" && PATH="$JAVA_HOME/bin:$PATH" JAVA_HOME="$JAVA_HOME" \
             ./target/release/psprecomp analyze --ghidra-dir "$GHIDRA" \
-            --output "data/patapon3/ov_$lower/analysis.json" "$OVL/$lower.elf" 2>&1 | tail -1)
+            --output "$DATA/ov_$lower/analysis.json" "$OVL/$lower.elf" 2>&1 | tail -1)
         rm -rf "$OVL/ov${name}_output"
         (cd "$REPO" && PSPRECOMP_CROSS_MID=1 ./target/release/psprecomp recompile \
-            "data/patapon3/ov_$lower/analysis.json" --config games/patapon3/game.toml \
+            "$DATA/ov_$lower/analysis.json" --config games/patapon3/game.toml \
             --bank "ov$name" -o "$OVL/ov${name}_output" 2>&1 | tail -1)
     done
 }
