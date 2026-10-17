@@ -278,7 +278,11 @@ fn scan_backward_for_funcptr(
 ) -> Vec<u32> {
     let mut lui_values: HashMap<u8, u16> = HashMap::new();
     let window_start = call_offset.saturating_sub(BACKWARD_WINDOW * 4);
-    let mut results = Vec::new();
+    // Only the value the register holds at the call counts: a later write
+    // replaces it, any other write or an intervening call (argument
+    // registers are caller-saved) makes it unknown. Patapon 3 EU loads a1
+    // with a .data string for an earlier call in the same window.
+    let mut live: Option<u32> = None;
 
     let mut off = window_start;
     while off < call_offset {
@@ -290,36 +294,35 @@ fn scan_backward_for_funcptr(
         let opcode = (word >> 26) & 0x3F;
         let rs = ((word >> 21) & 0x1F) as u8;
         let rt = ((word >> 16) & 0x1F) as u8;
+        let rd = ((word >> 11) & 0x1F) as u8;
         let imm = (word & 0xFFFF) as u16;
 
         match opcode {
             OP_LUI => {
                 lui_values.insert(rt, imm);
+                if rt == target_reg {
+                    live = None;
+                }
             }
             OP_ADDIU if rt == target_reg => {
-                if let Some(&hi) = lui_values.get(&rs) {
-                    let lo = imm as i16;
-                    let addr = ((hi as u32) << 16)
-                        .wrapping_add(lo as i32 as u32);
-                    if is_valid_text_addr(addr, stub_map) {
-                        results.push(addr);
-                    }
-                }
+                live = lui_values.get(&rs).map(|&hi| {
+                    ((hi as u32) << 16).wrapping_add(imm as i16 as i32 as u32)
+                });
             }
             OP_ORI if rt == target_reg => {
-                if let Some(&hi) = lui_values.get(&rs) {
-                    let addr = ((hi as u32) << 16) | (imm as u32);
-                    if is_valid_text_addr(addr, stub_map) {
-                        results.push(addr);
-                    }
-                }
+                live = lui_values.get(&rs).map(|&hi| ((hi as u32) << 16) | (imm as u32));
             }
+            OP_JAL => live = None,
+            // SPECIAL: rd is the destination; jalr also ends the value's life.
+            0 if rd == target_reg || (word & 0x3F) == 0x09 => live = None,
+            // Other immediate ALU ops and loads write rt.
+            0x08..=0x0F | 0x20..=0x27 if rt == target_reg => live = None,
             _ => {}
         }
         off += 4;
     }
 
-    results
+    live.filter(|&addr| is_valid_text_addr(addr, stub_map)).into_iter().collect()
 }
 
 /// Validate that a discovered address is in .text range and not a stub.
@@ -377,6 +380,46 @@ pub fn correct_function_sizes(
         }
     }
 
+    corrections
+}
+
+/// Clamp functions that run past the file-backed bytes of their segment
+/// (`(p_vaddr, p_filesz)` pairs): beyond is zero-filled .bss, never code. The
+/// last function of a segment has no next start to clamp to, so a heuristic
+/// entry there (Patapon 3 EU: an HLE-scan hit on .rodata strings) could
+/// otherwise reach into the overlay window.
+pub fn clamp_to_segment_file_ends(
+    functions: &mut [JsonFunction],
+    segments: &[(u32, u64)],
+) -> Vec<SizeCorrection> {
+    let mut corrections = Vec::new();
+    for f in functions.iter_mut() {
+        let Some(addr) = parse_hex_addr(&f.address) else { continue };
+        let Some(&(base, filesz)) = segments
+            .iter()
+            .find(|&&(base, filesz)| addr >= base && (addr as u64) < base as u64 + filesz)
+        else {
+            continue;
+        };
+        let max_size = base as u64 + filesz - addr as u64;
+        if f.size > max_size {
+            tracing::info!(
+                "Clamped {} from {} to {} bytes (segment file data ends at 0x{:08X})",
+                f.name,
+                f.size,
+                max_size,
+                base as u64 + filesz
+            );
+            corrections.push(SizeCorrection {
+                function: f.name.clone(),
+                address: f.address.clone(),
+                old_size: f.size,
+                new_size: max_size,
+                reason: "clamped_to_segment_file_end".into(),
+            });
+            f.size = max_size;
+        }
+    }
     corrections
 }
 
@@ -1203,6 +1246,43 @@ mod tests {
     }
 
     #[test]
+    fn test_backward_scan_last_write_wins_across_calls() {
+        // Patapon 3 EU 0x0882F2EC..0x0882F33C: a1 = 0x08A57244 (a string) for an
+        // earlier jal, then a1 = 0x0882F430 for sceKernelCreateThread. Only the
+        // value live at the call is a thread entry.
+        let words = [
+            (OP_LUI << 26) | (5 << 16) | 0x08A5,
+            (OP_ADDIU << 26) | (5 << 21) | (5 << 16) | 0x7244,
+            (OP_JAL << 26) | 0x0206D46,
+            0,
+            (OP_LUI << 26) | (5 << 16) | 0x0883,
+            (OP_ADDIU << 26) | (5 << 21) | (5 << 16) | 0xF430,
+            OP_JAL << 26,
+        ];
+        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let results = scan_backward_for_funcptr(&bytes, 6 * 4, 5, 0x08800000, &HashMap::new());
+        assert_eq!(results, vec![0x0882F430]);
+    }
+
+    #[test]
+    fn test_backward_scan_value_dead_after_call_or_overwrite() {
+        // a1 loaded, then clobbered by a call (args are caller-saved) or by
+        // `addu a1, s1, zero`: nothing is known at the call.
+        for clobber in [OP_JAL << 26, (17 << 21) | (5 << 11) | 0x21] {
+            let words = [
+                (OP_LUI << 26) | (5 << 16) | 0x089B,
+                (OP_ADDIU << 26) | (5 << 21) | (5 << 16) | 0xCDE4,
+                clobber,
+                0,
+                OP_JAL << 26,
+            ];
+            let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+            let results = scan_backward_for_funcptr(&bytes, 4 * 4, 5, 0x08800000, &HashMap::new());
+            assert!(results.is_empty(), "clobber {clobber:08X}: {results:X?}");
+        }
+    }
+
+    #[test]
     fn test_backward_scan_different_source_reg() {
         // LUI r17, 0x089B; ADDIU r5, r17, 0xCDE4
         // -> 0x089ACDE4 (source reg differs from dest)
@@ -1311,6 +1391,24 @@ mod tests {
             is_thunk: false,
             source: source.into(),
         }
+    }
+
+    #[test]
+    fn test_clamp_to_segment_file_end() {
+        // Patapon 3 EU (UCES01421): an HLE-scan "function" on .rodata strings at
+        // 0x08A57244 was sized to the next start past the file data and ran into
+        // the overlay window, so a bank mid-entry got a main-side parent.
+        let mut fns = vec![
+            heuristic_fn(0x08A57244, 409532, "hle_scan"),
+            heuristic_fn(0x08A00000, 0x40, "ghidra"),
+            heuristic_fn(0x08ABB180, 0x100, "ghidra"), // other segment: untouched
+        ];
+        let c = clamp_to_segment_file_ends(&mut fns, &[(0x08804000, 0x297860), (0x08ABB180, 0x23480)]);
+        assert_eq!(c.len(), 1);
+        assert_eq!(fns[0].size, (0x08A9B860 - 0x08A57244) as u64);
+        assert_eq!(c[0].reason, "clamped_to_segment_file_end");
+        assert_eq!(fns[1].size, 0x40);
+        assert_eq!(fns[2].size, 0x100);
     }
 
     #[test]

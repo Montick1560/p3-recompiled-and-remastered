@@ -697,8 +697,14 @@ pub fn run_analyze(
     }
 
     // 8.6. Correct giant function sizes by clamping to next boundary
-    let size_corrections =
+    let mut size_corrections =
         crate::hle_entry_scanner::correct_function_sizes(&mut functions);
+    let file_ranges: Vec<(u32, u64)> =
+        segments.iter().map(|s| (s.p_vaddr as u32, s.p_filesz as u64)).collect();
+    size_corrections.extend(crate::hle_entry_scanner::clamp_to_segment_file_ends(
+        &mut functions,
+        &file_ranges,
+    ));
     if !size_corrections.is_empty() {
         tracing::info!(
             "Corrected {} giant function sizes",

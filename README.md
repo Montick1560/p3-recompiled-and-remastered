@@ -289,7 +289,9 @@ brew install cmake sdl2 pkg-config
 - **Rust** (stable) and a **C++17 compiler**; CMake 3.16+, SDL2 (found via pkg-config), OpenGL 3.3.
 - **Windows:** MinGW clang (llvm-mingw), Ninja, the official `SDL2-devel-*-mingw` package and a
   local zlib source tree — see [docs/PLATFORMS.md](docs/PLATFORMS.md#windows-mingw-clang). Patapon 3
-  has a one-command pipeline: `games/patapon3/scripts/p3.sh all`.
+  has a one-command pipeline: `games/patapon3/scripts/p3.sh all`. Other releases build into their
+  own folders with `P3_VARIANT=<name> P3_ISO=<iso> P3_EBOOT=<decrypted EBOOT> p3.sh all`
+  (`build/<name>/`); DxD 1.1.5b and the original UCES-01421 boot this way (2026-10-17).
 
 #### Ghidra (for the `analyze` step only)
 
