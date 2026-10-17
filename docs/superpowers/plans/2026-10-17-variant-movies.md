@@ -337,3 +337,20 @@ grep -a "first picture" build/logs/tour_rt.log
   the results and commit the plan:
   `git add docs/superpowers/plans/2026-10-17-variant-movies.md && git commit` with message
   `docs(plan): variant movies findings` and the `Verified:` / `Agent:` lines.
+
+## Findings
+
+- 2026-10-17 (executed inline): `p3.sh build` now passes FFmpeg (cba8b13, test_p3.sh 9/9). Both variant
+  exes import `avcodec-61.dll` and play the opening movie: `movie_check.py v115b` and `vanilla` ->
+  `MOVIE OK first picture 480x272 (ffmpeg=1)`, lit pixels 1.1% (JAPAN Studio logo) / ~80% (cinematic,
+  checked by eye). 1.1.4 tour to `hideout_cuartel` still shows `first picture 480x272 (ffmpeg=1)`.
+- Rulings: (1) the `ls -d` default needed `|| true` (set -euo pipefail killed p3.sh with no message
+  when tools/ffmpeg-7.1.1/ was missing). (2) The movie check uses lit pixels (luma > 40) >= 0.5% in one
+  of two shots (+6 s, +25 s) instead of mean luma >= 8: the movie opens on a logo over black (mean 1.2).
+  (3) `build/v115b` main output and its three overlay banks were stale by fingerprint (generated before
+  fbdb24a, an analyze-only change); regenerated with the current emitter into a scratch folder, all
+  code files identical, so only `fingerprint.json`, `include/recomp_fingerprint.h` and
+  `recompile_report.json` were copied in. (4) `build/rtw` (1.1.4, the exe `jugar.bat` runs) has the
+  same stale fingerprint, so its configure stops before the FFmpeg line; its cache value is unchanged
+  and its exe was not rebuilt (md5 6e1c006c...). Rebuilding 1.1.4 later needs the same metadata
+  refresh (or `p3.sh recompile` + `overlays`), which also picks up ada529e in the play exe.
