@@ -218,6 +218,7 @@ static ComboHold g_menu_combo(1000);
 static void open_menu_prompt() {
     if (osk_session().active() || psp_menu_prompt().active()) return;
     psp_menu_prompt().open();
+    std::fprintf(stderr, "[RT] back-to-menu prompt open\n");
     g_host_buttons.store(0, std::memory_order_relaxed);
     publish_pads();
 }
