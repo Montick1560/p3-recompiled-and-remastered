@@ -2664,4 +2664,31 @@ Launcher (`DECO/launcher`):
 
 ## Findings
 
-(Task 12 writes here.)
+Executed inline overnight 2026-10-17 ("nativo"), Tasks 1-12 done; final review was a
+self-review (no fresh reviewer). Launcher repo `DECO/launcher` (local, never pushed):
+4badf57..1824af1. Port: f132c5f..8b67760 on `patapon3-windows` (not pushed).
+
+- **E2E (automated, real windows and keys, port 9998, from `launcher/portable/Patapon3Recomp`):**
+  first launch writes the default `settings.ini` and opens fullscreen; with `fps = 60` the game
+  log shows `[SETTINGS] reading <root>/settings.ini`, `PSPRECOMP_PATCHES=60fps` and
+  `[P3] 60fps: input update paced to 30 Hz`; F1 opens the box (Spanish, starts on No), No keeps
+  playing, F1 -> Sí -> `[RT] Exit 10` -> the launcher shows its menu again; closing the game
+  window -> `Exit 0` -> the launcher exits 0; `taskkill /F` of the game -> crash notice with code 1.
+  Not done: a real gamepad (Select+Start 1 s, launcher navigation with gilrs) and "Abrir el log"
+  by hand — they need the user.
+- **Key injection pitfall:** `keybd_event` with scan code 0 never reaches SDL2 as F1 (SDL maps
+  Windows keys by scan code; arrows have a VK fallback). Send `MapVirtualKeyW(vk, 0)` as the scan
+  code. The runtime now logs `[RT] back-to-menu prompt open`.
+- **Tours were flaky tonight:** three runs after Task 4 failed on driver desyncs ("no beat
+  found", one 336 s boot) while another Claude session was active; an A/B in the same
+  conditions showed the Task 3 binary also failing against `settings_t3`, and the Task 4 binary
+  vs that run: RT_REGRESS PASS. Final tour (`launcher_t12`): PASS vs `ab_t4` and vs `settings_t3`.
+- **Plan defects fixed on the way (rulings in the executor's ledger):** `defaults.ini` cannot
+  carry trailing `;` comments (comments only at line start); Salir needs
+  `core:window:allow-close`; tauri-build needs `icons/icon.ico`; the gilrs thread must drop
+  events while the game runs; the prompt must let key/button releases through; the portable
+  folder must not live inside Vite's `dist/` (every build empties it) and must copy
+  `libc++.dll` / `libunwind.dll`; Iniciar must explain errors instead of swallowing them.
+- **Open (minor):** once, the first Enter after the launcher appeared was not received (focus of
+  the WebView right after `show()`); a second Enter worked. The asset protocol scope is `**`;
+  narrow it to the root before community themes (part 5).
