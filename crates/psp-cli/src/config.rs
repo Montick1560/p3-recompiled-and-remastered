@@ -27,6 +27,9 @@
 //!   [runtime]
 //!   asset_layer = "bnd"               # none|bnd ; default "none"
 //!
+//!   [image]
+//!   source = "embedded"               # embedded|disc ; "disc" = load the boot file at run time
+//!
 //!   # Existing arrays keep working at top level:
 //!   [[stubs]]   name = "sceUtilityGetSystemParamInt"
 //!   [[skips]]   address = "0x08804000"  reason = "..."
@@ -81,6 +84,9 @@ pub struct GameConfig {
     /// `[overlays]` code-overlay window shared by the game's overlays.
     #[serde(default)]
     pub overlays: Option<OverlaysSection>,
+    /// `[image]` where the runtime gets the main memory image.
+    #[serde(default)]
+    pub image: Option<ImageSection>,
 }
 
 /// `[overlays]` — the fixed load window code overlays share. The main
@@ -128,6 +134,16 @@ pub struct RuntimeSection {
     /// Asset layer selection: "none" (default) or "bnd".
     #[serde(default)]
     pub asset_layer: Option<String>,
+}
+
+/// `[image]` — where the runtime gets the main memory image.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ImageSection {
+    /// "embedded" (default): the image is compiled into the exe (data_sections.cpp arrays).
+    /// "disc": the exe reads the boot file from disc0 at boot, decrypts it when needed and checks
+    /// it against the image it was recompiled from (runtime/src/psp_eboot_loader.cpp).
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 /// `[recompile]` — curated per-game emission inputs.
@@ -297,6 +313,17 @@ impl GameConfig {
         }
     }
 
+    /// True when `[image] source = "disc"`.
+    pub fn image_from_disc(&self) -> anyhow::Result<bool> {
+        match self.image.as_ref().and_then(|i| i.source.as_deref()) {
+            None | Some("embedded") => Ok(false),
+            Some("disc") => Ok(true),
+            Some(other) => anyhow::bail!(
+                "[image] source must be \"embedded\" or \"disc\", got {other:?}"
+            ),
+        }
+    }
+
     /// True when `[runtime] asset_layer = "bnd"`.
     pub fn asset_layer_is_bnd(&self) -> anyhow::Result<bool> {
         match self.runtime.as_ref().and_then(|r| r.asset_layer.as_deref()) {
@@ -405,6 +432,18 @@ pub fn load_config(path: Option<&std::path::Path>) -> anyhow::Result<GameConfig>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_source_defaults_to_embedded() {
+        let c: GameConfig = toml::from_str("[game]\nid = \"x\"\n").unwrap();
+        assert!(!c.image_from_disc().unwrap());
+        let e: GameConfig = toml::from_str("[image]\nsource = \"embedded\"\n").unwrap();
+        assert!(!e.image_from_disc().unwrap());
+        let d: GameConfig = toml::from_str("[image]\nsource = \"disc\"\n").unwrap();
+        assert!(d.image_from_disc().unwrap());
+        let bad: GameConfig = toml::from_str("[image]\nsource = \"cloud\"\n").unwrap();
+        assert!(bad.image_from_disc().is_err());
+    }
 
     #[test]
     fn force_mid_entries_scoped_to_bank() {

@@ -30,7 +30,7 @@ pub use generator::{Generator, TestGenerator};
 pub use cpp_generator::CppGenerator;
 pub use sanitize::sanitize_identifier;
 pub use dispatch::emit_dispatch_table;
-pub use data::emit_data_sections;
+pub use data::{emit_data_sections, emit_data_sections_from_disc};
 pub use init_array::emit_psp_call_constructors;
 pub use cmake::emit_cmake_lists;
 pub use batch::emit_function_batches;

@@ -745,7 +745,7 @@ pub fn run_recompile(
         let patch_sets_cpp = emit_patch_sets_cpp(&prep, &prep.config.patch_sets()?, overlay_window)?;
         write_output_files(
             output_dir, &prep.analysis, &batch_output, &mid_entries_cpp, module_name,
-            &prep.unique_names, &analysis_sha256,
+            &prep.unique_names, &analysis_sha256, prep.config.image_from_disc()?,
         )?;
         std::fs::write(output_dir.join("patch_sets.cpp"), patch_sets_cpp)?;
     }
@@ -2673,6 +2673,7 @@ fn write_output_files(
     module_name: &str,
     unique_names: &HashMap<u32, String>,
     analysis_sha256: &str,
+    image_from_disc: bool,
 ) -> anyhow::Result<()> {
     // Remove stale batch_*.cpp from a prior run before writing fresh ones.
     // A run that emits fewer batches than the previous one leaves orphaned
@@ -2700,10 +2701,17 @@ fn write_output_files(
         output_dir.join("dispatch.cpp"),
         emit_dispatch_table(&analysis.functions, &analysis.mid_entries, module_name, unique_names),
     )?;
-    std::fs::write(
-        output_dir.join("data_sections.cpp"),
-        emit_data_sections(&analysis.segments)?,
-    )?;
+    let data_sections = if image_from_disc {
+        if analysis.prx.is_some() {
+            anyhow::bail!(
+                "[image] source = \"disc\" needs an ET_EXEC image; this module is a relocatable PRX"
+            );
+        }
+        psp_emitter::emit_data_sections_from_disc(&analysis.segments)?
+    } else {
+        emit_data_sections(&analysis.segments)?
+    };
+    std::fs::write(output_dir.join("data_sections.cpp"), data_sections)?;
     std::fs::write(
         output_dir.join("init_array.cpp"),
         emit_psp_call_constructors(&analysis.constructors),
