@@ -312,6 +312,13 @@ Read by the runtime binary at start-up or during execution.
 - **Set it when:** keeping saves outside the working directory, or giving a
   test run its own throw-away save set.
 
+### `PSPRECOMP_SAVE_SLOT`
+
+Save name (the part after the game id, e.g. `_DATA04`) that `LISTLOAD` loads when it is in the
+game's list and exists, instead of the newest save. Patapon 3's Continue uses `LISTLOAD`; the
+launcher's Saves screen sets this variable. Unset or missing save: the newest, as before. Logs
+`[SAVEDATA] LISTLOAD picks _DATA04 (PSPRECOMP_SAVE_SLOT)`.
+
 ### `PSPRECOMP_STRICT`
 - **Read in:** `runtime/src/psp_dispatch.cpp`, `runtime/src/main.cpp`,
   `runtime/src/hle/psp_hle_dispatch.cpp`

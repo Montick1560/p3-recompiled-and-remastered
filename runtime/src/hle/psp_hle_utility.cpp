@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <strings.h>
 #include <ctime>
@@ -1307,10 +1308,15 @@ static void savedata_complete(UtilityDialogState& dlg, uint8_t* rdram) {
         // execute() writes pspUtilityDialogCommon.result (+28) itself.
         psp_savedata::Options opts;
         opts.sdk_version = psp_kernel_compiled_sdk_version();
+        // The launcher's LOAD screen: which save the game's Continue (LISTLOAD) loads.
+        if (const char* slot = std::getenv("PSPRECOMP_SAVE_SLOT")) opts.preferred_save = slot;
         psp_savedata::Outcome out = psp_savedata::execute(
             rdram, PSP_MEM_SIZE, dlg.param_addr, opts);
         fprintf(stderr, "[HLE] sceUtilitySavedata %s\n",
                 out.summary.c_str());
+        for (const std::string& note : out.notes) {
+            fprintf(stderr, "[SAVEDATA] %s\n", note.c_str());
+        }
         return;
     }
     int32_t result = savedata_completion_result(mode);

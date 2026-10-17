@@ -18,15 +18,17 @@
 // 22 GETSIZE. Every other mode is not handled here (handles_mode() == false).
 //
 // Deviations from PPSSPP (all deliberate):
-//  - Savedata encryption/hashing is not ported. Data files are stored in
-//    plaintext in every mode (the *SECURE modes read/write plaintext too);
-//    SAVEDATA_FILE_LIST still records which files are secure and the hash
-//    field is zero. Saves are therefore not loadable on real hardware.
+//  - Encrypted saves (written by PPSSPP or a real PSP: PARAM.SFO SAVEDATA_PARAMS != 0) are
+//    decrypted on load in the secure modes with the request's key (psp_save_crypt, PPSSPP's
+//    LoadCryptedSave retries included). Saves are always written in plaintext:
+//    SAVEDATA_FILE_LIST still records which files are secure, its hash and SAVEDATA_PARAMS are
+//    zero. Saves written here therefore load in PPSSPP but not on real hardware.
 //  - Everything is synchronous: no 200ms init delay, no IO thread.
 //  - There is no UI. LISTLOAD loads the newest existing save in saveNameList
-//    (no existing save -> LOAD_NO_DATA); LISTSAVE picks the entry the
-//    `focus` field selects (NAME: the entry equal to saveName, else the first).
-//    LOAD/SAVE (2/3) run without a confirmation prompt.
+//    (no existing save -> LOAD_NO_DATA); Options::preferred_save
+//    (PSPRECOMP_SAVE_SLOT) picks an existing entry instead. LISTSAVE picks
+//    the entry the `focus` field selects (NAME: the entry equal to saveName,
+//    else the first). LOAD/SAVE (2/3) run without a confirmation prompt.
 //  - The memory stick is a virtual 4GB card; free space is that minus the
 //    bytes the game's saves already use. File creation/access times are the
 //    host modification time (std::filesystem has no portable ctime).
@@ -248,11 +250,15 @@ struct Options {
     std::string root;
     // Compiled SDK version (sceKernelSetCompiledSdkVersion*); 0 = unknown.
     uint32_t sdk_version = 0;
+    // LISTLOAD loads this list entry (a save name such as "_DATA04") when it exists, instead
+    // of the newest one; empty = newest. Other modes ignore it. ($PSPRECOMP_SAVE_SLOT)
+    std::string preferred_save;
 };
 
 struct Outcome {
     int32_t result = 0;     // also written to pspUtilityDialogCommon.result
     std::string summary;    // one log line: mode, game+save name, result
+    std::vector<std::string> notes;  // extra log lines (decryption, the chosen save)
 };
 
 // True for the modes execute() implements.

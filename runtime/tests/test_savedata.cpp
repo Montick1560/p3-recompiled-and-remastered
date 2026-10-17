@@ -4,6 +4,7 @@
 // guest RAM and a throw-away temp directory; no SDL, no game files.
 
 #include "hle/psp_savedata.h"
+#include "hle/psp_save_crypt.h"
 
 #include <chrono>
 #include <cstdio>
@@ -657,6 +658,174 @@ static void test_handles_mode() {
     for (uint32_t m : no) ASSERT_TRUE(!handles_mode(m), "mode is not handled");
 }
 
+// ---- encrypted saves (PPSSPP / real PSP) ------------------------------------
+
+static void write_all(const fs::path& p, const std::vector<uint8_t>& b) {
+    std::ofstream f(p, std::ios::binary | std::ios::trunc);
+    f.write(reinterpret_cast<const char*>(b.data()), static_cast<std::streamsize>(b.size()));
+}
+
+static bool has_note(const Outcome& o, const char* a, const char* b = "") {
+    for (const std::string& n : o.notes) {
+        if (n.find(a) != std::string::npos && n.find(b) != std::string::npos) return true;
+    }
+    return false;
+}
+
+// Turns the plain save `save` (written by AUTOSAVE, data file DATA.BIN) into what PPSSPP writes
+// with encryption on: DATA.BIN encrypted in mode 5 with make_param's key, SAVEDATA_PARAMS[0] =
+// 0x41 and the file-list hash (the right one, or garbage with good_hash = false).
+static void encrypt_save(const char* save, bool good_hash) {
+    const fs::path dir = save_dir(save);
+    std::vector<uint8_t> plain = read_file(dir / "DATA.BIN");
+    uint8_t key[16] = {0x42};
+    std::vector<uint8_t> enc;
+    uint8_t hash[16];
+    ASSERT_EQ(psp_save_crypt::encrypt(5, plain, key, &enc, hash), 0, "test encryption");
+    write_all(dir / "DATA.BIN", enc);
+    std::vector<uint8_t> raw = read_file(dir / "PARAM.SFO");
+    Psf sfo;
+    ASSERT_TRUE(Psf::parse(raw.data(), raw.size(), &sfo), "seed SFO parses");
+    std::vector<uint8_t> params(128, 0);
+    params[0] = 0x41;
+    sfo.set_binary("SAVEDATA_PARAMS", params.data(), params.size(), 128);
+    std::vector<uint8_t> list = *sfo.get_binary("SAVEDATA_FILE_LIST");
+    ASSERT_TRUE(std::strncmp(reinterpret_cast<const char*>(list.data()), "DATA.BIN", 13) == 0,
+                "file list entry 0 is DATA.BIN");
+    if (good_hash) std::memcpy(list.data() + 13, hash, 16);
+    else std::memset(list.data() + 13, 0xEE, 16);
+    sfo.set_binary("SAVEDATA_FILE_LIST", list.data(), list.size(),
+                   static_cast<uint32_t>(list.size()));
+    write_all(dir / "PARAM.SFO", sfo.serialize());
+}
+
+static void test_load_encrypted_save() {
+    Ram r;
+    ASSERT_EQ(autosave(r, "E1", 0x1234, 0x5A), 0, "seed plain save");
+    std::vector<uint8_t> plain = read_file(save_dir("E1") / "DATA.BIN");
+    encrypt_save("E1", true);
+    ASSERT_EQ(fs::file_size(save_dir("E1") / "DATA.BIN"), 0x1234 + 16,
+              "the encrypted file is 16 bytes longer");
+
+    Ram r2;
+    make_param(r2, MODE_AUTOLOAD, "E1");
+    set_buf(r2, DST, 0x1234, 0);  // exactly the plain size, like the game's own buffer
+    Outcome o = run(r2);
+    ASSERT_EQ(res(o), 0, "AUTOLOAD of an encrypted save");
+    ASSERT_EQ(r2.u32(P + off::kDataSize), 0x1234, "dataSize is the plain size");
+    ASSERT_TRUE(std::memcmp(r2.at(DST), plain.data(), plain.size()) == 0,
+                "the game gets the plain bytes");
+    ASSERT_TRUE(has_note(o, "decrypted", "mode 5"), "decryption is reported");
+    ASSERT_TRUE(!has_note(o, "hash mismatch"), "the right hash is accepted");
+
+    // Saving over it writes plain again (the save path is unchanged).
+    ASSERT_EQ(autosave(r, "E1", 0x200, 0x33), 0, "save over the encrypted save");
+    std::vector<uint8_t> raw = read_file(save_dir("E1") / "PARAM.SFO");
+    Psf sfo;
+    ASSERT_TRUE(Psf::parse(raw.data(), raw.size(), &sfo), "SFO parses after the save");
+    const std::vector<uint8_t>* params = sfo.get_binary("SAVEDATA_PARAMS");
+    ASSERT_TRUE(params != nullptr && !params->empty() && (*params)[0] == 0,
+                "SAVEDATA_PARAMS zeroed again: plain");
+    Ram r3;
+    make_param(r3, MODE_AUTOLOAD, "E1");
+    set_buf(r3, DST, 0x1000, 0);
+    Outcome o3 = run(r3);
+    ASSERT_EQ(res(o3), 0, "the re-saved plain save loads");
+    ASSERT_EQ(r3.u32(P + off::kDataSize), 0x200, "plain size after the re-save");
+    ASSERT_TRUE(!has_note(o3, "decrypted"), "nothing decrypted for a plain save");
+}
+
+static void test_load_encrypted_bad_hash() {
+    Ram r;
+    ASSERT_EQ(autosave(r, "E2", 0x800, 0x21), 0, "seed plain save");
+    std::vector<uint8_t> plain = read_file(save_dir("E2") / "DATA.BIN");
+    encrypt_save("E2", false);
+    Ram r2;
+    make_param(r2, MODE_AUTOLOAD, "E2");
+    set_buf(r2, DST, 0x800, 0);
+    Outcome o = run(r2);
+    ASSERT_EQ(res(o), 0, "a hash mismatch still loads (PPSSPP retries without it)");
+    ASSERT_TRUE(std::memcmp(r2.at(DST), plain.data(), plain.size()) == 0, "plain bytes");
+    ASSERT_TRUE(has_note(o, "decrypted", "hash mismatch ignored"), "the mismatch is reported");
+}
+
+static void test_load_encrypted_too_short() {
+    Ram r;
+    ASSERT_EQ(autosave(r, "E3", 0x100, 0x10), 0, "seed plain save");
+    encrypt_save("E3", true);
+    std::vector<uint8_t> enc = read_file(save_dir("E3") / "DATA.BIN");
+    write_all(save_dir("E3") / "DATA.BIN", std::vector<uint8_t>(enc.begin(), enc.begin() + 16));
+    Ram r2;
+    make_param(r2, MODE_AUTOLOAD, "E3");
+    set_buf(r2, DST, 0x1000, 0);
+    std::memset(r2.at(DST), 0xCC, 16);
+    Outcome o = run(r2);
+    ASSERT_EQ(res(o), ERR_LOAD_DATA_BROKEN, "an IV-only file is broken data");
+    ASSERT_EQ(r2.u32(P + off::kDataSize), 0, "dataSize stays 0");
+    ASSERT_EQ(r2.at(DST)[0], 0xCC, "the game's buffer is untouched (never ciphertext)");
+    ASSERT_TRUE(has_note(o, "cannot decrypt"), "the failure is reported");
+    Ram r3;
+    make_param(r3, MODE_READDATASECURE, "E3");
+    set_buf(r3, DST, 0x1000, 0);
+    ASSERT_EQ(res(run(r3)), ERR_RW_DATA_BROKEN, "READDATASECURE maps it to RW_DATA_BROKEN");
+}
+
+static void test_files_list_encrypted_size() {
+    Ram r;
+    ASSERT_EQ(autosave(r, "E4", 100, 0x44), 0, "seed plain save");
+    encrypt_save("E4", true);
+    Ram r2;
+    make_param(r2, MODE_FILES, "E4");
+    r2.w32(P + off::kFileList, AUX);
+    r2.w32(AUX + off::kFlMaxSecure, 8);
+    r2.w32(AUX + off::kFlMaxNormal, 8);
+    r2.w32(AUX + off::kFlMaxSystem, 5);
+    r2.w32(AUX + off::kFlSecureEntries, ENT_S);
+    r2.w32(AUX + off::kFlNormalEntries, ENT_N);
+    r2.w32(AUX + off::kFlSystemEntries, ENT_Y);
+    ASSERT_EQ(res(run(r2)), 0, "FILES on an encrypted save");
+    ASSERT_EQ(r2.u32(AUX + off::kFlResultSecure), 1, "one secure entry");
+    ASSERT_EQ(r2.u64(ENT_S + off::kFlEntrySize64), 100,
+              "the secure file reports its plain size (file size - 16), like PPSSPP");
+}
+
+static void test_listload_preferred_save() {
+    Ram r;
+    ASSERT_EQ(autosave(r, "Q0", 40, 0x01), 0, "older save");
+    ASSERT_EQ(autosave(r, "Q1", 50, 0x02), 0, "newer save");
+    auto old_time = fs::file_time_type::clock::now() - std::chrono::hours(48);
+    fs::last_write_time(save_dir("Q0") / "PARAM.SFO", old_time);
+    fs::last_write_time(save_dir("Q0") / "DATA.BIN", old_time);
+    fs::last_write_time(save_dir("Q0"), old_time);
+
+    Options chosen = g_opts;
+    chosen.preferred_save = "Q0";
+    Ram r2;
+    make_param(r2, MODE_LISTLOAD, "Q1");
+    set_name_list(r2, {"Q0", "Q1"});
+    set_buf(r2, DST, 0x1000, 0);
+    Outcome o = execute(r2.v.data(), r2.v.size(), P, chosen);
+    ASSERT_EQ(res(o), 0, "LISTLOAD with a chosen save");
+    ASSERT_TRUE(r2.str(P + off::kSaveName, 20) == "Q0", "the chosen (older) save is loaded");
+    ASSERT_EQ(r2.u32(P + off::kDataSize), 40, "its data");
+    ASSERT_TRUE(has_note(o, "LISTLOAD picks Q0", "PSPRECOMP_SAVE_SLOT"), "the pick is reported");
+
+    Options missing = g_opts;
+    missing.preferred_save = "Q9";
+    Ram r3;
+    make_param(r3, MODE_LISTLOAD, "Q1");
+    set_name_list(r3, {"Q0", "Q1"});
+    set_buf(r3, DST, 0x1000, 0);
+    ASSERT_EQ(res(execute(r3.v.data(), r3.v.size(), P, missing)), 0, "LISTLOAD, chosen save missing");
+    ASSERT_TRUE(r3.str(P + off::kSaveName, 20) == "Q1", "falls back to the newest");
+
+    Ram r4;
+    make_param(r4, MODE_AUTOLOAD, "Q1");
+    set_buf(r4, DST, 0x1000, 0);
+    ASSERT_EQ(res(execute(r4.v.data(), r4.v.size(), P, chosen)), 0, "AUTOLOAD ignores the choice");
+    ASSERT_EQ(r4.u32(P + off::kDataSize), 50, "AUTOLOAD loads the named save");
+}
+
 int main() {
     g_root = fs::temp_directory_path() /
              ("psp_savedata_test_" +
@@ -681,6 +850,11 @@ int main() {
     test_read_write_data();
     test_getsize();
     test_bad_pointers();
+    test_load_encrypted_save();
+    test_load_encrypted_bad_hash();
+    test_load_encrypted_too_short();
+    test_files_list_encrypted_size();
+    test_listload_preferred_save();
 
     std::error_code ec;
     fs::remove_all(g_root.parent_path(), ec);

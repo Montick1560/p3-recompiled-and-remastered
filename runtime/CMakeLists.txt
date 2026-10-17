@@ -211,6 +211,7 @@ set(RUNTIME_SOURCES
     src/hle/psp_psmf.cpp
     src/hle/psp_hle_psmf.cpp
     src/hle/psp_savedata.cpp
+    src/hle/psp_save_crypt.cpp
     src/hle/psp_gamedata_install.cpp
     src/hle/psp_osk.cpp
     src/hle/psp_mpeg_demux.cpp
@@ -930,7 +931,8 @@ target_compile_options(test_atrac_ctx PRIVATE
 
 # sceUtilitySavedata back end unit test (pure: PSF writer/parser, savedata
 # modes against a temp directory and a fake guest RAM) -- no SDL, no game files.
-add_executable(test_savedata tests/test_savedata.cpp src/hle/psp_savedata.cpp src/psp_host_io.cpp)
+add_executable(test_savedata tests/test_savedata.cpp src/hle/psp_savedata.cpp src/hle/psp_save_crypt.cpp src/psp_host_io.cpp)
+target_link_libraries(test_savedata PRIVATE kirk)
 
 target_include_directories(test_savedata PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -953,8 +955,11 @@ add_executable(test_gamedata_install
     tests/test_gamedata_install.cpp
     src/hle/psp_gamedata_install.cpp
     src/hle/psp_savedata.cpp  # Psf writer/parser for the SFO assertions
+    src/hle/psp_save_crypt.cpp
     src/psp_host_io.cpp
 )
+
+target_link_libraries(test_gamedata_install PRIVATE kirk)
 
 target_include_directories(test_gamedata_install PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include

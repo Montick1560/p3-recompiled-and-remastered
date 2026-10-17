@@ -3,6 +3,7 @@
 // See psp_savedata.h for the list of deliberate deviations.
 
 #include "hle/psp_savedata.h"
+#include "hle/psp_save_crypt.h"
 #include "psp_host_io.h"
 
 #include <algorithm>
@@ -541,6 +542,7 @@ public:
     uint32_t mode() const { return mode_; }
     const std::string& game() const { return game_; }
     const std::string& used_save() const { return used_save_; }
+    const std::vector<std::string>& notes() const { return notes_; }
 
     int32_t run() {
         used_save_ = save_;
@@ -799,6 +801,76 @@ private:
         set_field32(fd_off + off::kFdSize, static_cast<uint32_t>(bytes.size()));
     }
 
+    // The SAVEDATA_FILE_LIST hash recorded for the data file (PPSSPP GetExpectedHash).
+    bool expected_hash(const Psf& sfo, uint8_t hash[16]) const {
+        const std::vector<uint8_t>* list = sfo.get_binary("SAVEDATA_FILE_LIST");
+        if (list == nullptr || file_.empty()) return false;
+        for (size_t o = 0; o + kFileListEntrySize <= list->size(); o += kFileListEntrySize) {
+            const char* name = reinterpret_cast<const char*>(list->data() + o);
+            if (std::strncmp(name, file_.c_str(), 13) == 0) {
+                std::memcpy(hash, list->data() + o + 13, 16);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // PPSSPP SavedataParam::LoadCryptedSave: the save's PARAM.SFO says whether (and with which
+    // mode) the data file is encrypted. Tries the file's mode, then the mode the request implies,
+    // then the file's mode without the hash check. Plain saves are left alone.
+    int32_t decrypt_if_encrypted(const fs::path& dir, const std::string& save_dir,
+                                 std::vector<uint8_t>* bytes) {
+        Psf sfo;
+        std::vector<uint8_t> raw;
+        if (!read_file(dir / kSfoName, 16 * 1024 * 1024, &raw) || raw.empty() ||
+            !Psf::parse(raw.data(), raw.size(), &sfo)) {
+            return 0;  // the LoadSFO step below reports a broken PARAM.SFO
+        }
+        const std::vector<uint8_t>* params = sfo.get_binary("SAVEDATA_PARAMS");
+        const int file_mode = params == nullptr ? 0
+            : psp_save_crypt::mode_from_params(params->data(), params->size());
+        if (file_mode == 0) return 0;
+        const int detected = psp_save_crypt::request_mode(
+            psize_ >= off::kParamSize, field32(off::kSecureVersion), opts_.sdk_version);
+        uint8_t key[16] = {};
+        if (in_param(off::kKey, 16)) {
+            const uint8_t* k = m_.range(p_ + off::kKey, 16);
+            if (k != nullptr) std::memcpy(key, k, 16);
+        }
+        uint8_t hash[16] = {};
+        const bool has_hash = expected_hash(sfo, hash);
+        std::vector<uint8_t> plain;
+        auto attempt = [&](int mode, bool use_hash) {
+            plain.clear();
+            return psp_save_crypt::decrypt(mode, *bytes, mode > 1 ? key : nullptr,
+                                           use_hash ? hash : nullptr, &plain);
+        };
+        int used = file_mode;
+        bool hash_ignored = false;
+        int err = attempt(file_mode, has_hash);
+        if (err != 0 && detected != file_mode) {
+            used = detected;
+            err = attempt(detected, has_hash);
+        }
+        if (err != 0 && has_hash) {
+            used = file_mode;
+            hash_ignored = true;
+            err = attempt(file_mode, false);
+        }
+        const std::string what = dir_name(save_dir) + "/" + file_;
+        if (err != 0) {
+            notes_.push_back("cannot decrypt " + what + " (mode " + std::to_string(file_mode) +
+                             ", error " + std::to_string(err) + ")");
+            return static_cast<int32_t>(ERR_LOAD_DATA_BROKEN);
+        }
+        notes_.push_back("decrypted " + what + " mode " + std::to_string(used) + " (" +
+                         std::to_string(bytes->size()) + " -> " + std::to_string(plain.size()) +
+                         " bytes" + (hash_ignored ? ", hash mismatch ignored like PPSSPP" : "") +
+                         ")");
+        bytes->swap(plain);
+        return 0;
+    }
+
     int32_t load(const std::string& save_dir, bool secure, bool is_rw) {
         used_save_ = save_dir;
         const int32_t no_data = static_cast<int32_t>(
@@ -828,19 +900,24 @@ private:
             if (ec || fsize == 0) return ERR_LOAD_NO_DATA;  // nothing to read
             set_field_str(off::kSaveName, 20, save_dir);
 
-            uint32_t data_buf = field32(off::kDataBuf);
-            uint32_t buf_size = field32(off::kDataBufSize);
-            uint8_t* dst = nullptr;
-            if (data_buf != 0) {
-                if (fsize > buf_size) return ERR_LOAD_DATA_BROKEN;
-                dst = m_.range(data_buf, fsize);
-                if (dst == nullptr) return ERR_LOAD_DATA_BROKEN;
-            }
             std::vector<uint8_t> bytes;
             if (!read_file(file_path, fsize, &bytes) || bytes.empty()) {
                 return ERR_LOAD_NO_DATA;
             }
-            if (dst != nullptr) std::memcpy(dst, bytes.data(), bytes.size());
+            // Decrypt before the size check: the game's buffer fits the plain data, which is
+            // 16 bytes shorter than an encrypted file.
+            if (secure) {
+                int32_t r = decrypt_if_encrypted(dir, save_dir, &bytes);
+                if (r != 0) return r;
+            }
+            uint32_t data_buf = field32(off::kDataBuf);
+            uint32_t buf_size = field32(off::kDataBufSize);
+            if (data_buf != 0) {
+                if (bytes.size() > buf_size) return ERR_LOAD_DATA_BROKEN;
+                uint8_t* dst = m_.range(data_buf, bytes.size());
+                if (dst == nullptr) return ERR_LOAD_DATA_BROKEN;
+                std::memcpy(dst, bytes.data(), bytes.size());
+            }
             set_field32(off::kDataSize, static_cast<uint32_t>(bytes.size()));
         }
 
@@ -1024,6 +1101,14 @@ private:
             return load(save_, true, false);
         }
         if (items.empty()) return ERR_LOAD_NO_DATA;
+        if (!opts_.preferred_save.empty()) {
+            for (const ListItem& it : items) {
+                if (it.name == opts_.preferred_save) {
+                    notes_.push_back("LISTLOAD picks " + it.name + " (PSPRECOMP_SAVE_SLOT)");
+                    return load(it.name, true, false);
+                }
+            }
+        }
         size_t best = 0;
         for (size_t i = 1; i < items.size(); i++) {
             if (items[i].mtime > items[best].mtime) best = i;
@@ -1227,6 +1312,11 @@ private:
         std::vector<std::string> secure;
         secure_names(sfo, &secure);
 
+        // PPSSPP GetFilesList: an encrypted save's secure files report their plain size.
+        const std::vector<uint8_t>* params = sfo.get_binary("SAVEDATA_PARAMS");
+        const bool crypted = params != nullptr &&
+            psp_save_crypt::mode_from_params(params->data(), params->size()) != 0;
+
         set_field32(off::kBind, 1021);
 
         // Does not list directories, nor recurse into them, and ignores
@@ -1245,6 +1335,7 @@ private:
             uint32_t* count = &n_normal;
             uint32_t max = max_normal;
             uint32_t ptr = normal_ptr;
+            bool is_secure = false;
             if (is_system) {
                 count = &n_system;
                 max = max_system;
@@ -1254,6 +1345,7 @@ private:
                 count = &n_secure;
                 max = max_secure;
                 ptr = secure_ptr;
+                is_secure = true;
             }
             if (!usable(ptr) || *count >= max) continue;
             uint32_t entry = ptr + *count * off::kFlEntryBytes;
@@ -1261,7 +1353,9 @@ private:
             (*count)++;
             m_.wr32(entry + off::kFlEntryMode, 0x21FF);
             m_.wr32(entry + 4, 0);
-            m_.wr64(entry + off::kFlEntrySize64, f.size);
+            uint64_t size = f.size;
+            if (crypted && is_secure && size >= 0x10) size -= 0x10;
+            m_.wr64(entry + off::kFlEntrySize64, size);
             write_psp_datetime(m_, entry + off::kFlEntryCtime, f.mtime);
             write_psp_datetime(m_, entry + off::kFlEntryAtime, f.mtime);
             write_psp_datetime(m_, entry + off::kFlEntryMtime, f.mtime);
@@ -1341,6 +1435,7 @@ private:
     std::string root_;
     std::string game_, save_, file_;
     std::string used_save_;
+    std::vector<std::string> notes_;
     uint32_t mode_ = 0;
 };
 
@@ -1431,6 +1526,7 @@ Outcome execute(uint8_t* rdram, size_t ram_size, uint32_t param_addr,
                       sd.game(), "");
     }
     int32_t result = sd.run();
+    out.notes = sd.notes();
     return finish(result, mode, sd.game(), sd.used_save());
 }
 
