@@ -98,5 +98,59 @@ else
     fail "bad P3_FFMPEG refused (rc=$rc, out: $out)"
 fi
 
+# Fake PSP disc pieces for tests 9-11: a PARAM.SFO with DISC_ID / TITLE and an overlay file
+# with the MWo3 header id at offset 4.
+make_sfo() {   # $1 = out file, $2 = DISC_ID
+    python -I - "$1" "$2" <<'PY'
+import struct, sys
+out, disc = sys.argv[1], sys.argv[2]
+entries = [("DISC_ID", disc), ("TITLE", "PATAPON 3")]
+keys = b""; data = b""; index = b""
+for k, v in entries:
+    val = v.encode() + b"\0"; size = (len(val) + 3) // 4 * 4
+    index += struct.pack("<HHIII", len(keys), 0x0204, len(val), size, len(data))
+    keys += k.encode() + b"\0"; data += val.ljust(size, b"\0")
+keys = keys.ljust((len(keys) + 3) // 4 * 4, b"\0")
+kstart = 20 + len(index)
+open(out, "wb").write(b"\0PSF" + struct.pack("<IIII", 0x0101, kstart, kstart + len(keys), len(entries)) + index + keys + data)
+PY
+}
+make_ovl() { printf 'MWo3' >"$1"; printf "\\x$(printf %02x "$2")\\x00\\x00\\x00" >>"$1"; head -c 64 /dev/zero >>"$1"; }
+
+# 9. build writes release.json next to the exe (id from the variant, disc id, EBOOT hash).
+fake_deco "$TMP/rel" yes
+mkdir -p "$TMP/rel/disc0/PSP_GAME/SYSDIR"
+echo "fake eboot" >"$TMP/rel/disc0/PSP_GAME/SYSDIR/EBOOT.BIN"
+make_sfo "$TMP/rel/disc0/PSP_GAME/PARAM.SFO" INFN00001
+out="$(PATH="$TMP/bin:$PATH" CMAKE_LOG="$TMP/rel.log" DECO="$TMP/rel" bash "$P3" build 2>&1)"; rc=$?
+want="$(sha256sum "$TMP/rel/disc0/PSP_GAME/SYSDIR/EBOOT.BIN" | cut -d' ' -f1)"
+rel="$(cat "$TMP/rel/build/rtw/release.json" 2>/dev/null)"
+if [[ $rc -eq 0 && "$rel" == *'"id": "dxd-1.1.4"'* && "$rel" == *'"disc_id": "INFN00001"'* && "$rel" == *"\"eboot_sha256\": \"$want\""* ]]; then
+    pass "build writes release.json"
+else
+    fail "build writes release.json (rc=$rc, out: $out, json: $rel)"
+fi
+
+# 10. Without EBOOT.BIN / PARAM.SFO in disc0 the build still succeeds and says why there is no release.json.
+fake_deco "$TMP/norel" yes
+out="$(PATH="$TMP/bin:$PATH" CMAKE_LOG="$TMP/norel.log" DECO="$TMP/norel" bash "$P3" build 2>&1)"; rc=$?
+if [[ $rc -eq 0 && "$out" == *"release.json not written"* && ! -f "$TMP/norel/build/rtw/release.json" ]]; then
+    pass "no disc0 -> no release.json, build ok"
+else
+    fail "no disc0 -> no release.json, build ok (rc=$rc, out: $out)"
+fi
+
+# 11. Overlay banks come from the MWo3 header id, not the file name, and the folder may be "Overlay".
+mkdir -p "$TMP/van/PSP_GAME/USRDIR/Overlay"
+make_ovl "$TMP/van/PSP_GAME/USRDIR/Overlay/OL_Azito.bin" 2
+make_ovl "$TMP/van/PSP_GAME/USRDIR/Overlay/OL_Mission.bin" 3
+make_ovl "$TMP/van/PSP_GAME/USRDIR/Overlay/OL_Title.bin" 1
+out="$(P3_DISC0="$TMP/van" bash "$P3" overlay-banks 2>&1)"; rc=$?
+if [[ $rc -eq 0 && "$out" == *"OL_Azito.bin Mission"* && "$out" == *"OL_Mission.bin Title"* && "$out" == *"OL_Title.bin Azito"* ]]; then
+    pass "overlay banks by header id"
+else
+    fail "overlay banks by header id (rc=$rc, out: $out)"
+fi
+
 echo "$fails failure(s)"
 exit $((fails > 0))

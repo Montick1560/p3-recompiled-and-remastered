@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Patapon 3 build orchestration (Windows / Git Bash).
-#   p3.sh extract | analyze | recompile | overlays | build | run [seconds] | all
+#   p3.sh extract | analyze | recompile | overlays | overlay-banks | build | run [seconds] | all
 # Env overrides: DECO (project root), P3_ISO, P3_EBOOT, JAVA_HOME, P3_FFMPEG.
 # P3_VARIANT=<name> (e.g. v115b) builds another release of the game in its own
 # folders: build/<name>/{disc0,p3_output,ovl,rtw} and data/patapon3/<name>/.
@@ -30,6 +30,14 @@ else
     DATA="$REPO/data/patapon3"
     DISC0="${P3_DISC0:-$DECO/disc0}"
 fi
+
+# Release id and name written to release.json (the launcher picks game/<id>/ by them).
+case "$VARIANT" in
+    "")      RELEASE_ID="dxd-1.1.4";  RELEASE_NAME="Patapon 3 DxD 1.1.4" ;;
+    v115b)   RELEASE_ID="dxd-1.1.5b"; RELEASE_NAME="Patapon 3 DxD 1.1.5b" ;;
+    vanilla) RELEASE_ID="vanilla-eu"; RELEASE_NAME="Patapon 3 (Europe)" ;;
+    *)       RELEASE_ID="$VARIANT";   RELEASE_NAME="Patapon 3 ($VARIANT)" ;;
+esac
 ANALYSIS="$DATA/analysis.json"
 OUT="$WORK/p3_output"
 BUILD="$WORK/rtw"
@@ -41,6 +49,33 @@ OVL="$WORK/ovl"
 
 die() { echo "p3.sh: error: $*" >&2; exit 1; }
 need_file() { [[ -f "$1" ]] || die "$2"; }
+
+# The overlay folder's case differs between releases (DxD: overlay, vanilla: Overlay).
+overlay_dir() {
+    local d
+    for d in "$DISC0/PSP_GAME/USRDIR/overlay" "$DISC0/PSP_GAME/USRDIR/Overlay"; do
+        if [[ -d "$d" ]]; then echo "$d"; return 0; fi
+    done
+    return 1
+}
+
+# Bank of an overlay file from its "MWo3" header id (offset 4): 1 Azito, 2 Mission, 3 Title.
+# Vanilla ships the three files under each other's names, so the file name is never trusted.
+overlay_bank() {
+    [[ "$(head -c 4 "$1")" == "MWo3" ]] || return 1
+    case "$(od -An -tu4 -j4 -N4 "$1" | tr -d ' ')" in
+        1) echo Azito ;; 2) echo Mission ;; 3) echo Title ;; *) return 1 ;;
+    esac
+}
+
+cmd_overlay_banks() {
+    local dir f bank
+    dir="$(overlay_dir)" || die "no PSP_GAME/USRDIR/overlay folder in $DISC0 — run: p3.sh extract"
+    for f in "$dir"/OL_*.bin; do
+        bank="$(overlay_bank "$f")" || die "$f is not a known MWo3 overlay"
+        echo "$(basename "$f") $bank"
+    done
+}
 
 cmd_extract() {
     # The marker is written last, so an interrupted extraction is redone.
@@ -88,14 +123,15 @@ cmd_recompile() {
 # (Ghidra result cached by input hash) -> recompile --bank ov<Name>.
 cmd_overlays() {
     need_file "$P3_EBOOT" "decrypted EBOOT not found at '$P3_EBOOT' (see: p3.sh analyze)"
-    [[ -d "$DISC0/PSP_GAME/USRDIR/overlay" ]] || die "disc0 missing — run: p3.sh extract"
+    local dir; dir="$(overlay_dir)" || die "disc0 missing — run: p3.sh extract"
     (cd "$REPO" && cargo build --release -q)
     mkdir -p "$OVL"
-    local name lower
-    for name in "${OVERLAYS[@]}"; do
+    local f name lower
+    for f in "$dir"/OL_*.bin; do
+        name="$(overlay_bank "$f")" || die "$f is not a known MWo3 overlay"
         lower="$(echo "$name" | tr '[:upper:]' '[:lower:]')"
-        python -I "$REPO/scripts/overlay_elf.py" "$P3_EBOOT" \
-            "$DISC0/PSP_GAME/USRDIR/overlay/OL_$name.bin" "OL_$name.bin" "$OVL/$lower.elf"
+        # The ELF section keeps the file's own name; the bank follows the content.
+        python -I "$REPO/scripts/overlay_elf.py" "$P3_EBOOT" "$f" "$(basename "$f")" "$OVL/$lower.elf"
         mkdir -p "$DATA/ov_$lower"
         (cd "$REPO" && PATH="$JAVA_HOME/bin:$PATH" JAVA_HOME="$JAVA_HOME" \
             ./target/release/psprecomp analyze --ghidra-dir "$GHIDRA" \
@@ -133,6 +169,11 @@ cmd_build() {
         -DPSPRECOMP_BANK_DIRS="$(bank_dirs)" >/dev/null
     cmake --build "$BUILD" --target psprecomp_runtime
     cp -u "$SDL2_PKG/bin/SDL2.dll" "$BUILD/"
+    if [[ -f "$DISC0/PSP_GAME/SYSDIR/EBOOT.BIN" && -f "$DISC0/PSP_GAME/PARAM.SFO" ]]; then
+        python -I "$REPO/scripts/release_info.py" "$DISC0" "$RELEASE_ID" "$RELEASE_NAME" "$BUILD/release.json"
+    else
+        echo "p3.sh: warning: no EBOOT.BIN / PARAM.SFO in $DISC0, release.json not written" >&2
+    fi
 }
 
 launch_runtime() {   # $1 = seconds, $2 = log; prints the exit status
@@ -171,10 +212,11 @@ cmd_run() {
 case "${1:-}" in
     extract)   cmd_extract ;;
     overlays)  cmd_overlays ;;
+    overlay-banks) cmd_overlay_banks ;;
     analyze)   cmd_analyze ;;
     recompile) cmd_recompile ;;
     build)     cmd_build ;;
     run)       shift; cmd_run "${1:-60}" ;;
     all)       cmd_extract; cmd_analyze; cmd_overlays; cmd_recompile; cmd_build; cmd_run 60 ;;
-    *) echo "usage: $0 {extract|analyze|recompile|overlays|build|run [seconds]|all}" >&2; exit 2 ;;
+    *) echo "usage: $0 {extract|analyze|recompile|overlays|overlay-banks|build|run [seconds]|all}" >&2; exit 2 ;;
 esac
