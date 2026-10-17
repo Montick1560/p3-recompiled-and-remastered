@@ -1,0 +1,8 @@
+{
+  "id": "UCES01421",
+  "import_from": ["UCUS98751"],
+  "system": "_DATA00",
+  "slot_prefix": "_DATA",
+  "first_slot": 1,
+  "last_slot": 10
+}

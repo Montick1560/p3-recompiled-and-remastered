@@ -125,7 +125,7 @@ make_sfo "$TMP/rel/disc0/PSP_GAME/PARAM.SFO" INFN00001
 out="$(PATH="$TMP/bin:$PATH" CMAKE_LOG="$TMP/rel.log" DECO="$TMP/rel" bash "$P3" build 2>&1)"; rc=$?
 want="$(sha256sum "$TMP/rel/disc0/PSP_GAME/SYSDIR/EBOOT.BIN" | cut -d' ' -f1)"
 rel="$(cat "$TMP/rel/build/rtw/release.json" 2>/dev/null)"
-if [[ $rc -eq 0 && "$rel" == *'"id": "dxd-1.1.4"'* && "$rel" == *'"disc_id": "INFN00001"'* && "$rel" == *"\"eboot_sha256\": \"$want\""* ]]; then
+if [[ $rc -eq 0 && "$rel" == *'"id": "dxd-1.1.4"'* && "$rel" == *'"disc_id": "INFN00001"'* && "$rel" == *"\"eboot_sha256\": \"$want\""* && "$rel" == *'"saves"'* && "$rel" == *'"id": "UCES01421"'* && "$rel" == *'"last_slot": 10'* ]]; then
     pass "build writes release.json"
 else
     fail "build writes release.json (rc=$rc, out: $out, json: $rel)"
