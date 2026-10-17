@@ -798,3 +798,14 @@ any new pure helper; verify on the screen like Task 4 Step 6.
 ## Findings
 
 (Task 2 Step 6 and Task 3 write here.)
+
+### Task 2 (2026-10-16): detector on the graphics tour
+
+- `gfx_tour.py --only rt` (32 checkpoints, title to mission reward, `build/tour/rtt_det`): **no
+  `[RTT]` line at all** — no sample, no xfer, no cpu-write. Only the two display buffers were
+  created (`FBO target created key=0x000000` / `key=0x044000`), no `[GE] block transfer` line.
+- `rt_regress build/tour/rtt_base build/tour/rtt_det`: PASS (21 gated checkpoints).
+- `perf_hideout`: fps 30.0 / 30.0, ge_ms/frame 4.1 / 4.1, CPU 33.8 % / 33.9 % (second sample
+  33.6 %). `cpu_wait_ms/s` 111.5 → 140.0 / 131.5: that counter is guest threads waiting for the
+  CPU lock (`psp_cpu.cpp`), not the render thread where the detector runs, and earlier
+  `build/tour/perf_*` samples range 100-246 for it, so it is noise, not detector cost.

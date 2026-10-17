@@ -85,6 +85,12 @@ void ge_draw_prim(
     std::vector<DecodedVertex>* predecoded = nullptr
 );
 
+/// RTT detector, called at TRANSFERSTART before the memory copy: logs a block
+/// transfer that reads or writes a GL-rendered target ([RTT] xfer) and marks a
+/// written target's guest bytes as newer than GL.
+struct GeTransferRegs;
+void ge_draw_note_transfer(const GeTransferRegs& r);
+
 /// Present the FBO to the SDL2 window via glBlitFramebuffer.
 /// Does NOT read rdram for pixel data (FBO blit only).
 void ge_present_frame(

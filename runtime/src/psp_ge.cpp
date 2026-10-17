@@ -788,8 +788,11 @@ GeListResult ge_process_display_list(
 
         // ---- Depth / Z buffer ----
         case GE_CMD_ZBUFPTR:
+            g_ge_state.zbuf_ptr = data;
+            break;
         case GE_CMD_ZBUFWIDTH:
-            break;  // Not needed for Phase 5
+            g_ge_state.zbuf_width = data;
+            break;
 
         // ---- Mask ----
         case GE_CMD_MASKRGB:
@@ -869,6 +872,7 @@ GeListResult ge_process_display_list(
                     g_transfer.srcpos, g_transfer.dstpos, g_transfer.size,
                     (data & 1) ? 32 : 16);
             }
+            ge_draw_note_transfer(g_transfer);
             psp_ge_block_transfer(rdram, g_transfer);
             ge_texture_memo_invalidate();  // the transfer may rewrite a texture
             break;

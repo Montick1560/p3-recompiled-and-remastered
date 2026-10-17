@@ -9,6 +9,8 @@
 #include "psp_ge_constants.h"
 #include "psp_ge_vertex.h"
 #include "psp_ge_texture.h"
+#include "psp_ge_transfer.h"
+#include "psp_ge_rtt.h"
 #include "psp_ge_shader.h"
 #include "psp_gl_state.h"
 #include "psp_event_loop.h"
@@ -26,6 +28,7 @@
 #include <cstdlib>
 #include <cstring>
 #include "psp_present.h"
+#include "xxhash.h"
 
 // ---- Generic FBO pool (issue #59 — honor fb_addr / double buffer) ----
 // One GL FBO per distinct guest VRAM framebuffer address. The GE binds the
@@ -41,6 +44,11 @@ struct GeTarget {
     GLuint color_tex = 0;
     GLuint depth_rb = 0;
     uint64_t last_use = 0;     // LRU stamp (monotonic counter)
+    uint32_t stride = 0;        // FRAMEBUFWIDTH & 0x7FC of the last PRIM drawn into it
+    uint32_t fb_fmt = 0;        // FRAMEBUFPIXFORMAT of the last PRIM drawn into it
+    bool gl_written = false;    // a PRIM was drawn: GL holds pixels guest VRAM does not
+    bool cpu_newer = false;     // guest VRAM changed after GL drew: RAM is the truth
+    uint64_t guest_hash = 0;    // XXH3 of the guest window at the last check
 };
 
 static GeTarget g_targets[GE_MAX_TARGETS];
@@ -592,6 +600,89 @@ static void drawlog_prim(const GeState& s, int index, int prim_type, int count) 
     }
 }
 
+// ---- RTT detector (logs only) ----
+// Which draws, transfers and CPU writes touch a GL-written target. GL never writes guest
+// VRAM, so a change of a target's guest bytes is the CPU (or a transfer) writing it.
+static int rtt_targets(GeRttTarget* out) {
+    for (int i = 0; i < GE_MAX_TARGETS; ++i) {
+        const GeTarget& t = g_targets[i];
+        out[i] = {t.fbo != 0 && t.gl_written && !t.cpu_newer, t.key, t.stride, t.fb_fmt};
+    }
+    return GE_MAX_TARGETS;
+}
+
+static uint32_t rtt_window_bytes(const GeTarget& t) {
+    return t.stride * (t.fb_fmt == 3 ? 4u : 2u) * PSP_FB_HEIGHT;
+}
+
+// Once per list: hash each GL-written target's guest window.
+static void rtt_check_cpu_writes(const uint8_t* rdram) {
+    for (int i = 0; i < GE_MAX_TARGETS; ++i) {
+        GeTarget& t = g_targets[i];
+        if (t.fbo == 0 || !t.gl_written || t.stride == 0) continue;
+        const uint32_t base = 0x04000000u + t.key, bytes = rtt_window_bytes(t);
+        if (uint64_t{base} + bytes > 0x08000000u) continue;   // 128 MB guest image
+        const uint64_t h = XXH3_64bits(rdram + base, bytes);
+        if (t.guest_hash != 0 && h != t.guest_hash) {
+            t.cpu_newer = true;
+            static uint32_t count = 0;
+            if (++count <= 16 || count % 300 == 0)
+                std::fprintf(stderr, "[RTT] cpu-write key=0x%06X count=%u\n", t.key, count);
+        }
+        t.guest_hash = h;
+    }
+}
+
+// One line per distinct (target, texture address, format) the game samples.
+static void rtt_note_sample(const GeState& s) {
+    const uint32_t addr = s.tex_addr[0] | (((s.tex_bufw[0] >> 16) & 0xFFu) << 24);
+    const int w = 1 << (s.tex_size[0] & 0xF), h = 1 << ((s.tex_size[0] >> 8) & 0xF);
+    const uint32_t bufw = s.tex_bufw[0] & 0x7FFu;
+    const uint32_t bytes = ge_rtt_tex_bytes(static_cast<int>(s.tex_format), bufw, h);
+    GeRttTarget t[GE_MAX_TARGETS];
+    const int n = rtt_targets(t);
+    int idx = ge_rtt_overlap(t, n, addr, bytes);
+    bool depth = false;
+    if (idx < 0 && s.zbuf_ptr != 0) {
+        const GeRttTarget z = {true, (s.zbuf_ptr & 0x07FFFFFFu) & 0x001FFFF0u,
+                               s.zbuf_width & 0x7FCu, 1};
+        if (ge_rtt_overlap(&z, 1, addr, bytes) == 0) { idx = 0; depth = true; }
+    }
+    if (idx < 0) return;
+    static uint64_t seen[64];
+    static int nseen = 0;
+    const uint64_t k = (static_cast<uint64_t>(depth ? 0xFFu : static_cast<uint32_t>(idx)) << 56) ^
+                       (static_cast<uint64_t>(addr) << 8) ^ s.tex_format;
+    for (int i = 0; i < nseen; ++i) if (seen[i] == k) return;
+    if (nseen < 64) seen[nseen++] = k; else return;
+    const GeRttHit hit = depth ? GeRttHit{-1, 0, 0}
+        : ge_rtt_find(t, n, addr, static_cast<int>(s.tex_format), bufw, h);
+    const GeTarget& g = g_targets[depth ? 0 : idx];
+    std::fprintf(stderr,
+        "[RTT] sample key=0x%06X%s ta=0x%08X fmt=%u %dx%d bufw=%u fb_stride=%u fb_fmt=%u "
+        "match=%d (%d,%d)\n",
+        depth ? ((s.zbuf_ptr & 0x07FFFFFFu) & 0x001FFFF0u) : g.key,
+        depth ? " depth" : (idx == g_current_target ? " self" : ""),
+        addr, s.tex_format, w, h, bufw, depth ? (s.zbuf_width & 0x7FCu) : g.stride,
+        depth ? 1u : g.fb_fmt, hit.index, hit.x, hit.y);
+}
+
+void ge_draw_note_transfer(const GeTransferRegs& r) {
+    const GeTransferRect x = psp_ge_transfer_rect(r);
+    const uint32_t src_bytes = ((x.sy + x.height - 1) * x.src_stride + x.sx + x.width) * x.bpp;
+    const uint32_t dst_bytes = ((x.dy + x.height - 1) * x.dst_stride + x.dx + x.width) * x.bpp;
+    GeRttTarget t[GE_MAX_TARGETS];
+    const int n = rtt_targets(t);
+    const int from = ge_rtt_overlap(t, n, x.src, src_bytes);
+    const int into = ge_rtt_overlap(t, n, x.dst, dst_bytes);
+    if (into >= 0) g_targets[into].cpu_newer = true;   // guest bytes now differ from GL
+    if (from < 0 && into < 0) return;
+    static int logged = 0;
+    if (++logged <= 64)
+        std::fprintf(stderr, "[RTT] xfer src=0x%08X dst=0x%08X %ux%u bpp=%u from_target=%d into_target=%d\n",
+                     x.src, x.dst, x.width, x.height, x.bpp, from, into);
+}
+
 void ge_draw_prim(
     uint8_t* rdram,
     int prim_type,
@@ -671,6 +762,17 @@ void ge_draw_prim(
     const bool drawlog = g_drawlog_lists.load(std::memory_order_relaxed) > 0;
     const int list_index = g_list_prim_index++;
     if (drawlog) drawlog_prim(state, list_index, prim_type, count);
+    if (list_index == 0) rtt_check_cpu_writes(rdram);
+    if (g_current_target >= 0) {
+        GeTarget& t = g_targets[g_current_target];
+        t.stride = state.framebuf_width & 0x7FCu;
+        t.fb_fmt = state.framebuf_format & 3u;
+        t.gl_written = true;
+        // After a CPU write, GL's copy lacks the CPU's pixels until a clear redraws the
+        // buffer from scratch (Task 6 would upload them instead).
+        if (state.clear_mode) t.cpu_newer = false;
+    }
+    if (state.texture_enable && !state.clear_mode) rtt_note_sample(state);
     if (!state.clear_mode && list_index >= g_skip_lo.load(std::memory_order_relaxed) &&
         list_index <= g_skip_hi.load(std::memory_order_relaxed)) {
         return;

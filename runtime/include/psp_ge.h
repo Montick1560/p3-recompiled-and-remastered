@@ -79,6 +79,8 @@ struct GeState {
     uint32_t framebuf_ptr;    // GE_CMD_FRAMEBUFPTR
     uint32_t framebuf_width;  // GE_CMD_FRAMEBUFWIDTH
     uint32_t framebuf_format; // GE_CMD_FRAMEBUFPIXFORMAT
+    uint32_t zbuf_ptr;        // GE_CMD_ZBUFPTR
+    uint32_t zbuf_width;      // GE_CMD_ZBUFWIDTH
 
     // -- Render state --
     bool alpha_blend_enable;

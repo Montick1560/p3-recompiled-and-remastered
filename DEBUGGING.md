@@ -423,6 +423,11 @@ After the fog state, `cull=<enable>/<face>` is GE_CMD_CULLFACEENABLE / GE_CMD_CU
 was clipped by GL: through float depth is now truncated and clamped to [0, 65535] like PPSSPP
 (2026-10-16 Arena del Valor HUD bars blinking: the game leaves z as garbage).
 
+`[RTT] sample|xfer|cpu-write` lines (always on, one per distinct case): a texture, a block
+transfer or a CPU write touched a GL-rendered buffer — the cases where the runtime's guest VRAM
+differs from what the GE drew (render to texture,
+`docs/superpowers/plans/2026-10-16-render-to-texture.md`).
+
 ### `PSPRECOMP_HW_WATCH` (Windows hardware write watch)
 
 `PSPRECOMP_HW_WATCH=<hex guest address>` arms debug register DR0 (write, 4 bytes) on every host

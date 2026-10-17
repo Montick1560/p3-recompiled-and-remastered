@@ -46,6 +46,14 @@ int main() {
     psp_ge_block_transfer(rdram, h);
     CHECK(std::memcmp(rdram + 0x04000000, rdram + 0x00900000, 8) == 0, "16 bpp copy into the VRAM mirror base");
 
+    // Rect decode shared with the RTT detector: same registers as the 32 bpp copy above.
+    const GeTransferRect rc = psp_ge_transfer_rect(r);
+    CHECK(rc.src == src && rc.dst == dst, "rect: full source and destination addresses");
+    CHECK(rc.src_stride == 8 && rc.dst_stride == 16, "rect: strides in pixels");
+    CHECK(rc.sx == 1 && rc.sy == 1 && rc.dx == 3 && rc.dy == 2, "rect: positions");
+    CHECK(rc.width == 4 && rc.height == 2 && rc.bpp == 4, "rect: size and bytes per pixel");
+    CHECK(psp_ge_transfer_rect(h).dst == 0x04000000, "rect: VRAM mirror folded like the copy");
+
     if (failures) { std::fprintf(stderr, "SOME TESTS FAILED\n"); return 1; }
     std::printf("ge_transfer: all tests passed\n");
     return 0;

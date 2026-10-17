@@ -26,17 +26,25 @@ uint32_t stride(uint32_t w) {
 
 }  // namespace
 
+GeTransferRect psp_ge_transfer_rect(const GeTransferRegs& r) {
+    GeTransferRect t;
+    t.src = address(r.src, r.srcw);
+    t.dst = address(r.dst, r.dstw);
+    t.src_stride = stride(r.srcw);
+    t.dst_stride = stride(r.dstw);
+    t.sx = r.srcpos & 0x3FF; t.sy = (r.srcpos >> 10) & 0x3FF;
+    t.dx = r.dstpos & 0x3FF; t.dy = (r.dstpos >> 10) & 0x3FF;
+    t.width = (r.size & 0x3FF) + 1; t.height = ((r.size >> 10) & 0x3FF) + 1;
+    t.bpp = (r.start & 1) ? 4 : 2;
+    return t;
+}
+
 void psp_ge_block_transfer(uint8_t* rdram, const GeTransferRegs& r) {
-    const uint32_t src = address(r.src, r.srcw), dst = address(r.dst, r.dstw);
-    const uint32_t src_stride = stride(r.srcw), dst_stride = stride(r.dstw);
-    const uint32_t sx = r.srcpos & 0x3FF, sy = (r.srcpos >> 10) & 0x3FF;
-    const uint32_t dx = r.dstpos & 0x3FF, dy = (r.dstpos >> 10) & 0x3FF;
-    const uint32_t width = (r.size & 0x3FF) + 1, height = ((r.size >> 10) & 0x3FF) + 1;
-    const uint32_t bpp = (r.start & 1) ? 4 : 2;
-    const uint32_t row_bytes = width * bpp;
-    for (uint32_t y = 0; y < height; y++) {
-        const uint32_t s = (src + ((sy + y) * src_stride + sx) * bpp) & kAddrMask;
-        const uint32_t d = (dst + ((dy + y) * dst_stride + dx) * bpp) & kAddrMask;
+    const GeTransferRect t = psp_ge_transfer_rect(r);
+    const uint32_t row_bytes = t.width * t.bpp;
+    for (uint32_t y = 0; y < t.height; y++) {
+        const uint32_t s = (t.src + ((t.sy + y) * t.src_stride + t.sx) * t.bpp) & kAddrMask;
+        const uint32_t d = (t.dst + ((t.dy + y) * t.dst_stride + t.dx) * t.bpp) & kAddrMask;
         if (s + uint64_t{row_bytes} > kMemSize || d + uint64_t{row_bytes} > kMemSize) continue;
         std::memmove(rdram + d, rdram + s, row_bytes);
     }
