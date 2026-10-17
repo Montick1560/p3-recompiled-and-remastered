@@ -2685,3 +2685,61 @@ node scripts/make-portable.mjs --game dxd-1.1.4=$D/build/rtw --game dxd-1.1.5b=$
   per release; E2E key driver`) and psprecomp (`docs(plan): launcher part 2 findings`), each with
   `Verified:` and `Agent:`. Update memory `p3-launcher-part1.md`/new `p3-launcher-part2.md`. Nothing
   is pushed; the user plays and approves.
+
+---
+
+## Findings (2026-10-17, execution)
+
+Built by DeepSeek flash (OpenCode, the user's API key) from one brief per task; Claude read every
+diff, re-ran the gates and committed. Task 1 was written by Claude (the OpenCode deny list still froze
+`crates/` from the closed relevo until the user re-ran its setup).
+
+Commits — psprecomp (`patapon3-windows`): 1d17b60 (T1), fdf260b (T2), 85018c6 (T3), fc788f7 (exit 11
+fix), 92af841 (T4). Launcher (`main`): 52b71e7 (T5), 566a484 (T6), 84d70ad (T7), ca4110d (T8),
+3834511 + 04411ff (T9). Nothing pushed.
+
+**End to end** (fresh `build/e2e_portable`, launcher with `PSPRECOMP_DEBUG_PORT=9998`):
+
+| ISO | release | install | boot line | looked at |
+|---|---|---|---|---|
+| `DECO/INFN00001.iso` | dxd-1.1.4 | ok (the injected path came out garbled, see 7; the ISO was then picked by hand) | `[EBOOT] loaded ...\versions\dxd-1.1.4\disc0/PSP_GAME/SYSDIR/EBOOT.BIN (decrypted, 3941504 bytes)` | DxD language menu (debug-socket capture) |
+| `Downloads/INFN00001.iso` | dxd-1.1.5b | < 7 s (ISO in the file cache) | same, `dxd-1.1.5b` | DxD language menu; menu shows `Versión ◂ Patapon 3 DxD 1.1.5b ▸` |
+| `Downloads/Patapon 3 (Europe).iso` | vanilla-eu | ~1 s (cached) | same, `vanilla-eu` | vanilla's own language list (English first) |
+
+- F1 → left → Enter returned to the launcher menu each time (exit 10). `▸` from vanilla-eu wrapped to
+  dxd-1.1.4, `settings.ini` `[launcher] version = dxd-1.1.4`, and Start booted the 1.1.4 disc0.
+- Refusals: `ppsspp_win.zip` → "Este archivo no es una ISO de PSP."; one byte flipped in the installed
+  1.1.4 EBOOT.BIN → `[EBOOT] ... decrypt failed (pspDecryptPRX returned -4); exit 11` and the drop screen
+  with "Los archivos de esta versión están dañados o mezclados..." (file restored afterwards).
+- Cancel by hand could not be exercised: with the ISO in the file cache an install takes about a
+  second, and the Enter meant for Cancel landed on the menu's Start. Cancel, failed reinstall and
+  leftover `.partial` stay covered by the Rust tests (Task 6).
+- Re-running make-portable over the E2E folder kept the three installs, `settings.ini` and the saves.
+
+**Regression:** ctest 74/74; test_p3 12/12; launcher cargo 44 + 1 ignored (`real_isos` passes with
+`--ignored`: the three ISOs identified by their EBOOT hash), Vitest 23/23, `node --test` 2/2;
+1.1.4 tours `p2_t3c` and `p2_t9` vs `rebuild114_t1` RT_REGRESS PASS; v115b and vanilla MOVIE OK;
+`jugar.bat`'s environment boots 1.1.4 from `DECO/disc0` (`[EBOOT] loaded`).
+
+**Plan defects fixed on the way:**
+1. The disc-mode `data_sections.cpp` includes `psp_eboot_loader.h`, but the generated recomp target
+   did not see `runtime/include` (DeepSeek stopped BLOCKED with the diagnosis); the runtime CMake now
+   adds it to the aliased recomp target.
+2. `std::exit(11)` ran static destructors with the debug-socket thread joinable and aborted
+   (0xC0000409, rc 127): the launcher would have shown a crash. Now `std::quick_exit(11)`, like the
+   fast shutdown. Found by DeepSeek re-checking Task 3; the first T3 commit message wrongly claimed
+   rc=11 from the log text.
+3. `kirk_engine.c` is GPL-3.0-or-later, not GPL-2.0 as the plan said: the kirk README and the main
+   README say a runtime exe is distributed under GPL-3.0.
+4. `node --test scripts/` does not expand a folder on Node 24 (use `scripts/*.test.mjs`), and Vitest
+   collected the node:test file: `vite.config.ts` now limits Vitest to `src/`.
+5. test_p3 has 12 checks after the task (the plan said 11; the old suite had 9, not 8).
+6. v115b's overlay banks predated the Task 1 emitter commit, so its build hit the stale-bank guard;
+   DeepSeek re-ran `p3.sh overlays` for v115b (no guard relaxed).
+7. E2E: typing paths key by key broke with Caps Lock and the Spanish layout (`\` needs AltGr) →
+   `e2e_keys.py type` pastes; make-portable deleted `game/ lang/ themes/` before copying a locked
+   `launcher.exe` → it now copies the launcher first.
+
+**Open / for later:** the three `game/<id>/` folders weigh 307 MB together (FFmpeg DLLs in each);
+sharing the DLLs or one exe folder per release with links is a packaging question for part 7. The
+first-run hint text is small and the dashed drop-zone border is faint at 1080p (cosmetic, part 5 themes).
