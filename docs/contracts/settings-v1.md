@@ -44,6 +44,9 @@ mac_file = adhoc_mac.txt    ; PSPRECOMP_ADHOC_MAC_FILE
 [controls]                  ; reserved for part 4; ignored in v1
 ```
 
+`[launcher]` (e.g. `version = dxd-1.1.5b`, the last played release) belongs to the launcher; the
+game ignores the section without logging.
+
 Rules:
 
 - **Precedence:** an environment variable already set > `settings.ini` > the runtime default.
@@ -138,4 +141,5 @@ Both are optional and independent.
 |---|---|
 | 0 | the player quit |
 | 10 | the player chose "back to the menu" (the launcher shows its main menu again) |
+| 11 | the game files in disc0 do not match this exe (the launcher asks to add the ISO again) |
 | anything else | crash / failure (the launcher shows the crash notice and the log) |

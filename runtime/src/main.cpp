@@ -20,6 +20,7 @@
 #include "psp_vfpu.h"  // vfpu_init_context — VFPU prefix reset default
 #include "psp_patch_sets.h"
 #include "psp_settings.h"
+#include "psp_eboot_loader.h"
 #include "psp_exit.h"
 
 // Build fingerprint of the output/ this binary was generated from (issue #36).
@@ -226,6 +227,10 @@ int main(int argc, char* argv[]) {
     //    (-DPSPRECOMP_GAME=none) registers nothing here.
     game->register_hooks(rdram);
     psp_func_args_install();  // PSPRECOMP_FUNC_ARGS debug wrappers
+
+    // [image] source = "disc" builds read the image from the boot file (psp_eboot_loader.cpp);
+    // embedded builds never open it.
+    psp_eboot_set_boot_file(psp_eboot_host_path(disc0_path, RECOMP_BOOT_PATH));
 
     // 4. RUNTIME-03: Copy .data/.rodata into rdram
     psp_init_data_sections(rdram);

@@ -293,6 +293,9 @@ brew install cmake sdl2 pkg-config
   `$DECO/tools/ffmpeg-7.1.1/` (or `P3_FFMPEG=<package root>`); `p3.sh build` refuses to build without it. Other releases build into their
   own folders with `P3_VARIANT=<name> P3_ISO=<iso> P3_EBOOT=<decrypted EBOOT> p3.sh all`
   (`build/<name>/`); DxD 1.1.5b and the original UCES-01421 boot this way (2026-10-17).
+  The Patapon 3 build reads `PSP_GAME/SYSDIR/EBOOT.BIN` from the extracted disc at boot (the encrypted
+  file is fine; `[image] source = "disc"`), so the decrypted PPSSPP EBOOT dump is only needed to *build*, not to play;
+  a disc that does not match the exe stops with exit code 11.
 
 #### Ghidra (for the `analyze` step only)
 
@@ -498,6 +501,9 @@ This port stands on the work of the PSP and Patapon communities:
 ## License
 
 GPL-2.0-or-later. See [LICENSE](LICENSE).
+
+The runtime links the vendored PPSSPP PRX decrypter (`runtime/third_party/kirk/`, partly
+GPL-3.0-or-later; see its README), so a runtime executable is distributed under GPL-3.0.
 
 Portions of the runtime (VFPU register-file semantics, GE command constants, HLE error codes
 and kernel-object semantics) are derived from [PPSSPP](https://github.com/hrydgard/ppsspp),

@@ -54,7 +54,7 @@ All under `crates/`:
 |------|----------|
 | `generated/batch_*.cpp` | Per-batch function translations |
 | `dispatch.cpp` | Address-to-function dispatch table |
-| `data_sections.cpp` | `.data`/`.rodata`/`.bss` as byte arrays (addresses masked with `0x07FFFFFFU`) |
+| `data_sections.cpp` | `.data`/`.rodata`/`.bss` as byte arrays (addresses masked with `0x07FFFFFFU`); with `[image] source = "disc"`, only the expected PT_LOAD table + FNV-1a-64 and a call into `runtime/src/psp_eboot_loader.cpp`, which reads, decrypts (vendored PPSSPP `PrxDecrypter`, `runtime/third_party/kirk/`) and checks the boot file at boot. The runtime adds its `include/` to the recomp target for that header |
 | `init_array.cpp` | Static-constructor pointer table (not walked by default — the game's CRT handles it) |
 | `mid_entries.cpp` | Mid-function entry point wrappers |
 | `patch_sets.cpp` | Opt-in `[[patch_sets]]` of the manifest: each patched function re-emitted from the patched bytes as `<name>__ps_<set>` (plus mid-entry wrappers and code caves outside the image as `PATCH_<set>_<addr>`), and the `recomp_patch_set_count/_name/_enable` API that registers a set over the dispatch table. Always emitted (empty API without sets); main output only — bank code is not patchable yet |
@@ -161,6 +161,7 @@ All under `runtime/` (headers in `runtime/include/`, sources in `runtime/src/`):
 | Subsystem | Files | Responsibility |
 |-----------|-------|----------------|
 | Boot / main loop | `main.cpp` | Generic boot sequence (module start, thread creation), SDL2 main loop — contains zero address-keyed hooks (they live in `games/<id>/runtime/`, Phase 4) |
+| Boot image | `psp_eboot_loader.cpp`, `third_party/kirk/` | `[image] source = "disc"` (per game, ET_EXEC only): the main memory image is not compiled in. At boot the loader reads the boot file from disc0, decrypts a `~PSP` file in memory (PPSSPP `pspDecryptPRX`) or takes a plain ELF as is, checks the PT_LOAD layout and the FNV-1a-64 against the recompiled image and copies it to `rdram`; any mismatch prints `[EBOOT] ...` and exits with code 11 before a window opens. Why: the exe no longer carries the game's bytes — the player's own disc supplies them — and the wrong disc for an exe stops cleanly instead of booting a broken game |
 | Game modules | `psp_game_module.h`, `psp_game_default.cpp`, `games/<id>/runtime/` | Per-game hook seam — see [Per-Game Layer](#per-game-layer-games) |
 | Memory | `psp_memory.cpp` | 128 MB `rdram` allocation; all guest addresses masked with `0x07FFFFFFU` |
 | Dispatch | `psp_dispatch.cpp` | `RECOMP_LOOKUP` address→function resolution; miss handler (consults overlay banks first); `PSPRECOMP_STRICT` abort mode |

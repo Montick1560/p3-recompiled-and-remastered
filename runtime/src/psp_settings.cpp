@@ -181,6 +181,7 @@ SettingsResolution psp_settings_resolve(const std::string& ini_text, const std::
     }
 
     for (const auto& s : ini.values) {
+        if (s.first == "launcher") continue;  // launcher-only section (docs/contracts/settings-v1.md)
         for (const auto& kv : s.second) {
             const std::string id = s.first + "." + kv.first;
             if (!known.count(id)) r.log.push_back("[SETTINGS] unknown key " + id + " ignored");

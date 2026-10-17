@@ -141,6 +141,13 @@ static void args_rules() {
     CHECK(s.settings_path.empty(), "--settings without a value is ignored");
 }
 
+// [launcher] belongs to the launcher (last played release): the game ignores it silently.
+static void launcher_section_is_silent() {
+    const SettingsResolution r = psp_settings_resolve("[launcher]\nversion = dxd-1.1.5b\n", kCatalog,
+                                                      "C:/P", kNoEnv);
+    CHECK(!logged(r, "launcher"), "[launcher] not logged as unknown");
+}
+
 int main() {
     parser_rules();
     defaults_fixture();
@@ -149,6 +156,7 @@ int main() {
     env_precedence();
     future_and_empty();
     args_rules();
+    launcher_section_is_silent();
     if (failures == 0) std::printf("test_settings: all passed\n");
     return failures == 0 ? 0 : 1;
 }
