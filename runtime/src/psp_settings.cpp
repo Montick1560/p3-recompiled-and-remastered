@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <set>
 
@@ -188,4 +189,76 @@ SettingsResolution psp_settings_resolve(const std::string& ini_text, const std::
             r.log.push_back("[SETTINGS] empty section [" + s.first + "]");
     }
     return r;
+}
+
+SettingsArgs psp_settings_parse_args(int argc, char** argv) {
+    SettingsArgs a;
+    for (int i = 1; i + 1 < argc; i++) {
+        const std::string k = argv[i];
+        if (k == "--settings") a.settings_path = argv[++i];
+        else if (k == "--log") a.log_path = argv[++i];
+    }
+    return a;
+}
+
+namespace {
+std::string read_file(const std::string& path, bool* ok) {
+    FILE* f = std::fopen(path.c_str(), "rb");
+    *ok = f != nullptr;
+    if (!f) return "";
+    std::string s;
+    char buf[4096];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) s.append(buf, n);
+    std::fclose(f);
+    return s;
+}
+std::string dir_of(const std::string& path) {
+    const size_t p = path.find_last_of("/\\");
+    return p == std::string::npos ? "." : path.substr(0, p);
+}
+std::string slashes(std::string s) {
+    std::replace(s.begin(), s.end(), '\\', '/');
+    return s;
+}
+void set_env(const std::string& name, const std::string& value) {
+#ifdef _WIN32
+    _putenv_s(name.c_str(), value.c_str());
+#else
+    setenv(name.c_str(), value.c_str(), 1);
+#endif
+}
+}  // namespace
+
+void psp_settings_apply(const SettingsArgs& args, const char* exe_dir) {
+    if (!args.log_path.empty()) {
+        if (std::freopen(args.log_path.c_str(), "w", stderr) == nullptr)
+            std::fprintf(stdout, "[SETTINGS] cannot open log %s\n", args.log_path.c_str());
+    }
+    const std::string exe = slashes(exe_dir ? exe_dir : "");
+    std::string ini_path = slashes(args.settings_path);
+    bool ok = false;
+    std::string text;
+    if (!ini_path.empty()) {
+        text = read_file(ini_path, &ok);
+        if (!ok) {
+            std::fprintf(stderr, "[SETTINGS] %s not found: using the runtime defaults\n", ini_path.c_str());
+            return;
+        }
+    } else {
+        ini_path = exe + "/settings.ini";
+        text = read_file(ini_path, &ok);
+        if (!ok) return;  // no settings.ini: everything as before
+    }
+    bool cat_ok = false;
+    const std::string catalog = read_file(exe + "/game_options.json", &cat_ok);
+    std::fprintf(stderr, "[SETTINGS] reading %s (game options: %s)\n", ini_path.c_str(),
+                 cat_ok ? "game_options.json" : "none");
+    const SettingsResolution r = psp_settings_resolve(text, catalog, dir_of(ini_path),
+                                                      [](const char* n) { return std::getenv(n); });
+    for (const std::string& l : r.log) std::fprintf(stderr, "%s\n", l.c_str());
+    for (const auto& kv : r.set) {
+        set_env(kv.first, kv.second);
+        std::fprintf(stderr, "[SETTINGS] %s=%s\n", kv.first.c_str(), kv.second.c_str());
+    }
 }

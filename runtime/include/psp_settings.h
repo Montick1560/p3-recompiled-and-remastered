@@ -18,3 +18,12 @@ SettingsResolution psp_settings_resolve(const std::string& ini_text,
                                         const std::string& catalog_json,  // "" = none
                                         const std::string& base_dir,      // ini folder, '/'
                                         const EnvGetter& getenv_fn);
+
+// Command line: --settings <path>, --log <path> (both optional, "" = not given).
+struct SettingsArgs { std::string settings_path, log_path; };
+SettingsArgs psp_settings_parse_args(int argc, char** argv);  // pure
+
+// Redirects stderr to args.log_path when given, finds settings.ini (args path, else next to
+// the executable), resolves it with game_options.json next to the executable and sets the
+// environment. No ini and no --settings: does nothing.
+void psp_settings_apply(const SettingsArgs& args, const char* exe_dir);

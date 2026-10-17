@@ -129,6 +129,18 @@ static void future_and_empty() {
     CHECK(logged(r, "game_options.json"), "bad catalog logged");
 }
 
+static void args_rules() {
+    char a0[] = "game.exe", a1[] = "--settings", a2[] = "C:/P 3/settings.ini", a3[] = "--log",
+         a4[] = "C:/P 3/logs/game.log", a5[] = "--unknown";
+    char* argv[] = {a0, a1, a2, a3, a4, a5};
+    SettingsArgs s = psp_settings_parse_args(6, argv);
+    CHECK(s.settings_path == "C:/P 3/settings.ini", "--settings path (spaces)");
+    CHECK(s.log_path == "C:/P 3/logs/game.log", "--log path");
+    char* only[] = {a0, a1};
+    s = psp_settings_parse_args(2, only);
+    CHECK(s.settings_path.empty(), "--settings without a value is ignored");
+}
+
 int main() {
     parser_rules();
     defaults_fixture();
@@ -136,6 +148,7 @@ int main() {
     invalid_fixture();
     env_precedence();
     future_and_empty();
+    args_rules();
     if (failures == 0) std::printf("test_settings: all passed\n");
     return failures == 0 ? 0 : 1;
 }

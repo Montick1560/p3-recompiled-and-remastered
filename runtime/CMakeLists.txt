@@ -309,6 +309,14 @@ endif()
 
 add_executable(psprecomp_runtime ${RUNTIME_SOURCES})
 
+# Game option catalog for settings.ini [game] (docs/contracts/settings-v1.md).
+set(_game_options "${CMAKE_CURRENT_SOURCE_DIR}/../games/${PSPRECOMP_GAME}/game_options.json")
+if(EXISTS "${_game_options}")
+    add_custom_command(TARGET psprecomp_runtime POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_game_options}"
+                "$<TARGET_FILE_DIR:psprecomp_runtime>/game_options.json")
+endif()
+
 # ── Code-overlay banks (M2) ────────────────────────────────────────────────
 # Each `psprecomp recompile --bank <name>` output dir defines an OBJECT
 # library <name> whose objects self-register with psp_overlay.cpp.

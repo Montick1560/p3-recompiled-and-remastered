@@ -112,6 +112,25 @@ These are read by the `psprecomp` Rust binary during `analyze`/`recompile`/`dump
 
 Read by the runtime binary at start-up or during execution.
 
+### Command line and `settings.ini`
+- **Read in:** `runtime/src/psp_settings.cpp` (`psp_settings_apply`, the first thing
+  `main()` does). Contract: [`docs/contracts/settings-v1.md`](contracts/settings-v1.md).
+- **`--settings <path>`:** read this `settings.ini`. Without it the runtime reads
+  `settings.ini` next to the executable when it exists; with neither nothing changes.
+- **`--log <path>`:** stderr goes to this file (the launcher passes `../logs/game.log`).
+- **Effect:** each known key becomes the `PSPRECOMP_*` variable below that it maps to
+  (paths resolved against the ini's folder; `[game]` keys come from `game_options.json`
+  next to the executable). **Precedence:** a variable already set in the environment >
+  `settings.ini` > the runtime default. Invalid values keep the default. Every action
+  is logged as a `[SETTINGS]` line.
+
+### `PSPRECOMP_UI_LANG`
+- **Read in:** the runtime's own dialogs (the "back to the menu" prompt).
+- **Type:** env, `es` | `en`.
+- **Default:** `es`.
+- **Effect:** Language of in-game runtime dialogs. Set from `general.language` in
+  `settings.ini`.
+
 ### `PSPRECOMP_DISC0`
 - **Read in:** `runtime/src/main.cpp`
 - **Type:** env (path string).

@@ -19,6 +19,7 @@
 #include "psp_game_module.h"
 #include "psp_vfpu.h"  // vfpu_init_context — VFPU prefix reset default
 #include "psp_patch_sets.h"
+#include "psp_settings.h"
 
 // Build fingerprint of the output/ this binary was generated from (issue #36).
 // Guarded so pre-fingerprint output dirs still build (warning at configure
@@ -52,6 +53,7 @@
 #include <cstdio>
 #include <cstring>
 #include <sys/stat.h>
+#include <SDL.h>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -104,8 +106,12 @@ void psp_func_args_install();  // psp_dispatch.cpp
 void psp_hw_watch_start(uint8_t* rdram);  // psp_backtrace.cpp (PSPRECOMP_HW_WATCH)
 
 int main(int argc, char* argv[]) {
-    (void)argc;
-    (void)argv;
+    // settings.ini (docs/contracts/settings-v1.md): before anything reads a PSPRECOMP_* variable.
+    {
+        char* base = SDL_GetBasePath();
+        psp_settings_apply(psp_settings_parse_args(argc, argv), base);
+        SDL_free(base);
+    }
 #ifdef _WIN32
     SetUnhandledExceptionFilter(psp_crash_filter);
 #endif
