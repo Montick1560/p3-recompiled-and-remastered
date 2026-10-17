@@ -144,6 +144,7 @@ set(RUNTIME_SOURCES
     src/psp_ge_rtt.cpp
     src/psp_ini.cpp
     src/psp_settings.cpp
+    src/psp_eboot_loader.cpp
     src/psp_menu_prompt.cpp
     src/psp_present.cpp
     src/psp_fpu.cpp
@@ -280,6 +281,17 @@ add_library(xxhash STATIC third_party/xxhash/xxhash.c)
 target_include_directories(xxhash PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/xxhash)
 target_compile_options(xxhash PRIVATE -w -O2)
 
+# Vendored PPSSPP PRX decrypter (GPL-2.0; third_party/kirk/README.md): decrypts a "~PSP" boot
+# file in memory for [image] source = "disc" builds (psp_eboot_loader.cpp).
+file(GLOB KIRK_C_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/third_party/kirk/ext/libkirk/*.c)
+add_library(kirk STATIC ${KIRK_C_SOURCES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/kirk/Core/ELF/PrxDecrypter.cpp)
+target_include_directories(kirk PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/kirk/shim
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/kirk
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/kirk/ext)
+target_compile_options(kirk PRIVATE -w -O2)
+
 set(PSPRECOMP_FFMPEG_DIR "" CACHE PATH
     "FFmpeg LGPL shared package root (include/, lib/*.dll.a, bin/*.dll). Empty disables video decode.")
 if(PSPRECOMP_FFMPEG_DIR)
@@ -377,6 +389,7 @@ target_link_libraries(psprecomp_runtime PRIVATE
     psp::recomp
     at3_standalone
     xxhash
+    kirk
     ${PSP_SDL2_LIBS}
     OpenGL::GL
     ZLIB::ZLIB
@@ -613,6 +626,15 @@ target_compile_definitions(test_settings PRIVATE
     PSP_GAME_OPTIONS_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/game_options.json")
 target_compile_options(test_settings PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME settings_tests COMMAND test_settings)
+
+# EBOOT image loader ([image] source = "disc"): synthetic ELFs, plus the real EBOOTs of the
+# three Patapon 3 releases when they are on this PC (skipped otherwise; never committed).
+add_executable(test_eboot_loader tests/test_eboot_loader.cpp src/psp_eboot_loader.cpp)
+target_include_directories(test_eboot_loader PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(test_eboot_loader PRIVATE kirk)
+target_compile_definitions(test_eboot_loader PRIVATE PSP_DECO_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../..")
+target_compile_options(test_eboot_loader PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME eboot_loader_tests COMMAND test_eboot_loader)
 
 # Back-to-menu combo + prompt (pure).
 add_executable(test_menu_prompt tests/test_menu_prompt.cpp src/psp_menu_prompt.cpp)
