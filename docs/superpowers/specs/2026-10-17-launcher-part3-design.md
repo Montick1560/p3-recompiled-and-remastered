@@ -21,6 +21,11 @@ PPSSPP. No external tools, no keys, nothing ever deleted.
   end-to-end test decides whether they really load (otherwise they are listed as not compatible).
 - **Two-way:** "Export to PPSSPP" copies a slot into PPSSPP's save folder (PPSSPP reads plain
   saves).
+- **The launcher is the LOAD screen.** The port has no PSP system dialog: `LISTLOAD` (the game's
+  Continue) always loads the newest save of the list. The player picks "Continue with this save"
+  in Saves; the launcher passes it to the game (`PSPRECOMP_SAVE_SLOT`) and `LISTLOAD` loads that
+  one. (Found while planning, 2026-10-17; inside the approved scope, the decomposition's
+  "CARGAR-style save picker".)
 
 ### Facts verified before the design (2026-10-17)
 
@@ -42,7 +47,8 @@ PPSSPP. No external tools, no keys, nothing ever deleted.
   (the 10 game slots), `_DATA50` and `_DATA99` (other data). Every Patapon 3 release uses the
   game name `UCES01421` for EU / DxD saves (DxD's disc id is `INFN00001`, its saves are not).
 - The game loads saves with `LISTLOAD` (the system's list dialog, `saveNameList`) and reads the
-  system data with `AUTOLOAD _DATA00`; `SIZES` / `FILES` are also used.
+  system data with `AUTOLOAD _DATA00`; `SIZES` / `FILES` are also used. Without a dialog the
+  runtime's `list_load()` loads the existing entry with the newest `PARAM.SFO` time.
 - A local throwaway tool already decrypts one save with PPSSPP's code
   (`DECO/build/tools/p3save/`: `chnnlsv_core.cpp`, `decrypt_data.inc`, libkirk objects); the
   runtime vendors libkirk since part 2 (`runtime/third_party/kirk/`).
@@ -53,9 +59,11 @@ PPSSPP. No external tools, no keys, nothing ever deleted.
 2. **Saves** (for the selected release), styled like the game's LOAD screen: one row per slot
    `DATA01`..`DATA10` with `ICON0.PNG`, `SAVEDATA_TITLE` and the `SAVEDATA_DETAIL` lines (Hero,
    Class Lv, Play time, Last mission); empty slots show "Empty". "System data" (`_DATA00`) and
-   other data (`_DATA50`, `_DATA99`) are a separate small row. Actions: **Import from PPSSPP**,
-   **Export to PPSSPP** (on the focused slot), **Open the save folder** (moves here from Options ›
-   General).
+   other data (`_DATA50`, `_DATA99`) are a separate small row. Actions: **Continue with this
+   save** (Confirm on a slot; the chosen slot carries a ★ "Continue loads this one"; with none
+   chosen the ★ is on the newest, today's behaviour), **Import from PPSSPP**, **Export to PPSSPP**
+   (on the focused slot), **Open the save folder** (moves here from Options › General).
+   The main menu shows the chosen save's first detail line under Start ("Héroe: Edson…").
 3. **Import from PPSSPP:**
    - The launcher looks for PPSSPP's `PSP/SAVEDATA` by itself (see §3.3). If nothing is found, or
      the player wants another one, "Choose the PPSSPP folder" (PPSSPP's own folder, `memstick`,
@@ -65,7 +73,7 @@ PPSSPP. No external tools, no keys, nothing ever deleted.
    - Picking one imports it into the slot with the same number. If that slot is taken:
      "Replace (a copy is kept)" or "Use the free slot DATAnn" (first free one; if none, only
      Replace). System data asks the same "Replace?" question.
-   - Done: "Imported into DATAnn." The row appears in the slot list.
+   - Done: "Imported into DATAnn." The row appears in the slot list and becomes the chosen one.
 4. **Export to PPSSPP:** on a slot, copies it to PPSSPP's `SAVEDATA` as `<save id>_DATAnn`. If
    PPSSPP already has that folder: "PPSSPP already has a save in DATAnn. Replace it (a copy is
    kept)?".
@@ -89,17 +97,22 @@ All strings in `lang/es.json` and `lang/en.json`.
    `[SAVEDATA] decrypted <dir>/<file> mode <n> (<in> -> <out> bytes)`; a failure logs the reason
    and returns `SCE_UTILITY_SAVEDATA_ERROR_LOAD_DATA_BROKEN` (0x80110306) instead of handing the
    game ciphertext.
-2. **Sizes:** the list / `FILES` / `SIZES` answers report the data size the game will receive
+2. **Chosen save:** `PSPRECOMP_SAVE_SLOT=<save name>` (for example `_DATA04`) makes `LISTLOAD`
+   load that entry when it is in the game's `saveNameList` and exists; otherwise the newest, as
+   today. Logs `[SAVEDATA] LISTLOAD picks _DATA04 (PSPRECOMP_SAVE_SLOT)`. Other modes ignore it.
+   Read once per request in `psp_hle_utility.cpp` into `Options::preferred_save`;
+   `docs/ENV_FLAGS.md` documents it.
+3. **Sizes:** the list / `FILES` / `SIZES` answers report the data size the game will receive
    (encrypted file size minus 16 bytes when the save is encrypted), like PPSSPP.
-3. **Saving over an encrypted save** keeps today's behaviour: plain `SECURE.BIN`, zeroed
+4. **Saving over an encrypted save** keeps today's behaviour: plain `SECURE.BIN`, zeroed
    `SAVEDATA_PARAMS` and file-list hash. Nothing else in the savedata module changes.
-4. **Crypto:** `runtime/third_party/kirk/` gains PPSSPP's savedata cipher: the
+5. **Crypto:** `runtime/third_party/kirk/` gains PPSSPP's savedata cipher: the
    `sceSdMac*` / `sceSdCipher*` core of `Core/HLE/sceChnnlsv.cpp` (with `sceChnnlsv.h`) and
    `SavedataParam::DecryptData` / `EncryptData` / `BuildHash` as free functions in a small
    `psp_save_crypt.{h,cpp}` wrapper, copied from PPSSPP commit `0665ea0` with the licence note in
    the README (GPL-2.0-or-later). `EncryptData` is used only by the tests (round trip). The
    runtime links `kirk` already.
-5. **`release.json`** (written by `p3.sh build`) gains the save facts, so the launcher has no
+6. **`release.json`** (written by `p3.sh build`) gains the save facts, so the launcher has no
    Patapon 3 knowledge:
    ```json
    "saves": { "id": "UCES01421", "import_from": ["UCUS98751"],
@@ -107,7 +120,7 @@ All strings in `lang/es.json` and `lang/en.json`.
    ```
    Same values for the three releases (kept next to the variant mapping in `p3.sh`). A
    `release.json` without `saves` hides the Saves entry for that release.
-6. **Docs in the same change:** `ARCHITECTURE.md` (savedata: encrypted saves decrypted on load),
+7. **Docs in the same change:** `ARCHITECTURE.md` (savedata: encrypted saves decrypted on load),
    `README.md` (PPSSPP saves load as they are), `runtime/third_party/kirk/README.md`.
 
 ## 3. Launcher side (`DECO/launcher`)
@@ -126,13 +139,16 @@ All strings in `lang/es.json` and `lang/en.json`.
      copied encrypted (the game decrypts them, §2.1);
    - `export(slot_entry, ppsspp_savedata, backups)`: same steps towards PPSSPP, always named with
      the release's `saves.id`;
+   - the chosen slot per release: `[launcher] save_<release-id> = _DATAnn` in `settings.ini`
+     (launcher-only section); `start_game` passes it as `PSPRECOMP_SAVE_SLOT` when that slot
+     exists;
    - `free_slot(...)`, backup folder naming, leftover `.partial` cleanup.
 3. **PPSSPP folder detection** (`ppsspp.rs`): candidates in order — the remembered
    `[launcher] ppsspp_savedata` from `settings.ini`; Windows `Documents\PPSSPP\PSP\SAVEDATA`
    (installed PPSSPP's default memstick); Linux `~/.config/ppsspp/PSP/SAVEDATA`; then nothing.
    A chosen folder is normalised: `X/SAVEDATA`, `X/PSP/SAVEDATA`, `X/memstick/PSP/SAVEDATA`, the
    first that exists. The game ignores the `[launcher]` section (contract v1 unchanged).
-4. **Commands:** `list_saves(id)`, `ppsspp_folder()`, `choose_ppsspp_folder(path)`,
+4. **Commands:** `list_saves(id)` (slots + which one is chosen), `choose_save(id, slot)`, `ppsspp_folder()`, `choose_ppsspp_folder(path)`,
    `list_ppsspp_saves(id)`, `import_save(id, folder, target_slot)`, `export_save(id, slot,
    replace)`, `open_save_folder(id)` (exists). Icons are served to the UI as data URLs (no asset
    scope widening).
@@ -144,7 +160,10 @@ All strings in `lang/es.json` and `lang/en.json`.
 
 - **ctest (game):** round trip — `EncryptData` mode 5 with a test key, write a save folder with
   `SAVEDATA_PARAMS = 0x41`, the load path returns the original bytes; wrong MAC in the file list
-  -> still loads (retry without hash); wrong key -> `LOAD_DATA_BROKEN`, never ciphertext; plain
+  -> still loads (retry without hash); a file of 16 bytes or less -> `LOAD_DATA_BROKEN`, never
+  the raw bytes (a wrong key cannot be detected without a matching MAC: PPSSPP then hands the game
+  garbage too, and so do we); `PSPRECOMP_SAVE_SLOT` picks an older entry, a missing one falls back
+  to the newest; plain
   saves unchanged; sizes reported for an encrypted save. Real-save test (skipped when the files
   are absent, no game files in the repo): `build/save_main/original_DATA04` decrypts to bytes equal
   to `build/save_main/dec_DATA04.bin`.
@@ -159,7 +178,8 @@ All strings in `lang/es.json` and `lang/en.json`.
   still loading.
 - **End to end on the user's PC (port 9998, fresh portable folder, PPSSPP folder chosen as
   `E:\Respaldo\PPSSPP` — read only, nothing exported there):** import the **encrypted**
-  `UCES01421_DATA04` -> Start -> Español EU -> Continue -> the hideout shows Edson Yumiyacha Nv 35;
+  `UCES01421_DATA04` -> Start -> Español EU -> Continue -> the hideout shows Edson Yumiyacha Nv 35; with a second, newer slot imported, choosing DATA04
+  in Saves still loads Edson;
   import `UCUS98751_DATA02` (MoMo, Tondenga Lv 19) into a free slot -> it loads (if the game
   rejects it, US saves become "not compatible" in the list and the spec records it); export a
   slot to a scratch PPSSPP (a copy of `build/ppsspp_mp` in `build/e2e_ppsspp`, its own
