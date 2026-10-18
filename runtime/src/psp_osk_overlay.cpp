@@ -13,10 +13,14 @@
 #include <glad/glad.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -54,22 +58,24 @@ bool load_font(Font& f, const std::string& path) {
 
 Font& font() {
     static Font f;
-    if (f.tried) return f;
-    f.tried = true;
-    std::vector<std::string> paths;
-    if (!skin().font.empty()) paths.push_back(skin().font);
-    if (const char* e = std::getenv("PSPRECOMP_OSK_FONT")) paths.push_back(e);
-    paths.push_back("C:/Windows/Fonts/segoeui.ttf");
-    paths.push_back("C:/Windows/Fonts/arial.ttf");
-    paths.push_back("/System/Library/Fonts/Supplemental/Arial.ttf");
-    paths.push_back("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
-    for (const std::string& p : paths) {
-        if (load_font(f, p)) {
-            std::fprintf(stderr, "[OSK] font %s\n", p.c_str());
-            return f;
+    static std::once_flag once;
+    std::call_once(once, [] {
+        f.tried = true;
+        std::vector<std::string> paths;
+        if (!skin().font.empty()) paths.push_back(skin().font);
+        if (const char* e = std::getenv("PSPRECOMP_OSK_FONT")) paths.push_back(e);
+        paths.push_back("C:/Windows/Fonts/segoeui.ttf");
+        paths.push_back("C:/Windows/Fonts/arial.ttf");
+        paths.push_back("/System/Library/Fonts/Supplemental/Arial.ttf");
+        paths.push_back("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
+        for (const std::string& p : paths) {
+            if (load_font(f, p)) {
+                std::fprintf(stderr, "[OSK] font %s\n", p.c_str());
+                return;
+            }
         }
-    }
-    std::fprintf(stderr, "[OSK] no font found; set PSPRECOMP_OSK_FONT=<file.ttf>\n");
+        std::fprintf(stderr, "[OSK] no font found; set PSPRECOMP_OSK_FONT=<file.ttf>\n");
+    });
     return f;
 }
 
@@ -77,13 +83,31 @@ Font& font() {
 // U+21E7 ⇧ or U+24B6.. Ⓐ Ⓑ Ⓧ Ⓨ). Silent when no fallback exists.
 Font& fallback_font() {
     static Font f;
-    if (f.tried) return f;
-    f.tried = true;
-    const char* const paths[] = {"C:/Windows/Fonts/seguisym.ttf",
-                                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"};
-    for (const char* p : paths) {
-        if (load_font(f, p)) return f;
-    }
+    static std::once_flag once;
+    std::call_once(once, [] {
+        f.tried = true;
+        const char* const paths[] = {"C:/Windows/Fonts/seguisym.ttf",
+                                     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"};
+        for (const char* p : paths) {
+            if (load_font(f, p)) return;
+        }
+    });
+    return f;
+}
+
+// Emoji outlines for achievement icons (Segoe UI Emoji keeps monochrome glyf outlines next to its colour
+// layers). Silent when absent: the icon is then skipped by the rasterizer like any missing glyph.
+Font& emoji_font() {
+    static Font f;
+    static std::once_flag once;
+    std::call_once(once, [] {
+        f.tried = true;
+        const char* const paths[] = {"C:/Windows/Fonts/seguiemj.ttf",
+                                     "/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf"};
+        for (const char* p : paths) {
+            if (load_font(f, p)) return;
+        }
+    });
     return f;
 }
 
@@ -125,8 +149,10 @@ TextImage rasterize(const std::string& utf8, float px) {
     Font& f = font();
     if (!f.ok || px < 4.0f) return img;
     Font& fb = fallback_font();
+    Font& em = emoji_font();
     const float scale = stbtt_ScaleForPixelHeight(&f.info, px);
     const float fb_scale = fb.ok ? stbtt_ScaleForPixelHeight(&fb.info, px) : 0.0f;
+    const float em_scale = em.ok ? stbtt_ScaleForPixelHeight(&em.info, px) : 0.0f;
     int ascent = 0, descent = 0, gap = 0;
     stbtt_GetFontVMetrics(&f.info, &ascent, &descent, &gap);
     const int base = static_cast<int>(std::lround(ascent * scale));
@@ -137,10 +163,10 @@ TextImage rasterize(const std::string& utf8, float px) {
     std::vector<stbtt_fontinfo*> infos(cps.size(), &f.info);
     std::vector<float> scales(cps.size(), scale);
     for (size_t k = 0; k < cps.size(); k++) {
-        if (fb.ok && stbtt_FindGlyphIndex(&f.info, cps[k]) == 0) {
-            infos[k] = &fb.info;
-            scales[k] = fb_scale;
-        }
+        if (stbtt_FindGlyphIndex(&f.info, cps[k]) != 0) continue;
+        if (fb.ok && stbtt_FindGlyphIndex(&fb.info, cps[k]) != 0) { infos[k] = &fb.info; scales[k] = fb_scale; }
+        else if (em.ok && stbtt_FindGlyphIndex(&em.info, cps[k]) != 0) { infos[k] = &em.info; scales[k] = em_scale; }
+        else if (fb.ok) { infos[k] = &fb.info; scales[k] = fb_scale; }  // as before: the symbol font's notdef
     }
 
     // Pen positions and glyph boxes first: a glyph may reach left of its pen (the
@@ -318,28 +344,28 @@ OskKeyboard& psp_osk_keyboard_ref() {
 
 const OskSkin& skin() {
     static OskSkin s;
-    static bool loaded = false;
-    if (loaded) return s;
-    loaded = true;
-    const char* path = std::getenv("PSPRECOMP_OSK_SKIN");
-    if (!path || !*path) return s;
-    FILE* fp = std::fopen(path, "rb");
-    if (!fp) {
-        std::fprintf(stderr, "[OSK] skin %s not found: built-in Deck skin\n", path);
-        return s;
-    }
-    std::string text;
-    char buf[4096];
-    size_t n;
-    while ((n = std::fread(buf, 1, sizeof buf, fp)) > 0) text.append(buf, n);
-    std::fclose(fp);
-    std::string dir = path;
-    const size_t slash = dir.find_last_of("/\\");
-    dir = slash == std::string::npos ? "." : dir.substr(0, slash);
-    std::vector<std::string> log;
-    s = osk_skin_parse(text, dir, &log);
-    for (const std::string& l : log) std::fprintf(stderr, "%s\n", l.c_str());
-    std::fprintf(stderr, "[OSK] skin %s (%s)\n", s.name.c_str(), path);
+    static std::once_flag once;
+    std::call_once(once, [] {
+        const char* path = std::getenv("PSPRECOMP_OSK_SKIN");
+        if (!path || !*path) return;
+        FILE* fp = std::fopen(path, "rb");
+        if (!fp) {
+            std::fprintf(stderr, "[OSK] skin %s not found: built-in Deck skin\n", path);
+            return;
+        }
+        std::string text;
+        char buf[4096];
+        size_t n;
+        while ((n = std::fread(buf, 1, sizeof buf, fp)) > 0) text.append(buf, n);
+        std::fclose(fp);
+        std::string dir = path;
+        const size_t slash = dir.find_last_of("/\\");
+        dir = slash == std::string::npos ? "." : dir.substr(0, slash);
+        std::vector<std::string> log;
+        s = osk_skin_parse(text, dir, &log);
+        for (const std::string& l : log) std::fprintf(stderr, "%s\n", l.c_str());
+        std::fprintf(stderr, "[OSK] skin %s (%s)\n", s.name.c_str(), path);
+    });
     return s;
 }
 
@@ -522,6 +548,97 @@ bool psp_menu_prompt_overlay_draw(int win_w, int win_h, int rx, int ry, int rw, 
     y += bh + pad;
     rect(win_w, win_h, px + (pw - hint.w) * 0.5f, y, static_cast<float>(hint.w),
          static_cast<float>(hint.h), col.hint, hint.tex);
+    glDisable(GL_BLEND);
+    glBindVertexArray(0);
+    glUseProgram(0);
+    return true;
+}
+
+namespace {
+struct ToastImages { TextImage title, name; };
+struct ToastShown { GLuint title = 0, name = 0; int tw = 0, th = 0, nw = 0, nh = 0; int64_t start_ms = -1; };
+std::mutex g_toast_mu;
+std::deque<ToastImages> g_toast_in;          // posted, not uploaded yet (guarded by g_toast_mu)
+std::atomic<int> g_toast_posted{0};          // > 0: g_toast_in has something
+std::atomic<int> g_toast_rh{720};            // last game image height, for the raster size
+
+GLuint upload(const TextImage& img) {
+    GLuint t = 0;
+    glGenTextures(1, &t);
+    glBindTexture(GL_TEXTURE_2D, t);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, img.w > 0 ? img.w : 1, img.h > 0 ? img.h : 1, 0, GL_RED,
+                 GL_UNSIGNED_BYTE, img.a.empty() ? nullptr : img.a.data());
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    return t;
+}
+}  // namespace
+
+void psp_toast_post(const ToastText& t) {
+    const int rh = g_toast_rh.load(std::memory_order_relaxed);
+    ToastImages im{rasterize(t.title, rh * 0.036f), rasterize(t.name, rh * 0.050f)};
+    std::lock_guard<std::mutex> lock(g_toast_mu);
+    g_toast_in.push_back(std::move(im));
+    g_toast_posted.fetch_add(1, std::memory_order_release);
+}
+
+bool psp_toast_overlay_draw(int win_w, int win_h, int rx, int ry, int rw, int rh) {
+    static std::deque<ToastShown> shown;
+    if (rh > 0) g_toast_rh.store(rh, std::memory_order_relaxed);
+    if (g_toast_posted.load(std::memory_order_acquire) > 0) {
+        std::deque<ToastImages> in;
+        {
+            std::lock_guard<std::mutex> lock(g_toast_mu);
+            in.swap(g_toast_in);
+            g_toast_posted.store(0, std::memory_order_relaxed);
+        }
+        for (const ToastImages& im : in)
+            shown.push_back({upload(im.title), upload(im.name), im.title.w, im.title.h, im.name.w, im.name.h, -1});
+    }
+    if (shown.empty() || win_w <= 0 || win_h <= 0 || rw <= 0 || rh <= 0) return false;
+    const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (shown.front().start_ms < 0) shown.front().start_ms = now;
+    if (now - shown.front().start_ms >= kToastMs) {
+        glDeleteTextures(1, &shown.front().title);
+        glDeleteTextures(1, &shown.front().name);
+        shown.pop_front();
+        if (shown.empty()) return false;
+        shown.front().start_ms = now;
+    }
+    const ToastShown& s = shown.front();
+    const float a = psp_toast_alpha(now - s.start_ms);
+    static const PromptColors col = menu_prompt_colors(std::getenv("PSPRECOMP_UI_COLORS"));
+    auto faded = [a](const float c[4], float out[4]) { out[0] = c[0]; out[1] = c[1]; out[2] = c[2]; out[3] = c[3] * a; };
+    float panel[4], accent[4], hint[4], text[4];
+    faded(col.panel, panel);
+    faded(col.accent, accent);
+    faded(col.hint, hint);
+    faded(col.text, text);
+    const float gx = static_cast<float>(rx), gy = static_cast<float>(win_h - (ry + rh));
+    const float pad = rh * 0.022f, margin = rh * 0.03f;
+    const float pw = std::max(rw * 0.30f, std::max(static_cast<float>(s.tw), static_cast<float>(s.nw)) + pad * 3.0f);
+    const float ph = s.th + s.nh + pad * 2.5f;
+    const float px = gx + rw - pw - margin, py = gy + margin;
+    Gl& g = gl();
+    glUseProgram(g.prog);
+    glBindVertexArray(g.vao);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_SCISSOR_TEST);
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glBlendEquation(GL_FUNC_ADD);
+    rect(win_w, win_h, px, py, pw, ph, panel, 0, pad * 0.6f);
+    rect(win_w, win_h, px, py, rh * 0.008f, ph, accent, 0);
+    rect(win_w, win_h, px + pad * 1.5f, py + pad, static_cast<float>(s.tw), static_cast<float>(s.th), hint, s.title);
+    rect(win_w, win_h, px + pad * 1.5f, py + pad * 1.5f + s.th, static_cast<float>(s.nw), static_cast<float>(s.nh),
+         text, s.name);
     glDisable(GL_BLEND);
     glBindVertexArray(0);
     glUseProgram(0);

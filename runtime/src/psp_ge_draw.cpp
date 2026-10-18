@@ -1239,7 +1239,8 @@ static void present_blit(GLuint fbo) {
     // drop the shadow so the next GE draw re-emits everything it needs.
     const bool osk_drew = psp_osk_overlay_draw(win_w, win_h, r.x, r.y, r.w, r.h);
     const bool prompt_drew = psp_menu_prompt_overlay_draw(win_w, win_h, r.x, r.y, r.w, r.h);
-    if (osk_drew || prompt_drew) {
+    const bool toast_drew = psp_toast_overlay_draw(win_w, win_h, r.x, r.y, r.w, r.h);
+    if (osk_drew || prompt_drew || toast_drew) {
         gl_state_invalidate();
     }
     SDL_GL_SwapWindow(window);

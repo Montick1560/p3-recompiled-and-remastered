@@ -152,6 +152,7 @@ set(RUNTIME_SOURCES
     src/psp_menu_prompt.cpp
     src/psp_achievements.cpp
     src/psp_ach_store.cpp
+    src/psp_toast.cpp
     src/psp_present.cpp
     src/psp_fpu.cpp
     src/psp_ge_sampler.cpp
@@ -683,6 +684,12 @@ target_include_directories(test_ach_store PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/in
                            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
 target_compile_options(test_ach_store PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME ach_store_tests COMMAND test_ach_store)
+
+# Achievement toast texts and timing (pure).
+add_executable(test_toast tests/test_toast.cpp src/psp_toast.cpp)
+target_include_directories(test_toast PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_toast PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME toast_tests COMMAND test_toast)
 
 # Present rectangle (aspect fit) and window scale parsing.
 add_executable(test_present tests/test_present.cpp src/psp_present.cpp)
