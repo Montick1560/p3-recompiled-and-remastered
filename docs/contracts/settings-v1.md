@@ -72,6 +72,11 @@ select_pad = back
 `[launcher]` (e.g. `version = dxd-1.1.5b`, the last played release) belongs to the launcher; the
 game ignores the section without logging.
 
+Launcher keys: `version` (last played release), `save_<release>` (the chosen save), `ppsspp_savedata` (the PPSSPP
+folder), `theme` (the applied launcher theme id, default `default`; a missing or locked one shows `default` and the
+key is left alone) and `music_volume` (`0`, `10`, …, `100`, default `70`; the only `[launcher]` key in
+`core_options.json`, so Options › General shows it). Themes and achievements: `docs/contracts/achievements-v1.md`.
+
 `[controls]` remaps the PSP buttons. Each action has up to two keyboard keys, `<action>_keys`
 (comma separated SDL key names), and one gamepad button, `<action>_pad` (an SDL GameController
 button name). Actions, in this order: `up down left right cross circle square triangle l r start
