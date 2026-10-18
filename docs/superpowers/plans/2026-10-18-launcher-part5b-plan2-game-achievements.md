@@ -2156,3 +2156,77 @@ endif()
   for the user), commit `docs(plan): launcher part 5b plan 2 findings`; restore the user's `settings.ini` and
   `unlocked.json` in `e2e_portable3`; ask the user to play with their save and approve; push launcher + psprecomp only
   on their OK (psprecomp by cherry-pick onto `p3/main` in the `push-p3-6` worktree, never f639180).
+
+## Findings (2026-10-18, Claude)
+
+Task 1 (reverse engineering) and Task 8 by Claude; Tasks 2–7 built by DeepSeek v4.1 flash (`#max`, OpenCode), one brief
+at a time (`DECO/build/briefs_p5b2/T2..T7.md`), every run first try, no hangs. Every new file matched this plan's code
+blocks exactly (T2–T6; T7 is the plan's skeleton filled from `docs/p3_achievement_facts.md`); edits to existing files
+were read line by line; gates re-run and committed by Claude. Nothing pushed.
+
+**Commits.** psprecomp `patapon3-windows`: 16899df (T2 engine), 0355d56 (T3 store), 25d58df (T4 settings), 852ca95
+(T5 toast), 0c0324e (T6 hook + worker), 841d37d (T1 facts doc), 4eee11d (T7 field map + catalogue), plus this
+Findings commit. launcher `main`: 690c716 (catalogue test threshold).
+
+**Gates.** ctest 82/82 in `build/rtw` (77 + 5 new); `test_achievements` one check with 40 pending = 0.09–0.11 µs
+(budget 20 µs); `test_p3_achievements` runs the real DATA04/DATA08 (not skipped); `build/rtw`, `build/v115b/rtw`,
+`build/vanilla/rtw` build clean. Launcher: cargo 102 passed + 2 ignored, `node --test scripts` 3/3.
+`rt_regress.py build/tour/relevo_base build/tour/ach_p5b2` → **PASS** (21 gated checkpoints ≤ 0.5 % struct).
+
+**What Task 1 found** (`docs/p3_achievement_facts.md`). The chain `*(0x08AABD94)+0x50` gives the struct on
+dxd-1.1.4, dxd-1.1.5b **and** vanilla-eu (so all three releases ship achievements); the struct moves between boots,
+the chain does not; on the title screen it is an empty struct (name "", level 0) that the sanity check rejects.
+Verified facts: `missions` (+0x10, moved 2 → 3 live when DATA08 cleared its last prologue mission and the hideout
+opened), `hero.level` (+0xF294 = "Nv 35" / Cuartel "Nv 1"), plus unused `playtime.seconds` (+0x14) and `kaching`
+(+0x20). No story / Archfiend / Dark Hero / VS / enemy-hero / class-unlock fact could be verified in the time box,
+so **17 of the 24 draft ids were dropped**; the catalogue has 7 (`story_prologue` = missions ≥ 3, missions 1/100/1000,
+hero level 10/30, hidden `secret_completionist` = missions ≥ 1000 and level ≥ 30). Arena keeps `story_prologue`.
+
+**Performance** (`perf_hideout.py`, hideout, scale 1, achievements running vs `psprecomp_runtime_pre_ach.exe`):
+
+| metric | pre 1 | pre 2 | ach 1 | ach 2 | ach + toast during the sample |
+|---|---|---|---|---|---|
+| fps | 30.0 | 30.0 | 30.0 | 30.0 | 30.0 |
+| ge_ms/frame | 4.2 | 4.2 | 4.2 | 4.3 | 4.2 |
+| draws/frame | 1422 | 1422 | 1422 | 1422 | 1422 |
+| CPU % one core | 34.1 | 35.9 | 33.3 | 33.9 | 33.2 |
+| RAM MB | 130.1 | 128.4 | 145.9 | 145.6 | 144.7 |
+
+Frame cost is unchanged, CPU is within run-to-run noise. **RAM +16 MB** once a toast has been shown: the overlay
+loads Segoe UI Emoji (12.9 MB) + Segoe UI Symbol (2.5 MB) + Segoe UI (1 MB) whole into memory (stb_truetype).
+The "toast during the sample" run set `missions` to 1000 through the debug socket mid-sample: the [PERF] lines
+across the toast stay at 30 fps / 4.2 ms.
+
+**E2E** (game on 9998, `build/tools/ach_e2e.py` / `ach_quick.py`, window captures every second):
+
+| case | result |
+|---|---|
+| dxd-1.1.4, DATA04, empty file | `[ACH] dxd-1.1.4: 7 achievements, 0 earned, 7 checks pending`, 7 `[ACH] earned`, one `unlocked.json` write with the 7 ids, release dxd-1.1.4, save DATA04, hero "Edson㊤"; one grouped toast "Logros desbloqueados · 🏆 7 logros" top right (`build/e2e_ach/toast_114.png`), granted on the loading tip before the hideout |
+| same file, restart | `7 earned, 0 checks pending`, file byte-identical |
+| DATA08 (dxd-1.1.4) | only `missions_1`, hero "edd", single toast "Logro desbloqueado · 🥁 Primer tambor" (`toast_08.png`) |
+| dxd-1.1.5b, DATA04, toasts off (`PSPRECOMP_ACHIEVEMENT_TOASTS=0`) | 7 recorded with release dxd-1.1.5b; no toast in 167 captures |
+| vanilla-eu | `[ACH] vanilla-eu: 7 achievements …` (chain verified with DATA04 in Task 1) |
+| `PSPRECOMP_ACHIEVEMENTS=0` / no settings.ini | `[ACH] off (PSPRECOMP_ACHIEVEMENTS=0)` / `[ACH] off: no settings.ini …`, nothing written |
+| launcher (e2e_portable3 updated with `make-portable --skip-launcher`, CDP) | Logros "0 / 7 · 0 %" without the file; with the game-written file "7 / 7 · 100 %", "18 oct 2026 · Edson㊤", Arena unlocked in Temas; Opciones › General shows "Avisos de logros ON"; Iniciar → `logs/game.log` has `PSPRECOMP_ACHIEVEMENTS_FILE=<root>/achievements/unlocked.json` and `[ACH] vanilla-eu: 7 achievements, 7 earned` |
+
+`e2e_portable3/settings.ini` byte-identical afterwards (SHA-256 checked); `e2e_portable3/achievements/` removed (the
+user had none), so the user sees the toast on their own first run. F1 → Sí (exit code 10) goes through the normal
+shutdown, which calls `psp_achievements_stop()` before `quick_exit` (code read; not exercised).
+
+**Plan defects / notes.**
+1. T2–T7 red steps fail at CMake configure ("Cannot find source file") rather than at link, because the test
+   targets list the `.cpp` directly. Same purpose; T3's builder created an empty file to see the link error.
+2. T4: `settings-v1.md` still said "Graphics rows" / "three options"; fixed in the same commit.
+3. `emoji_font()` is called on every `rasterize()`, so the on-screen keyboard / back-to-menu prompt now also load
+   Segoe UI Emoji (+12.9 MB RAM) even with achievements off. Frame cost unaffected; deferred (load it only when a
+   glyph is missing from both other fonts).
+4. During Task 8 one cleanup used `taskkill /IM psprecomp_runtime.exe /FI "WINDOWTITLE eq PSPrecomp Runtime"`,
+   which would match the user's own game too; no user game was running (checked before and after). Kill by PID only.
+5. The `save` field is the launcher's slot (`PSPRECOMP_SAVE_SLOT`); a player who loads another slot in game is
+   recorded under the launcher's slot.
+
+**Left for the user.** Play with their own save from the launcher (expect one "🏆 7 logros" toast in the first
+seconds after Continue, then Logros 7 / 7 and Arena unlocked); approve or ask for more achievements — the dropped
+17 need more reverse engineering (story/boss flags), and `kaching` / `playtime.seconds` are verified facts ready for
+new ids. Push only on their OK (psprecomp by cherry-pick onto `p3/main` in `push-p3-6`, never f639180; launcher
+`origin main`).
