@@ -2711,3 +2711,50 @@ nada: lo que se reemplaza va antes a `backups/<fecha>/`.
   (Task 3), `jugar.bat`'s save folder untouched (`git status`-style listing of `DECO/savedata` before/after).
 - [ ] **Step 5: Findings + memory.** Write `## Findings` (commits, E2E table, plan defects) at the end of
   this plan; commit `docs(plan): launcher part 3 findings`. Nothing pushed; ask the user to try it.
+
+## Findings (2026-10-17, execution)
+
+Built by DeepSeek v4.1 flash at max effort (`deepseek/deepseek-flash#max`, OpenCode, the user's key) from one
+brief per task; Claude read every diff, re-ran every gate, committed, and ran the end to end through the
+launcher's WebView2 DevTools port (CDP) plus the game's debug socket 9998.
+
+Commits — psprecomp (`patapon3-windows`): 279312e (T1), c460733 (T2), ed794d5 (T3). Launcher (`main`):
+411a48a (T4), d8560a3 (T5), 37a8ed4 (T6), 5661856 (T7), 159c607 (E2E fix: system data), 02d4e15 (E2E polish).
+Nothing pushed.
+
+**End to end** (`build/e2e_portable3`, PPSSPP folder `E:\Respaldo\PPSSPP\memstick\PSP\SAVEDATA` read only):
+
+| step | result |
+|---|---|
+| Import list | EU `_DATA00..10` and US `_DATA00..06` with icons and detail; US tagged "EE. UU. → se convierte"; `.rar`, other games and copies absent |
+| Encrypted DATA04 into dxd-1.1.4 | copied byte-identical (still encrypted), ★ on DATA04, menu line "Partida: Héroe: Edson" |
+| Continue | `[SAVEDATA] decrypted UCES01421_DATA00/SECURE.BIN mode 5 (32768 -> 32752 bytes)`, `LISTLOAD picks _DATA04 (PSPRECOMP_SAVE_SLOT)`, `decrypted UCES01421_DATA04/SECURE.BIN mode 5 (178864 -> 178848 bytes)`; barracks: **Edson Nv35** |
+| Chosen save beats newest | DATA05 (PARAM.SFO 2025) chosen over DATA04 (2026-10) → barracks **Edson Nv32** (Cañasalto) |
+| US save | UCUS98751_DATA02 into dxd-1.1.4 → `UCES01421_DATA02`, barracks **MoMo Nv19**; into empty vanilla-eu → "Importada en DATA02, con los datos de sistema de PPSSPP." |
+| Export | DATA04 to a scratch PPSSPP copy (`build/e2e_ppsspp`): identical to the original; again → "ya tiene… ¿Reemplazarla?" → Replace → `backups/20261018-002347/ppsspp/UCES01421_DATA04/` |
+| Leftover `.partial` | `UCES01421_DATA09.partial` deleted at launcher start |
+
+The user's `DECO/savedata` and `E:` saves were not modified (listing before/after). Not run: loading an
+exported save inside PPSSPP itself (an untouched export is byte-identical to PPSSPP's own file; a US save
+exported after conversion only differs in `SAVEDATA_DIRECTORY`, which PPSSPP does not hash-check).
+
+**Regression:** ctest 75/75 (test_save_crypt 69 checks with the real DATA04, test_savedata 214); test_p3 12/12;
+launcher cargo 66 passed + 1 ignored, Vitest 35/35, tsc clean; 1.1.4 tour `p3_t3` vs `rebuild114_t1`
+RT_REGRESS PASS (21 gated checkpoints <= 0.5% struct).
+
+**Found and fixed during the E2E:**
+1. A release with a game slot but no system data boots like a new PSP ("Los datos del sistema no se
+   guardarán…"): the first slot import now also copies PPSSPP's `_DATA00` of the same id (159c607).
+2. Saves opened on DATA01 whatever the ★ (the list shows ~3.5 rows at 720p); the raw `not_found` code was
+   shown when the PPSSPP folder was missing (02d4e15).
+3. Global key injection (part 2's `e2e_keys.py`) did not reach the launcher window from a background
+   session; the CDP driver (`build/e2e3/cdp.mjs`, `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`)
+   clicks inside the webview and touches nothing else.
+4. Process: two OpenCode sessions at once both died with "Failed to execute statement"; briefs then ran
+   one at a time and the cut sessions resumed with `--session`.
+5. Plan numbers: `DATA04`'s MAC matched its SFO hash in this copy (no "hash mismatch" note in the game log);
+   the mismatch retry stays covered by the unit tests.
+
+**Open / for later:** copies keep PPSSPP's file times (Windows `CopyFileEx`), so "newest" follows the
+original play dates, not the import order — the ★ makes it explicit. The PSP private-use glyph in hero
+names (㊤) shows as a circled symbol in the launcher font.
