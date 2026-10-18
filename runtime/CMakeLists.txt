@@ -151,6 +151,7 @@ set(RUNTIME_SOURCES
     src/psp_eboot_loader.cpp
     src/psp_menu_prompt.cpp
     src/psp_achievements.cpp
+    src/psp_ach_store.cpp
     src/psp_present.cpp
     src/psp_fpu.cpp
     src/psp_ge_sampler.cpp
@@ -675,6 +676,13 @@ target_include_directories(test_achievements PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
                            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
 target_compile_options(test_achievements PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME achievements_tests COMMAND test_achievements)
+
+# unlocked.json store: append-only, atomic, corrupt kept aside, newer never touched.
+add_executable(test_ach_store tests/test_ach_store.cpp src/psp_ach_store.cpp)
+target_include_directories(test_ach_store PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                           ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
+target_compile_options(test_ach_store PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME ach_store_tests COMMAND test_ach_store)
 
 # Present rectangle (aspect fit) and window scale parsing.
 add_executable(test_present tests/test_present.cpp src/psp_present.cpp)
