@@ -1,7 +1,7 @@
 # Launcher part 5b, Plan 1 — Themes + Achievements screens (launcher) — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-> **Expected execution (confirm with the user before starting):** like part 5 — a NEW session; each of Tasks 1–6 is
+> **Execution chosen by the user (2026-10-18):** like part 5 — a NEW session; each of Tasks 1–6 is
 > a brief for **DeepSeek v4.1 flash at max effort** (`python ~/.claude/skills/albanil-grok/grok-build.py <brief> --repo
 > C:/Users/torso/Documents/deco --model "deepseek/deepseek-flash#max" --timeout 3600 --msg "<no-commit message>"`);
 > Claude reads every diff, re-runs every gate, commits and decides; Task 7 is Claude's. Briefs live in
