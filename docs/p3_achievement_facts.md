@@ -1,0 +1,85 @@
+# Patapon 3: progress struct facts for achievements
+
+Field map used by `games/patapon3/runtime/p3_achievements.cpp` (plan
+`docs/superpowers/plans/2026-10-18-launcher-part5b-plan2-game-achievements.md`, Task 1; spec
+`docs/superpowers/specs/2026-10-18-launcher-part5b-themes-achievements-design.md` §4). Found on 2026-10-18 with the
+runtime's debug socket (port 9998, `DECO/build/tools/ach_probe.py`, `ach_chain_check.py`) and the user's decrypted
+saves `DECO/build/save_main/plain_DATA04.bin` / `plain_DATA08.bin` (both 178 848 bytes, never committed).
+
+## The struct
+
+The decrypted `SECURE.BIN` (both layers removed) is byte for byte the progress struct in guest RAM: a dump of the
+struct with DATA04 loaded differs from the file in 44 bytes only (play time at `+0x14`/`+0xF504`, `+0x18`, `+0xEDAC`,
+`+0xF2BC` and a scratch area at `+0x2B7CA..+0x2B805`).
+
+### Pointer chain (same for every release)
+
+`base = rd32(rd32(0x08AABD94) + 0x50)` (the PataponRichPresence chain), i.e. `global = 0x08AABD94, off1 = 0x50`.
+
+| release | chain | title screen (no save loaded) | hideout with DATA04 |
+|---|---|---|---|
+| dxd-1.1.4 | `0x08AABD94, 0x50` | P=091D0BA0, S=091D1E40, name "", class 2, level 0 | S=091D9AA0 (1st boot), 091D1E40 (2nd boot): name "Edson㊤", class 4, level 35, missions 11610 |
+| dxd-1.1.5b | `0x08AABD94, 0x50` | P=091D0B60, S=091D99A0, name "", class 2, level 0 | S=091D99A0: name "Edson㊤", class 4, level 35, missions 11610 |
+| vanilla-eu | `0x08AABD94, 0x50` | P=091D09A0, S=091D0AC0, name "", class 2, level 0 | S=091D0AC0: name "Edson㊤", class 4, level 35, missions 11610 |
+
+The struct moves between boots (091D9AA0 vs 091D1E40 on 1.1.4); the chain does not. With DATA08 loaded on 1.1.4 the
+same chain gave S=091D15A0 (name "edd", class 2). On the title screen the struct already exists but is empty: the
+hero name is empty (the sanity check fails: name length 0) and the hero level is 0 (outside its plausible range).
+
+Sanity check (Task 7 `sane`): hero name at `+0xF1C8` printable UTF-16, 1..15 units then 0; class at `+0x9520` in
+1..34 (PataponRichPresence class list).
+
+## Facts
+
+All little endian. `bit` -1 = whole value; `count` 0 = one value.
+
+| fact | offset | size | signed | bit | count | min | max | DATA04 | DATA08 | evidence |
+|---|---|---|---|---|---|---|---|---|---|---|
+| missions | 0x10 | 4 | no | -1 | 0 | 0 | 1000000 | 11610 | 2 | Live on 1.1.4 with DATA08: 2 while the save is still in the prologue (Continue goes straight into prologue scenes, no hideout); clearing the prologue mission "¡Avance y ataque!" (autoplay) moved it 2 → 3 and the hideout opened. Nothing else in the header moved but play time and `+0x18`. DATA04: 11610 ≥ every per-class sortie count (largest 10642, Yumiyacha), 1878 h of play. |
+| hero.level | 0xF294 | 4 | no | -1 | 0 | 1 | 99 | 35 | 1 | Level of the hero in the current class: DATA04 35 = the game's own save detail "Clase: Yumiyacha Nv 35" (PARAM.SFO written by the game) and the Cuartel; DATA08 1 = the Cuartel screen live ("edd · Yarida · Nv 1 · EXP 0/1000", exp at `+0xF290` = 0, then 100 after the mission). 0 on the title screen (no save). |
+| playtime.seconds | 0x14 | 4 | no | -1 | 0 | 0 | 2147483647 | 6762511 | 912 | 6762511 s = 1878:28:31, the save detail says "Tiempo de juego: 1878:28:30"; ticks live once a second. Not used by the catalogue. |
+| kaching | 0x20 | 4 | no | -1 | 0 | 0 | 999999999 | 148473199 | 246 | DATA08 246 = "Ka-ching 246" on the Fragua screen live. Not used by the catalogue. |
+
+Looked at and not usable within the time box (no verified meaning): the 6-byte inventory table at `+0x2C..`
+(id, flags, count; 841 ids), the 0x84-byte unit/class records at `+0x9684..+0xEDA4` (level 40 = 0x28 for most
+classes in DATA04; their unlock/kind fields are unclear), the two 132-byte flag arrays at `+0x2159C` / `+0x2165C`
+(values 0/1/3), `+0xEDCB` (0 → 1 when the prologue mission was cleared, 4 in DATA04) and the last-mission area at
+`+0x2A05C..`. No story, Archfiend, Dark Hero, VS, enemy-hero or class-unlock fact could be verified: those
+achievements are dropped (below), never guessed.
+
+## Catalogue decisions (the 24 draft ids)
+
+| id | decision | when / reason |
+|---|---|---|
+| story_prologue | keep | `{"fact": "missions", "op": ">=", "value": 3}` — the prologue is three mandatory missions: DATA08 is in the prologue at 2, the hideout opens when the third is cleared (live, see `missions`). |
+| story_first_archfiend | drop | no verified story/boss fact |
+| story_all_archfiends | drop | no verified story/boss fact |
+| story_ending | drop | no verified story fact |
+| missions_1 | keep | `{"fact": "missions", "op": ">=", "value": 1}` |
+| missions_100 | keep | `{"fact": "missions", "op": ">=", "value": 100}` |
+| missions_1000 | keep | `{"fact": "missions", "op": ">=", "value": 1000}` |
+| heroes_defeated_10 | drop | no verified enemy-hero counter |
+| heroes_defeated_100 | drop | no verified enemy-hero counter |
+| vs_1 | drop | no verified VS counter |
+| vs_50 | drop | no verified VS counter |
+| dark_hero_ragewolf | drop | no verified Dark Hero fact |
+| dark_hero_naughtyfins | drop | no verified Dark Hero fact |
+| dark_hero_sonarchy | drop | no verified Dark Hero fact |
+| dark_hero_slogturtle | drop | no verified Dark Hero fact |
+| dark_hero_covet_hiss | drop | no verified Dark Hero fact |
+| dark_heroes_all | drop | no verified Dark Hero fact |
+| hero_level_10 | keep | `{"fact": "hero.level", "op": ">=", "value": 10}` |
+| hero_level_30 | keep | `{"fact": "hero.level", "op": ">=", "value": 30}` |
+| classes_5 | drop | class-unlock field not verified |
+| classes_all | drop | class-unlock field not verified |
+| dxd_gigante_king | drop | no verified DLC mission fact |
+| secret_heroes_1000 | drop | no verified enemy-hero counter |
+| secret_completionist | keep | `{"all": [{"fact": "missions", "op": ">=", "value": 1000}, {"fact": "hero.level", "op": ">=", "value": 30}]}` — exactly "every other kept achievement" (those two imply the other five). |
+
+Kept: 7. `story_prologue` survives, so the `arena` theme keeps its lock.
+
+## Earned lists (computed with the table over the saves)
+
+- **DATA04 earns** (sorted): `hero_level_10`, `hero_level_30`, `missions_1`, `missions_100`, `missions_1000`,
+  `secret_completionist`, `story_prologue` (7).
+- **DATA08 earns** (sorted): `missions_1` (1).
