@@ -148,6 +148,24 @@ Read by the runtime binary at start-up or during execution.
   text, `muted` hint, the chosen button on `accent` with black text. Bad entries are ignored;
   not in `settings.ini`.
 
+### `PSPRECOMP_ACHIEVEMENTS_FILE`
+- **Read in:** `runtime/src/psp_achievements_run.cpp` (`psp_achievements_start`).
+- **Type:** env (path). Set by the settings reader to `<ini folder>/achievements/unlocked.json`.
+- **Default:** unset = achievements off (developer runs without `settings.ini` behave as before).
+- **Effect:** where the game appends earned achievements (docs/contracts/achievements-v1.md).
+
+### `PSPRECOMP_ACHIEVEMENT_TOASTS`
+- **Read in:** `runtime/src/psp_achievements_run.cpp`.
+- **Type:** env, `1` | `0`. From `[game] achievement_toasts` (game_options.json).
+- **Default:** on.
+- **Effect:** `0` hides the in-game "achievement unlocked" pop-ups; achievements are still recorded.
+
+### `PSPRECOMP_ACHIEVEMENTS`
+- **Read in:** `runtime/src/psp_achievements_run.cpp`.
+- **Type:** env, `0` = off.
+- **Default:** on (when `PSPRECOMP_ACHIEVEMENTS_FILE` is set).
+- **Effect:** kill switch: no catalogue, no worker, no vblank hook.
+
 ### `PSPRECOMP_DISC0`
 - **Read in:** `runtime/src/main.cpp`
 - **Type:** env (path string).

@@ -151,6 +151,8 @@ SettingsResolution psp_settings_resolve(const std::string& ini_text, const std::
         else emit(k.env, v, false);
     }
     emit("PSPRECOMP_TEXTURES", resolve_path(base_dir, pack), hd != "true");
+    // Achievements (docs/contracts/achievements-v1.md): the earned list lives next to settings.ini.
+    emit("PSPRECOMP_ACHIEVEMENTS_FILE", resolve_path(base_dir, "achievements/unlocked.json"), false);
 
     if (!catalog_json.empty()) {
         nlohmann::json cat = nlohmann::json::parse(catalog_json, nullptr, false);

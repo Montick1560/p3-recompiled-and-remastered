@@ -20,6 +20,12 @@
       "tab": "graphics", "env": "PSPRECOMP_P3_FAST_LOAD", "map": {"true": "1", "false": "0"},
       "label": {"es": "Cargas rápidas", "en": "Fast loading"},
       "description": {"es": "Las pantallas de CARGANDO van a la velocidad del PC (nunca en sesiones online).", "en": "Loading screens run at PC speed (never in online sessions)."}
+    },
+    {
+      "section": "game", "key": "achievement_toasts", "type": "bool", "default": "true",
+      "tab": "general", "env": "PSPRECOMP_ACHIEVEMENT_TOASTS", "map": {"true": "1", "false": "0"},
+      "label": {"es": "Avisos de logros", "en": "Achievement pop-ups"},
+      "description": {"es": "Muestra un aviso en el juego al conseguir un logro (se guardan igual).", "en": "Shows a pop-up in game when you earn an achievement (they are recorded either way)."}
     }
   ]
 }

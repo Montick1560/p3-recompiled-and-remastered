@@ -34,6 +34,7 @@ osk_skin = deck             ; PSPRECOMP_OSK_SKIN=<ini folder>/skins/osk/deck.jso
 fps = 30                    ; 30 | 60  -> 60 adds "60fps" to PSPRECOMP_PATCHES
 smooth_animation = true     ; PSPRECOMP_P3_ANIM_SMOOTH=1|0
 fast_loading = true         ; PSPRECOMP_P3_FAST_LOAD=1|0
+achievement_toasts = true   ; PSPRECOMP_ACHIEVEMENT_TOASTS=1|0
 
 [online]
 server = 127.0.0.1          ; PSPRECOMP_ADHOC_SERVER
@@ -117,9 +118,9 @@ Rules:
 - **Future version** (`meta.version` > 1): the game applies the keys it knows and logs a warning.
 - **`[game]` catalog:** `game/game_options.json` lists each game option: key, type (bool / enum /
   int), allowed values, default, environment variable and value mapping, and es/en label and
-  description. The launcher builds the Graphics rows from it; the game reader uses it for the
-  `[game]` section, so the generic runtime has no Patapon 3 knowledge. Patapon 3 ships the three
-  options above.
+  description. The launcher builds its Options rows from it (each option's `tab`); the game reader uses
+  it for the `[game]` section, so the generic runtime has no Patapon 3 knowledge. Patapon 3 ships the
+  four options above.
 - Launcher-only state (chosen theme, achievements, last save) lives in its own file, not here.
 - Defaults are the user's current `jugar.bat` (30 fps, smooth animation, scale 4, HD pack), with
   fullscreen on.
@@ -155,6 +156,7 @@ invalid values, future version) that both the C++ and the Rust readers are teste
 | display.texture_filter | PSPRECOMP_TEX_FILTER | enum auto,nearest,linear | copied |
 | display.hd_textures + display.texture_pack | PSPRECOMP_TEXTURES | bool + path | resolved pack path when true, unset when false |
 | display.osk_skin | PSPRECOMP_OSK_SKIN | name `[a-z0-9_-]+` | resolved to `<ini folder>/skins/osk/<name>.json` when valid, unset otherwise |
+| (always) | PSPRECOMP_ACHIEVEMENTS_FILE | path | <ini folder>/achievements/unlocked.json (docs/contracts/achievements-v1.md) |
 | online.server | PSPRECOMP_ADHOC_SERVER | string (non-empty) | copied |
 | online.nickname | PSPRECOMP_ADHOC_NICK | string (non-empty) | copied |
 | online.relay | PSPRECOMP_ADHOC_RELAY | bool | true -> `1`, false -> unset |

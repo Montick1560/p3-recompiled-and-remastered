@@ -166,6 +166,22 @@ static void controls_and_skin() {
     CHECK(val(r, "PSPRECOMP_CONTROLS") == "<unset>" && logged(r, "PSPRECOMP_CONTROLS already set"), "env wins");
 }
 
+static void achievements_keys() {
+    const SettingsResolution d = psp_settings_resolve(slurp(kFix + "defaults.ini"), kCatalog,
+                                                      "C:/Juegos/Patapon 3", kNoEnv);
+    CHECK(val(d, "PSPRECOMP_ACHIEVEMENTS_FILE") == "C:/Juegos/Patapon 3/achievements/unlocked.json",
+          "achievements file next to settings.ini");
+    CHECK(val(d, "PSPRECOMP_ACHIEVEMENT_TOASTS") == "1", "toasts on by default");
+    const SettingsResolution off = psp_settings_resolve("[game]\nachievement_toasts = false\n", kCatalog,
+                                                        "C:/P", kNoEnv);
+    CHECK(val(off, "PSPRECOMP_ACHIEVEMENT_TOASTS") == "0", "toasts off");
+    const EnvGetter env = [](const char* n) -> const char* {
+        return std::string(n) == "PSPRECOMP_ACHIEVEMENTS_FILE" ? "D:/x.json" : nullptr;
+    };
+    CHECK(val(psp_settings_resolve("", kCatalog, "C:/P", env), "PSPRECOMP_ACHIEVEMENTS_FILE") == "<unset>",
+          "an environment value wins (nothing emitted)");
+}
+
 int main() {
     parser_rules();
     defaults_fixture();
@@ -176,6 +192,7 @@ int main() {
     args_rules();
     launcher_section_is_silent();
     controls_and_skin();
+    achievements_keys();
     if (failures == 0) std::printf("test_settings: all passed\n");
     return failures == 0 ? 0 : 1;
 }
