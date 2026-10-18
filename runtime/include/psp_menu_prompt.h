@@ -29,3 +29,11 @@ private:
 
 struct PromptText { const char* question; const char* yes; const char* no; const char* hint; };
 PromptText menu_prompt_text(const char* lang);  // "en" -> English, anything else Spanish
+
+// Prompt colours, RGBA 0..1. Built-in look by default; PSPRECOMP_UI_COLORS, which the launcher sets
+// from its shown theme ("accent=#rrggbb;panel=#rrggbb;..."), gives it the launcher's dialog look:
+// panel, panelText and muted, the chosen button on accent with black text. Bad entries are ignored.
+struct PromptColors {
+    float panel[4], text[4], hint[4], accent[4], choice_bg[4], choice_text[4], other_text[4];
+};
+PromptColors menu_prompt_colors(const char* spec);

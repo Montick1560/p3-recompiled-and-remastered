@@ -137,6 +137,17 @@ Read by the runtime binary at start-up or during execution.
 - **Effect:** Language of in-game runtime dialogs. Set from `general.language` in
   `settings.ini`.
 
+### `PSPRECOMP_UI_COLORS`
+- **Read in:** `runtime/src/psp_menu_prompt.cpp` (`menu_prompt_colors`, once, the first time
+  the "back to the menu" prompt opens).
+- **Type:** env, `key=#rrggbb` pairs separated by `;` (the launcher theme keys `bg`, `text`,
+  `accent`, `panel`, `panelText`, `muted`).
+- **Default:** unset = the built-in dark prompt.
+- **Effect:** The launcher sets it from the theme it shows (a locked theme never reaches the
+  game) so the prompt looks like the launcher's own dialogs: `panel` background, `panelText`
+  text, `muted` hint, the chosen button on `accent` with black text. Bad entries are ignored;
+  not in `settings.ini`.
+
 ### `PSPRECOMP_DISC0`
 - **Read in:** `runtime/src/main.cpp`
 - **Type:** env (path string).
