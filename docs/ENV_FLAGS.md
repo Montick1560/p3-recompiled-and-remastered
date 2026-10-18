@@ -290,6 +290,35 @@ Read by the runtime binary at start-up or during execution.
   fullscreen at any time.
 - **Set it when:** you always play fullscreen.
 
+### `PSPRECOMP_CONTROLS`
+- **Read in:** `runtime/src/psp_event_loop.cpp` (`load_controls`, once SDL is up); the
+  reader `runtime/src/psp_settings.cpp` builds it from `settings.ini [controls]`, and
+  `runtime/src/psp_controls.cpp` parses and validates it (contract:
+  [`docs/contracts/settings-v1.md`](contracts/settings-v1.md)).
+- **Type:** env, `action=key1,key2|pad;...` with SDL key and GameController button
+  names (`cross=K,Return|y`). Empty keys / pad = unbound.
+- **Default:** unset: the fixed mapping from before the `[controls]` section existed
+  (arrows D-pad, X / Return cross, Z circle, A square, S triangle, Q L, W R, Space
+  start, V / Tab select; pad A / B / X / Y, shoulders, D-pad, start and back).
+- **Effect:** maps keyboard keys and gamepad buttons to PSP buttons. Unknown names,
+  reserved keys (F1, F11, Alt+Return, pad `guide`) and a third key fall back to that
+  action's default with a `[CONTROLS] <action>: ...` line; a key or button bound to two
+  actions keeps the first action (contract order) and logs the drop. The effective map
+  is logged once as `[CONTROLS] defaults: action=keys|pad;...` (or `[CONTROLS] ...`
+  when the variable is set). Fixed: left stick analog, LT / RT = L / R, wheel = D-pad.
+- **Set it when:** remapping keys or pad buttons; normally the launcher writes
+  `settings.ini [controls]` instead.
+
+### `PSPRECOMP_OSK_SKIN`
+- **Read in:** `runtime/src/psp_settings.cpp` resolves `[display] osk_skin` to this path;
+  the on-screen keyboard overlay (`runtime/src/psp_osk_overlay.cpp`) consumes it.
+- **Type:** env (path to a skin JSON, `<ini folder>/skins/osk/<name>.json`).
+- **Default:** unset: the built-in Deck skin.
+- **Effect:** selects the on-screen keyboard skin (`deck`, `light`, `patapon`, or any
+  `skins/osk/*.json`). A missing or unreadable file uses the built-in Deck skin and logs
+  an `[OSK]` line.
+- **Set it when:** trying a skin without editing `settings.ini`.
+
 ### `PSPRECOMP_PRESENT_FILTER`
 - **Read in:** `runtime/src/psp_ge_draw.cpp` (`present_filter`).
 - **Type:** env (`nearest`; anything else = linear).

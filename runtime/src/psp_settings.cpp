@@ -1,5 +1,6 @@
 #include "psp_settings.h"
 #include "psp_ini.h"
+#include "psp_controls.h"
 
 #include "json.hpp"
 
@@ -178,6 +179,32 @@ SettingsResolution psp_settings_resolve(const std::string& ini_text, const std::
                 }
             }
         }
+    }
+
+    // [controls] -> PSPRECOMP_CONTROLS, validated by the runtime's ControlMap (psp_controls.h): only
+    // the actions the file names, the missing half of an action keeps its default.
+    {
+        std::string spec;
+        for (const ControlAction& a : control_actions()) {
+            const std::string kk = std::string(a.name) + "_keys", pk = std::string(a.name) + "_pad";
+            known.insert("controls." + kk);
+            known.insert("controls." + pk);
+            const std::string* keys = ini.get("controls", kk);
+            const std::string* pad = ini.get("controls", pk);
+            if (keys == nullptr && pad == nullptr) continue;
+            spec += (spec.empty() ? "" : ";") + std::string(a.name) + "=" + (keys ? *keys : a.keys) + "|" +
+                    (pad ? *pad : a.pad);
+        }
+        if (!spec.empty()) emit("PSPRECOMP_CONTROLS", spec, false);
+    }
+    // [display] osk_skin -> PSPRECOMP_OSK_SKIN (<ini folder>/skins/osk/<name>.json).
+    known.insert("display.osk_skin");
+    if (const std::string* skin = ini.get("display", "osk_skin")) {
+        const bool ok = !skin->empty() && std::all_of(skin->begin(), skin->end(), [](unsigned char c) {
+            return std::islower(c) || std::isdigit(c) || c == '_' || c == '-';
+        });
+        if (ok) emit("PSPRECOMP_OSK_SKIN", resolve_path(base_dir, "skins/osk/" + *skin + ".json"), false);
+        else r.log.push_back("[SETTINGS] display.osk_skin: invalid name \"" + *skin + "\", using the built-in skin");
     }
 
     for (const auto& s : ini.values) {

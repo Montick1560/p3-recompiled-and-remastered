@@ -148,6 +148,24 @@ static void launcher_section_is_silent() {
     CHECK(!logged(r, "launcher"), "[launcher] not logged as unknown");
 }
 
+static void controls_and_skin() {
+    SettingsResolution r = psp_settings_resolve(
+        "[controls]\ncross_keys = K, Return\nsquare_pad = y\nbogus_keys = J\n[display]\nosk_skin = patapon\n",
+        "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_CONTROLS") == "cross=K, Return|a;square=A|y", "only named actions, other half default");
+    CHECK(val(r, "PSPRECOMP_OSK_SKIN") == "C:/P/skins/osk/patapon.json", "skin path resolved");
+    CHECK(logged(r, "unknown key controls.bogus_keys"), "unknown controls key logged");
+    r = psp_settings_resolve("[display]\nosk_skin = ../x\n", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_OSK_SKIN") == "<unset>" && logged(r, "display.osk_skin"), "bad skin name refused");
+    r = psp_settings_resolve("[display]\nrender_scale = 4\n", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_CONTROLS") == "<unset>", "no [controls] -> no variable");
+    const EnvGetter env = [](const char* n) -> const char* {
+        return std::string(n) == "PSPRECOMP_CONTROLS" ? "cross=X|a" : nullptr;
+    };
+    r = psp_settings_resolve("[controls]\ncross_keys = K\n", "", "C:/P", env);
+    CHECK(val(r, "PSPRECOMP_CONTROLS") == "<unset>" && logged(r, "PSPRECOMP_CONTROLS already set"), "env wins");
+}
+
 int main() {
     parser_rules();
     defaults_fixture();
@@ -157,6 +175,7 @@ int main() {
     future_and_empty();
     args_rules();
     launcher_section_is_silent();
+    controls_and_skin();
     if (failures == 0) std::printf("test_settings: all passed\n");
     return failures == 0 ? 0 : 1;
 }

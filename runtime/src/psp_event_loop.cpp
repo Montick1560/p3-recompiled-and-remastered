@@ -5,6 +5,7 @@
 #include "psp_ge_draw.h"
 #include "psp_present.h"
 #include "psp_pad.h"
+#include "psp_controls.h"
 #include "psp_wheel.h"
 #include "psp_osk_session.h"
 #include "psp_osk_overlay.h"
@@ -33,29 +34,20 @@ std::atomic<uint16_t> g_pad_analog{0x8080};
 std::atomic<uint32_t> g_wheel_buttons{0};
 
 // ---------------------------------------------------------------------------
-// Keyboard -> PSP button mapping
-//   Arrows -> D-pad | X / Enter -> CROSS | Z -> CIRCLE | A -> SQUARE
-//   S -> TRIANGLE   | Q -> LTRIGGER     | W -> RTRIGGER
-//   Space -> START  | Tab -> SELECT
+// Keyboard and gamepad -> PSP buttons: PSPRECOMP_CONTROLS (settings.ini [controls], psp_controls.h),
+// today's mapping by default. Built once SDL is up (it resolves SDL key / button names).
 // ---------------------------------------------------------------------------
-static uint32_t key_to_psp_button(SDL_Keycode key) {
-    switch (key) {
-        case SDLK_UP:     return 0x0010;  // UP
-        case SDLK_RIGHT:  return 0x0020;  // RIGHT
-        case SDLK_DOWN:   return 0x0040;  // DOWN
-        case SDLK_LEFT:   return 0x0080;  // LEFT
-        case SDLK_x:
-        case SDLK_RETURN: return 0x4000;  // CROSS
-        case SDLK_z:      return 0x2000;  // CIRCLE
-        case SDLK_a:      return 0x8000;  // SQUARE
-        case SDLK_s:      return 0x1000;  // TRIANGLE
-        case SDLK_q:      return 0x0100;  // LTRIGGER
-        case SDLK_w:      return 0x0200;  // RTRIGGER
-        case SDLK_SPACE:  return 0x0008;  // START
-        case SDLK_v:
-        case SDLK_TAB:    return 0x0001;  // SELECT (V or TAB)
-        default:          return 0;
-    }
+static ControlMap g_controls;
+
+static void load_controls() {
+    const char* spec = std::getenv("PSPRECOMP_CONTROLS");
+    std::vector<std::string> log;
+    g_controls = ControlMap::build(
+        spec ? spec : "", [](const std::string& n) { return static_cast<int32_t>(SDL_GetKeyFromName(n.c_str())); },
+        [](const std::string& n) { return static_cast<int>(SDL_GameControllerGetButtonFromString(n.c_str())); },
+        &log);
+    for (const std::string& l : log) std::fprintf(stderr, "%s\n", l.c_str());
+    std::fprintf(stderr, "[CONTROLS] %s%s\n", spec ? "" : "defaults: ", g_controls.describe().c_str());
 }
 
 // --- Static state (SDL window + GL context, module-private) ---
@@ -116,7 +108,7 @@ static bool handle_controller_event(const SDL_Event& ev) {
     }
     case SDL_CONTROLLERBUTTONDOWN:
     case SDL_CONTROLLERBUTTONUP: {
-        const uint32_t mask = pad_button_to_psp(ev.cbutton.button);
+        const uint32_t mask = g_controls.pad_mask(ev.cbutton.button);
         if (mask) {
             g_pads.set_button(ev.cbutton.which, mask, ev.type == SDL_CONTROLLERBUTTONDOWN);
             publish_pads();
@@ -302,7 +294,7 @@ static void handle_sdl_event(const SDL_Event& ev) {
             toggle_fullscreen();  // Alt+Enter must not also press CROSS
             return;
         }
-        uint32_t bit = key_to_psp_button(ev.key.keysym.sym);
+        uint32_t bit = g_controls.key_mask(static_cast<int32_t>(ev.key.keysym.sym));
         if (bit == 0) return;
         if (ev.type == SDL_KEYDOWN) {
             g_host_buttons.fetch_or(bit, std::memory_order_relaxed);
@@ -336,6 +328,7 @@ int psp_runtime_init_sdl() {
     if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) {
         std::fprintf(stderr, "[RT] game controllers unavailable: %s\n", SDL_GetError());
     }
+    load_controls();
 
     // 2. Set GL attributes: OpenGL 3.3 core profile, double-buffered
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);

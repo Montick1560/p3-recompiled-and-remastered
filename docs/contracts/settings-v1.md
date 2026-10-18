@@ -28,6 +28,7 @@ present_filter = linear     ; PSPRECOMP_PRESENT_FILTER: linear | nearest
 texture_filter = auto       ; PSPRECOMP_TEX_FILTER: auto | nearest | linear
 hd_textures = true          ; PSPRECOMP_TEXTURES=<texture_pack> only when true
 texture_pack = textures/INFN00001
+osk_skin = deck             ; PSPRECOMP_OSK_SKIN=<ini folder>/skins/osk/deck.json
 
 [game]                      ; keys declared by game/game_options.json (Patapon 3 below)
 fps = 30                    ; 30 | 60  -> 60 adds "60fps" to PSPRECOMP_PATCHES
@@ -41,11 +42,62 @@ relay = false               ; PSPRECOMP_ADHOC_RELAY=1 when true
 port_offset = 10000         ; PSPRECOMP_ADHOC_PORT_OFFSET
 mac_file = adhoc_mac.txt    ; PSPRECOMP_ADHOC_MAC_FILE
 
-[controls]                  ; reserved for part 4; ignored in v1
+[controls]                  ; PSPRECOMP_CONTROLS: remappable keyboard keys / gamepad buttons
+up_keys = Up                ; up to two SDL key names, comma separated
+up_pad = dpup               ; one SDL GameController button name
+down_keys = Down
+down_pad = dpdown
+left_keys = Left
+left_pad = dpleft
+right_keys = Right
+right_pad = dpright
+cross_keys = X, Return
+cross_pad = a
+circle_keys = Z
+circle_pad = b
+square_keys = A
+square_pad = x
+triangle_keys = S
+triangle_pad = y
+l_keys = Q
+l_pad = leftshoulder
+r_keys = W
+r_pad = rightshoulder
+start_keys = Space
+start_pad = start
+select_keys = V, Tab
+select_pad = back
 ```
 
 `[launcher]` (e.g. `version = dxd-1.1.5b`, the last played release) belongs to the launcher; the
 game ignores the section without logging.
+
+`[controls]` remaps the PSP buttons. Each action has up to two keyboard keys, `<action>_keys`
+(comma separated SDL key names), and one gamepad button, `<action>_pad` (an SDL GameController
+button name). Actions, in this order: `up down left right cross circle square triangle l r start
+select`. An empty value unbinds. The defaults above are exactly the fixed mapping from before
+this section meant anything.
+
+- **Key names** are SDL's (`X`, `Return`, `Space`, `Tab`, `Left Shift`, `Up`, `1`, `F2`, `Keypad 4`
+  ...), case-insensitive. **Pad names** are SDL's GameController button names (`a b x y back start
+  leftshoulder rightshoulder leftstick rightstick dpup dpdown dpleft dpright misc1 paddle1..4
+  touchpad`).
+- **Fixed, never remapped:** the left stick is the analog stick; LT / RT also press L / R; the
+  mouse wheel presses D-pad up / down; F1, F11, Alt+Return and the pad `guide` button are reserved
+  (refused as bindings). The back-to-menu combo holds the buttons bound to `select` and `start`.
+- **Validation (game and launcher):** unknown action keys are ignored; an unknown name, a reserved
+  key, or a third key makes that entry fall back to its default, and the game logs
+  `[CONTROLS] <action>: ...`; a key or pad button bound to two actions keeps the first action in
+  the list order above and drops the other with a `[CONTROLS]` line. The launcher never writes such
+  values (it moves a key instead).
+- **Transport to the game:** the reader turns the section into one variable, `PSPRECOMP_CONTROLS`,
+  canonical form `action=key1,key2|pad;...` (only the actions present in the ini; an empty key list
+  or pad is valid and means unbound). It follows the same precedence as every other key.
+
+`[display] osk_skin` names the on-screen keyboard skin:
+`PSPRECOMP_OSK_SKIN=<ini folder>/skins/osk/<name>.json`. Names match `[a-z0-9_-]+`; shipped skins
+are `deck` (default), `light` and `patapon`. A missing or invalid skin falls back to the built-in
+Deck skin.
 
 Rules:
 
@@ -97,11 +149,13 @@ invalid values, future version) that both the C++ and the Rust readers are teste
 | display.present_filter | PSPRECOMP_PRESENT_FILTER | enum linear,nearest | copied |
 | display.texture_filter | PSPRECOMP_TEX_FILTER | enum auto,nearest,linear | copied |
 | display.hd_textures + display.texture_pack | PSPRECOMP_TEXTURES | bool + path | resolved pack path when true, unset when false |
+| display.osk_skin | PSPRECOMP_OSK_SKIN | name `[a-z0-9_-]+` | resolved to `<ini folder>/skins/osk/<name>.json` when valid, unset otherwise |
 | online.server | PSPRECOMP_ADHOC_SERVER | string (non-empty) | copied |
 | online.nickname | PSPRECOMP_ADHOC_NICK | string (non-empty) | copied |
 | online.relay | PSPRECOMP_ADHOC_RELAY | bool | true -> `1`, false -> unset |
 | online.port_offset | PSPRECOMP_ADHOC_PORT_OFFSET | int 0..65535 | copied |
 | online.mac_file | PSPRECOMP_ADHOC_MAC_FILE | path | resolved |
+| controls.*_keys + controls.*_pad | PSPRECOMP_CONTROLS | SDL key / button names | canonical spec of the actions present (see above) |
 | game.* | from `game_options.json` | per catalog | `map` or copied |
 
 An environment variable that is already set is never overwritten. An invalid value keeps the

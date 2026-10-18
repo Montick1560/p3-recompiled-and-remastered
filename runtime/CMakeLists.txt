@@ -147,6 +147,7 @@ set(RUNTIME_SOURCES
     src/psp_ge_rtt.cpp
     src/psp_ini.cpp
     src/psp_settings.cpp
+    src/psp_controls.cpp
     src/psp_eboot_loader.cpp
     src/psp_menu_prompt.cpp
     src/psp_present.cpp
@@ -624,7 +625,7 @@ target_compile_options(test_ge_rtt PRIVATE -O2 -Wall -Wextra -Wno-unused-paramet
 add_test(NAME ge_rtt_tests COMMAND test_ge_rtt)
 
 # settings.ini v1 (docs/contracts/settings-v1.md): INI parser + key resolution. Pure.
-add_executable(test_settings tests/test_settings.cpp src/psp_ini.cpp src/psp_settings.cpp)
+add_executable(test_settings tests/test_settings.cpp src/psp_ini.cpp src/psp_settings.cpp src/psp_controls.cpp)
 target_include_directories(test_settings PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
                            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
 target_compile_definitions(test_settings PRIVATE
@@ -701,6 +702,11 @@ add_executable(test_pad tests/test_pad.cpp src/psp_pad.cpp)
 target_include_directories(test_pad PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${SDL2_INCLUDE_DIRS})
 target_compile_options(test_pad PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME pad_tests COMMAND test_pad)
+
+add_executable(test_controls tests/test_controls.cpp src/psp_controls.cpp src/psp_pad.cpp)
+target_include_directories(test_controls PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_controls PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME controls_tests COMMAND test_controls)
 
 add_executable(test_perf tests/test_perf.cpp src/psp_perf.cpp)
 target_include_directories(test_perf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
