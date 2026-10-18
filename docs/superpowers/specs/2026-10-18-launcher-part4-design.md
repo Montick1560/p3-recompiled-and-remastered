@@ -138,8 +138,9 @@ select_keys = V, Tab    ; select_pad = back
    `Left Shift`, `Digit1` → `1`, `Numpad4` → `Keypad 4`, `F2` → `F2`, …); unknown codes are refused
    with a message.
 4. **Options › Controls** becomes an editor: rows = the 12 actions (PSP glyph + name), columns
-   Key 1 · Key 2 · Gamepad; Confirm on a cell → "Press a key…" / "Press a button…" (Esc / ○ cancels);
-   Delete / Backspace or the reset key on a cell clears it; R restores all defaults; a moved key shows
+   Key 1 · Key 2 · Gamepad; Confirm on a cell → "Press a key…" / "Press a button…" (Esc cancels);
+   the reset key (R / △) on a cell clears it (Backspace already means Back in the launcher); a last
+   row "Restore defaults" restores every binding; a moved key shows
    "Quitada de ✕" for a few seconds; the existing save / discard flow applies. Below, the keyboard skin
    picker (`deck`, `light`, `patapon`, plus any `skins/osk/*.json`) with a colour swatch from the skin
    file (`list_osk_skins` command).
