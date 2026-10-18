@@ -2,6 +2,7 @@
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_intr.h"
 #include "psp_vblank_clock.h"
+#include "psp_vblank_hook.h"
 #include "psp_render_queue.h"
 #include "psp_scheduler.h"
 #include "psp_memory.h"
@@ -85,6 +86,7 @@ static void hle_sceDisplayWaitVblankStart(
     // Vblank interrupt: games hang per-frame work (e.g. waking a loader
     // thread) on PSP_VBLANK_INT sub-interrupt handlers.
     psp_intr_dispatch_vblank(rdram, ctx);
+    psp_vblank_hook_run(rdram);  // achievements check (psp_achievements_run.cpp), when enabled
 
     ctx->r[2] = SCE_OK;
 }
