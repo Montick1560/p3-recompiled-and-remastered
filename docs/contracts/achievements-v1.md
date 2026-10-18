@@ -15,8 +15,9 @@ Official and fixed: the project defines it, every player has the same list. The 
 ```
 
 - An `id` never changes once published (pushed with a verified `when`); a dropped id is never reused.
-- `draft: true` (launcher part 5b Plan 1): names and texts are provisional and no entry has `when` yet. The game
-  (Plan 2) evaluates only entries with a `when`; an entry enters for good only when its fact is verified.
+- Every entry has a `when` verified against the user's saves and the game (`docs/p3_achievement_facts.md`);
+  the game evaluates them (psp_achievements). An id published with a `when` never changes; a dropped id is
+  never reused.
 - Readers ignore unknown keys. Another `version` = no catalogue.
 
 ## Earned — `<portable root>/achievements/unlocked.json`

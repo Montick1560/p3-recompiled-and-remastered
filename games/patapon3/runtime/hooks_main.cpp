@@ -23,6 +23,8 @@
 // the language cursor two rows). The whole update runs at most once per two
 // vblanks; a frame in between keeps the held words and clears the edge words,
 // so each press, release and repeat reaches one frame, at the 30 fps timing.
+#include "p3_achievements.h"
+#include "psp_achievements_run.h"
 #include "psp_anim_blend.h"
 #include "psp_game_module.h"
 #include "hle/psp_hle.h"
@@ -451,6 +453,9 @@ void loading_icon_draw(uint8_t* rdram, recomp_context* ctx) {
 }
 
 void patapon3_register_hooks(uint8_t* /*rdram*/) {
+    size_t ach_sources = 0;
+    const PspAchievementSource* ach = p3_achievement_sources(&ach_sources);
+    psp_achievements_register(ach, ach_sources);  // main() starts the system (psp_achievements_run.h)
     const char* fast_load = std::getenv("PSPRECOMP_P3_FAST_LOAD");
     if (!(fast_load && fast_load[0] == '0')) {
         g_loading_icon_draw = RECOMP_LOOKUP(kLoadingIconDraw);

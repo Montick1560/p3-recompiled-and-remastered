@@ -701,6 +701,20 @@ target_include_directories(test_achievements_run PRIVATE ${CMAKE_CURRENT_SOURCE_
 target_compile_options(test_achievements_run PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME achievements_run_tests COMMAND test_achievements_run)
 
+# Patapon 3 field map + official catalogue over the user's decrypted saves (skipped when absent).
+if(PSPRECOMP_GAME STREQUAL "patapon3")
+    add_executable(test_p3_achievements tests/test_p3_achievements.cpp src/psp_achievements.cpp
+                   ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime/p3_achievements.cpp)
+    target_include_directories(test_p3_achievements PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                               ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann
+                               ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime)
+    target_compile_definitions(test_p3_achievements PRIVATE
+        PSP_P3_CATALOGUE="${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/achievements.json"
+        PSP_P3_SAVES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../build/save_main")
+    target_compile_options(test_p3_achievements PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+    add_test(NAME p3_achievements_tests COMMAND test_p3_achievements)
+endif()
+
 # Present rectangle (aspect fit) and window scale parsing.
 add_executable(test_present tests/test_present.cpp src/psp_present.cpp)
 target_include_directories(test_present PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

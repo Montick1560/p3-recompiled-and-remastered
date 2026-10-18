@@ -1,30 +1,12 @@
 {
   "version": 1,
-  "draft": true,
   "achievements": [
-    { "id": "story_prologue", "icon": "📜", "hidden": false, "name": { "es": "El despertar", "en": "The Awakening" }, "desc": { "es": "Completa el prólogo.", "en": "Clear the prologue." } },
-    { "id": "story_first_archfiend", "icon": "👹", "hidden": false, "name": { "es": "Primer archidemonio", "en": "First Archfiend" }, "desc": { "es": "Derrota a tu primer archidemonio.", "en": "Defeat your first Archfiend." } },
-    { "id": "story_all_archfiends", "icon": "🔥", "hidden": false, "name": { "es": "Siete pecados", "en": "Seven Sins" }, "desc": { "es": "Derrota a todos los archidemonios.", "en": "Defeat every Archfiend." } },
-    { "id": "story_ending", "icon": "🌅", "hidden": false, "name": { "es": "Fin del viaje", "en": "Journey's End" }, "desc": { "es": "Llega al final de la historia.", "en": "Reach the end of the story." } },
-    { "id": "missions_1", "icon": "🥁", "hidden": false, "name": { "es": "Primer tambor", "en": "First Drum" }, "desc": { "es": "Completa una misión.", "en": "Clear a mission." } },
-    { "id": "missions_100", "icon": "🎖️", "hidden": false, "name": { "es": "Veterano", "en": "Veteran" }, "desc": { "es": "Completa 100 misiones.", "en": "Clear 100 missions." } },
-    { "id": "missions_1000", "icon": "🏅", "hidden": false, "name": { "es": "Incansable", "en": "Tireless" }, "desc": { "es": "Completa 1000 misiones.", "en": "Clear 1000 missions." } },
-    { "id": "heroes_defeated_10", "icon": "⚔️", "hidden": false, "name": { "es": "Cazahéroes", "en": "Hero Hunter" }, "desc": { "es": "Derrota a 10 héroes enemigos.", "en": "Defeat 10 enemy heroes." } },
-    { "id": "heroes_defeated_100", "icon": "🗡️", "hidden": false, "name": { "es": "Azote de héroes", "en": "Bane of Heroes" }, "desc": { "es": "Derrota a 100 héroes enemigos.", "en": "Defeat 100 enemy heroes." } },
-    { "id": "vs_1", "icon": "🏟️", "hidden": false, "name": { "es": "Primer VS", "en": "First VS" }, "desc": { "es": "Completa un desafío VS.", "en": "Clear a VS challenge." } },
-    { "id": "vs_50", "icon": "🏆", "hidden": false, "name": { "es": "Campeón del coliseo", "en": "Arena Champion" }, "desc": { "es": "Completa 50 desafíos VS.", "en": "Clear 50 VS challenges." } },
-    { "id": "dark_hero_ragewolf", "icon": "🐺", "hidden": false, "name": { "es": "Lobo domado", "en": "Wolf Tamed" }, "desc": { "es": "Derrota a Ragewolf.", "en": "Defeat Ragewolf." } },
-    { "id": "dark_hero_naughtyfins", "icon": "🦈", "hidden": false, "name": { "es": "Aletas quietas", "en": "Fins Stilled" }, "desc": { "es": "Derrota a Naughtyfins.", "en": "Defeat Naughtyfins." } },
-    { "id": "dark_hero_sonarchy", "icon": "🦇", "hidden": false, "name": { "es": "Silencio", "en": "Silence" }, "desc": { "es": "Derrota a Sonarchy.", "en": "Defeat Sonarchy." } },
-    { "id": "dark_hero_slogturtle", "icon": "🐢", "hidden": false, "name": { "es": "Caparazón roto", "en": "Shell Cracked" }, "desc": { "es": "Derrota a Slogturtle.", "en": "Defeat Slogturtle." } },
-    { "id": "dark_hero_covet_hiss", "icon": "🐍", "hidden": false, "name": { "es": "Sin codicia", "en": "No More Greed" }, "desc": { "es": "Derrota a Covet-Hiss.", "en": "Defeat Covet-Hiss." } },
-    { "id": "dark_heroes_all", "icon": "🌑", "hidden": false, "name": { "es": "Ocaso de los Héroes Oscuros", "en": "Dusk of the Dark Heroes" }, "desc": { "es": "Derrota a los cinco Héroes Oscuros.", "en": "Defeat all five Dark Heroes." } },
-    { "id": "hero_level_10", "icon": "⭐", "hidden": false, "name": { "es": "Héroe en ciernes", "en": "Budding Hero" }, "desc": { "es": "Lleva al héroe al nivel 10.", "en": "Bring the hero to level 10." } },
-    { "id": "hero_level_30", "icon": "🌟", "hidden": false, "name": { "es": "Superhéroe", "en": "Superhero" }, "desc": { "es": "Lleva al héroe al nivel 30.", "en": "Bring the hero to level 30." } },
-    { "id": "classes_5", "icon": "🎭", "hidden": false, "name": { "es": "Muchas caras", "en": "Many Faces" }, "desc": { "es": "Desbloquea 5 clases.", "en": "Unlock 5 classes." } },
-    { "id": "classes_all", "icon": "👑", "hidden": false, "name": { "es": "Maestro de clases", "en": "Class Master" }, "desc": { "es": "Desbloquea todas las clases.", "en": "Unlock every class." } },
-    { "id": "dxd_gigante_king", "icon": "🗿", "hidden": false, "name": { "es": "Rey caído", "en": "Fallen King" }, "desc": { "es": "Derrota al Gigante King (DxD).", "en": "Defeat the Gigante King (DxD)." } },
-    { "id": "secret_heroes_1000", "icon": "💀", "hidden": true, "name": { "es": "Leyenda negra", "en": "Dark Legend" }, "desc": { "es": "Derrota a 1000 héroes enemigos.", "en": "Defeat 1000 enemy heroes." } },
-    { "id": "secret_completionist", "icon": "🎨", "hidden": true, "name": { "es": "Patapon total", "en": "Total Patapon" }, "desc": { "es": "Consigue todos los demás logros.", "en": "Earn every other achievement." } }
+    { "id": "story_prologue", "icon": "📜", "hidden": false, "name": { "es": "El despertar", "en": "The Awakening" }, "desc": { "es": "Completa el prólogo.", "en": "Clear the prologue." }, "when": {"fact": "missions", "op": ">=", "value": 3} },
+    { "id": "missions_1", "icon": "🥁", "hidden": false, "name": { "es": "Primer tambor", "en": "First Drum" }, "desc": { "es": "Completa una misión.", "en": "Clear a mission." }, "when": {"fact": "missions", "op": ">=", "value": 1} },
+    { "id": "missions_100", "icon": "🎖️", "hidden": false, "name": { "es": "Veterano", "en": "Veteran" }, "desc": { "es": "Completa 100 misiones.", "en": "Clear 100 missions." }, "when": {"fact": "missions", "op": ">=", "value": 100} },
+    { "id": "missions_1000", "icon": "🏅", "hidden": false, "name": { "es": "Incansable", "en": "Tireless" }, "desc": { "es": "Completa 1000 misiones.", "en": "Clear 1000 missions." }, "when": {"fact": "missions", "op": ">=", "value": 1000} },
+    { "id": "hero_level_10", "icon": "⭐", "hidden": false, "name": { "es": "Héroe en ciernes", "en": "Budding Hero" }, "desc": { "es": "Lleva al héroe al nivel 10.", "en": "Bring the hero to level 10." }, "when": {"fact": "hero.level", "op": ">=", "value": 10} },
+    { "id": "hero_level_30", "icon": "🌟", "hidden": false, "name": { "es": "Superhéroe", "en": "Superhero" }, "desc": { "es": "Lleva al héroe al nivel 30.", "en": "Bring the hero to level 30." }, "when": {"fact": "hero.level", "op": ">=", "value": 30} },
+    { "id": "secret_completionist", "icon": "🎨", "hidden": true, "name": { "es": "Patapon total", "en": "Total Patapon" }, "desc": { "es": "Consigue todos los demás logros.", "en": "Earn every other achievement." }, "when": {"all": [{"fact": "missions", "op": ">=", "value": 1000}, {"fact": "hero.level", "op": ">=", "value": 30}]} }
   ]
 }
