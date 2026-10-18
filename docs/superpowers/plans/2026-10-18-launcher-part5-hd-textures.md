@@ -1267,3 +1267,43 @@ test("an action with a tab shows on that tab only", async () => {
 - [ ] **Step 5:** `## Findings` at the end of this plan (commits, E2E table, plan defects, download time), commit
   `docs(plan): launcher part 5 findings` in psprecomp; ask the user to try it on their PC (and later on the Steam
   Deck); push launcher + psprecomp docs only on their OK.
+
+## Findings (2026-10-18, Claude)
+
+Built by DeepSeek v4.1 flash (`#max`, OpenCode, the user's DeepSeek key) one task at a time; every diff was
+checked line by line against this plan (verbatim, apart from one extra `use` line in T1 and the prose-only CSS /
+README text of T3), the gates re-run and committed by Claude. Nothing pushed.
+
+**Commits (launcher `main`).** 7c62fd5 (T1 listing, hashes, states), f4b2ee7 (T2 engine + commands), 242a936 (T3
+screen, Options entry, credits), d1c0dec, a56501d, 581c11d (fixes below).
+
+**Gates.** cargo test 87 passed + 2 ignored (73 + 7 + 6 + 1 fix test), `cargo build` 0 warnings,
+`real_repository_listing -- --ignored` 1 passed; Vitest 53/53 (43 + 3 + 5 + 1 + 1 fix test), tsc clean.
+`e2e_portable3` and `e2e_portable` repackaged (`e2e_portable3/settings.ini` unchanged by the E2E).
+
+| E2E (CDP on e2e_portable3, game on 9998) | Result |
+|---|---|
+| Options › Gráficos | "Texturas HD: no instaladas" |
+| Open it | "No instaladas. El paquete ocupa 856.1 MB.", Descargar (856.1 MB), credits, URL |
+| Descargar → Cancelar at 20 % (81 s, 1888 of 3055 files) | "Archivos que faltan: 1161 (671.1 MB)." + "Descarga cancelada; lo descargado se conserva."; no `.part`, no `textures.ini` yet |
+| Descargar lo que falta | complete in 88 s → "Instaladas ✓ (versión del 2026-08-26)"; whole pack ≈ 2 min 50 s |
+| On disk | manifest 68ef73e, 3055 files, 856 059 410 B, every git blob SHA-1 matches; Options "instaladas ✓" |
+| Delete buzzcrave `00000000f8a96d3151a03810.png` | "Archivos que faltan: 1 (61 KB)." → one file fetched (60 878 B) |
+| Zero a 4.67 MB PNG (same size) | quick check still "Instaladas ✓"; "Comprobar todos los archivos" repairs it (`git hash-object` = tree SHA 1ab4d30…) |
+| Start DxD 1.1.4 from the launcher, `e2e3.py hideout` | `[TEXREP] pack …/textures/INFN00001: 3042 textures`; with `PSPRECOMP_TEXTURES_DUMP=1` 70 `[TEXREP] loaded` (boot + hideout), 0 `cannot load`, 0 `disabled`; hideout shot `build/briefs_p5/hideout_hd.png` |
+
+**Plan defects found.**
+1. T2: an update that failed or was cancelled rewrote the manifest without the files upstream dropped, so the next
+   complete update left them on disk. They stay recorded until an update completes (d1c0dec, new test
+   `a_cut_update_still_drops_removed_files_later`).
+2. T3: back from Texturas HD opened Options on General, row 0; it now returns to Gráficos with the entry selected
+   (`Options` `focus` prop, a56501d).
+3. T3: the credits panel showed 4–5 of 9 rows at 1920×1080 and 1280×800 and a gamepad cannot scroll it; three
+   columns in a wider panel plus a more compact menu fit everything at both sizes (581c11d).
+4. T4 Step 4: `[TEXREP] loaded` lines are only printed with `PSPRECOMP_TEXTURES_DUMP=1`; the default log has the
+   `[TEXREP] pack …` line only.
+5. The game's own miss count in the hideout is high (3153 keys missed vs 70 hit with the dump on): pack coverage
+   / hashing, not this plan; worth a look in the texture-replacement track.
+
+**Not verified here (user check).** The download on the user's own PC and network, and later on the Steam Deck;
+the GitHub page entry (opens the default browser via `explorer <url>`) was not clicked during the E2E.
