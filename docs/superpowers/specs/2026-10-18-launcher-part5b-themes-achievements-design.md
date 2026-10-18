@@ -1,6 +1,7 @@
 # Launcher part 5b — Themes + achievements — Design
 
-Date: 2026-10-18. Approved in chat by the user, section by section (brainstorming). This is the "part 5" of the
+Date: 2026-10-18. Approved in chat by the user, section by section (brainstorming); written spec approved by
+the user the same day. Next: writing-plans, Plan 1 (launcher) first. This is the "part 5" of the
 launcher decomposition (`2026-10-17-launcher-part1-design.md`: "Themes + achievements: community theme format,
 achievements read from the game, unlocks"); the HD texture download that shipped as "part 5" was an extra.
 
