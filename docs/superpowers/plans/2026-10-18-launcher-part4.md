@@ -1908,3 +1908,43 @@ export const ControlsEditor = forwardRef<ControlsHandle, Props>(function Control
 - [ ] **Step 5:** Ask the user to: type a hero name with the DualSense only in each skin (new game → hero
   name), remap a key and play a mission with it. Write `## Findings` (commits, E2E table, plan defects),
   commit `docs(plan): launcher part 4 findings`. Nothing pushed without the user's OK.
+
+## Findings (2026-10-18, Claude)
+
+Built by DeepSeek v4.1 flash (`#max`) one task at a time, reviewed and committed by Claude. Nothing pushed.
+
+**Commits.** psprecomp `patapon3-windows`: bf4c166 (T1 ControlMap, `[controls]` → `PSPRECOMP_CONTROLS`),
+4deb3fb (T2 keyboard model + text cursor), a4814c5 (T3 skins, overlay, pad routing, demo). Launcher `main`:
+1177b0c (T4 Rust), 3200377 (T5 Controls editor), 3b2164f (E2E fixes).
+
+**Gates.** ctest 77/77; test_p3 12/12; 1.1.4 tour `build/tour/p4_t6` RT_REGRESS PASS (21 gated checkpoints);
+v115b and vanilla rebuilt, `movie_check.py` MOVIE OK both; launcher cargo 73 passed + 1 ignored, Vitest 43/43,
+tsc clean; `e2e_portable3` and `e2e_portable` repackaged, `skins/osk/{deck,light,patapon}.json` in both.
+
+| E2E (CDP on e2e_portable3, game on 9998) | Result |
+|---|---|
+| Options › Controles shows today's mapping (X / Return / A ...) | OK |
+| Cross key 1 ← `KeyK`; save | `settings.ini` `cross_keys = K, Return` |
+| Circle key 1 ← Enter | Return moves from cross, status "Quitada de ✕ Cruz (Don)" |
+| Esc during a capture | capture cancelled, still in Options |
+| R on a cell / Restore defaults | cell cleared / every binding back to default |
+| Skin → Patapon; save; Start | game log `[SETTINGS] PSPRECOMP_CONTROLS=cross=K, Return\|a`, `PSPRECOMP_OSK_SKIN=…/skins/osk/patapon.json`, `[CONTROLS] …cross=K,Return\|a…` |
+| `PSPRECOMP_OSK_DEMO=1` window captures (deck, light, patapon, en) | readable after the fixes below (`build/e2e4/osk_*.png`) |
+
+**Plan defects found.**
+1. T3: Segoe UI has no ⌫ ⇧ Ⓐ Ⓑ Ⓧ Ⓨ; the overlay needs a symbol fallback font (`seguisym.ttf`, DejaVuSans on Linux).
+2. T3: the existing rasteriser dropped any glyph reaching left of its pen ("j" was blank); the bitmap now covers
+   the union of the glyph boxes.
+3. T3: the hint was drawn in `key_text`, invisible on the patapon skin (dark text, dark panel); it now follows
+   the panel's luminance, and the panel fits its content.
+4. T3 Step 7: the debug socket `S` screenshot is the PSP frame only (no overlay); the skins need a window
+   capture (`build/e2e4/winshot.ps1`, `osk_demo.py`).
+5. T4: `default_ini` pushed a second empty `[controls]` once the catalog has controls options (DeepSeek fixed).
+6. T5: at 1080p the editor ran under the prompt bar; R kept the "Restore settings" label on the Controls tab;
+   leaving the editor with a pad capture armed left it armed; Esc without `code` was refused.
+7. Process: the first T3 run hung ~5 h because the user's interactive OpenCode (and its `serve --service`)
+   shared the local DB. Close every OpenCode before a headless run; a file-change watchdog caught nothing
+   after that.
+
+**Not verified here (user check).** Typing a hero name with only the gamepad in each skin, and playing a mission
+with a remapped key: key injection from this background session does not reach the game or launcher windows.
