@@ -16,6 +16,7 @@ public:
         std::string title;
         std::string text;
         uint32_t length = 0;
+        uint32_t cursor = 0;
         uint32_t max_len = 0;
     };
 
@@ -26,6 +27,7 @@ public:
     // Main-thread side (no-ops while idle).
     void type(const std::string& utf8);
     void backspace();
+    void move_cursor(int delta);
     void confirm();
     void cancel();
     bool active() const;

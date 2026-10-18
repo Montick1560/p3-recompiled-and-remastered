@@ -53,11 +53,21 @@ static void input_while_idle_is_ignored() {
     CHECK(!s.poll(&out) && !s.active(), "nothing happens without an open request");
 }
 
+static void cursor_editing() {
+    OskSession s;
+    s.open("Equipo", "Pata", 8);
+    s.move_cursor(-1);
+    s.type("x");
+    const OskSession::View v = s.view();
+    CHECK(v.text == "Patxa" && v.cursor == 4, "typing inserts before the last character, view reports the cursor");
+}
+
 int main() {
     confirm_returns_typed_text();
     cancel_returns_initial_text();
     view_shows_title_and_text();
     input_while_idle_is_ignored();
+    cursor_editing();
     if (failures == 0) std::printf("test_osk_session: all passed\n");
     return failures == 0 ? 0 : 1;
 }

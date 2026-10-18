@@ -34,6 +34,7 @@ bool printable(char32_t c) { return c >= 0x20 && c != 0x7F; }
 void TextEdit::reset(const std::string& initial, uint32_t max_len) {
     max_len_ = max_len;
     chars_.clear();
+    cursor_ = 0;
     insert(initial);
 }
 
@@ -41,12 +42,22 @@ void TextEdit::insert(const std::string& utf8) {
     for (char32_t c : decode(utf8)) {
         if (!printable(c)) continue;
         if (chars_.size() >= max_len_) break;
-        chars_.push_back(c);
+        chars_.insert(chars_.begin() + cursor_, c);
+        cursor_++;
     }
 }
 
 void TextEdit::backspace() {
-    if (!chars_.empty()) chars_.pop_back();
+    if (cursor_ == 0) return;
+    chars_.erase(chars_.begin() + (cursor_ - 1));
+    cursor_--;
+}
+
+void TextEdit::move_cursor(int delta) {
+    const long long target = static_cast<long long>(cursor_) + delta;
+    if (target < 0) cursor_ = 0;
+    else if (target > static_cast<long long>(chars_.size())) cursor_ = chars_.size();
+    else cursor_ = static_cast<size_t>(target);
 }
 
 std::string TextEdit::utf8() const {

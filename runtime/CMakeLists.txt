@@ -172,6 +172,7 @@ set(RUNTIME_SOURCES
     src/psp_patch_sets.cpp
     src/psp_text_edit.cpp
     src/psp_osk_session.cpp
+    src/psp_osk_keyboard.cpp
     src/psp_osk_overlay.cpp
     src/net/adhoc_config.cpp
     src/net/pro_protocol.cpp
@@ -797,6 +798,11 @@ target_include_directories(test_osk_session PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/
 target_compile_options(test_osk_session PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(test_osk_session PRIVATE pthread)
 add_test(NAME osk_session_tests COMMAND test_osk_session)
+
+add_executable(test_osk_keyboard tests/test_osk_keyboard.cpp src/psp_osk_keyboard.cpp)
+target_include_directories(test_osk_keyboard PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_osk_keyboard PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME osk_keyboard_tests COMMAND test_osk_keyboard)
 
 add_executable(test_stack_layout tests/test_stack_layout.cpp)
 target_include_directories(test_stack_layout PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

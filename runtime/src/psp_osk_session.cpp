@@ -27,6 +27,11 @@ void OskSession::backspace() {
     if (state_ == State::Editing) edit_.backspace();
 }
 
+void OskSession::move_cursor(int delta) {
+    std::lock_guard<std::mutex> lock(m_);
+    if (state_ == State::Editing) edit_.move_cursor(delta);
+}
+
 void OskSession::confirm() {
     std::lock_guard<std::mutex> lock(m_);
     if (state_ != State::Editing) return;
@@ -53,6 +58,7 @@ OskSession::View OskSession::view() const {
     v.title = title_;
     v.text = edit_.utf8();
     v.length = edit_.length();
+    v.cursor = edit_.cursor();
     v.max_len = edit_.max_len();
     return v;
 }
