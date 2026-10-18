@@ -14,7 +14,9 @@ Official and fixed: the project defines it, every player has the same list. The 
                       "when"?: { "fact", "op": ">=" | "==" | "!=", "value" } | {"all": [...]} | {"any": [...]} } ] }
 ```
 
-- An `id` never changes once published (pushed with a verified `when`); a dropped id is never reused.
+- An `id` never changes meaning once published (pushed with a verified `when`); a dropped id is never reused for
+  another meaning. A draft id that never had a `when` may come back with its draft meaning. `secret_completionist`
+  ("every other achievement") gains the leaves of new achievements; whoever earned it keeps it.
 - Every entry has a `when` verified against the user's saves and the game (`docs/p3_achievement_facts.md`);
   the game evaluates them (psp_achievements). An id published with a `when` never changes; a dropped id is
   never reused.

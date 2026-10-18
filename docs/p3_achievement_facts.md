@@ -39,6 +39,13 @@ All little endian. `bit` -1 = whole value; `count` 0 = one value.
 | hero.level | 0xF294 | 4 | no | -1 | 0 | 1 | 99 | 35 | 1 | Level of the hero in the current class: DATA04 35 = the game's own save detail "Clase: Yumiyacha Nv 35" (PARAM.SFO written by the game) and the Cuartel; DATA08 1 = the Cuartel screen live ("edd · Yarida · Nv 1 · EXP 0/1000", exp at `+0xF290` = 0, then 100 after the mission). 0 on the title screen (no save). |
 | playtime.seconds | 0x14 | 4 | no | -1 | 0 | 0 | 2147483647 | 6762511 | 912 | 6762511 s = 1878:28:31, the save detail says "Tiempo de juego: 1878:28:30"; ticks live once a second. Not used by the catalogue. |
 | kaching | 0x20 | 4 | no | -1 | 0 | 0 | 999999999 | 148473199 | 246 | DATA08 246 = "Ka-ching 246" on the Fragua screen live. Not used by the catalogue. |
+| archfiend.valor | 0xEDEA | 1 | no | -1 | 0 | 0 | 255 | 4 | 0 | live: replaying the Archfiend of Valor dungeon (boss included) moved this byte 4 → 5 and no other byte of the table |
+| archfiend.purity | 0xEE12 | 1 | no | -1 | 0 | 0 | 255 | 10 | 0 | live: replaying the Archfiend of Pureza dungeon (boss included) moved this byte 10 → 11 and no other byte of the table |
+| archfiend.justice | 0xEE3A | 1 | no | -1 | 0 | 0 | 255 | 5 | 0 | live: replaying the Archfiend of Justicia dungeon (boss included) moved this byte 5 → 6 and no other byte of the table |
+| archfiend.impetuosity | 0xEE62 | 1 | no | -1 | 0 | 0 | 255 | 7 | 0 | live: replaying the Archfiend of Impetuosidad dungeon (boss included) moved this byte 7 → 8 and no other byte of the table |
+| archfiend.restraint | 0xEE8A | 1 | no | -1 | 0 | 0 | 255 | 2 | 0 | the one slot left after the six replays (by elimination); 2 in DATA04, 0 in DATA08 |
+| archfiend.inflexibility | 0xEEB2 | 1 | no | -1 | 0 | 0 | 255 | 10 | 0 | live: replaying the Archfiend of Inflexibilidad dungeon (boss included) moved this byte 10 → 11 and no other byte of the table |
+| archfiend.tolerance | 0xEEDA | 1 | no | -1 | 0 | 0 | 255 | 5 | 0 | live: replaying the Archfiend of Tolerancia dungeon (boss included) moved this byte 5 → 6 and no other byte of the table |
 
 Looked at and not usable within the time box (no verified meaning): the 6-byte inventory table at `+0x2C..`
 (id, flags, count; 841 ids), the 0x84-byte unit/class records at `+0x9684..+0xEDA4` (level 40 = 0x28 for most
@@ -52,8 +59,8 @@ achievements are dropped (below), never guessed.
 | id | decision | when / reason |
 |---|---|---|
 | story_prologue | keep | `{"fact": "missions", "op": ">=", "value": 3}` — the prologue is three mandatory missions: DATA08 is in the prologue at 2, the hideout opens when the third is cleared (live, see `missions`). |
-| story_first_archfiend | drop | no verified story/boss fact |
-| story_all_archfiends | drop | no verified story/boss fact |
+| story_first_archfiend | keep (2026-10-18, second pass) | `{"any": [archfiend.* >= 1, the seven]}` |
+| story_all_archfiends | keep (2026-10-18, second pass) | `{"all": [archfiend.* >= 1, the seven]}` |
 | story_ending | drop | no verified story fact |
 | missions_1 | keep | `{"fact": "missions", "op": ">=", "value": 1}` |
 | missions_100 | keep | `{"fact": "missions", "op": ">=", "value": 100}` |
@@ -74,7 +81,7 @@ achievements are dropped (below), never guessed.
 | classes_all | drop | class-unlock field not verified |
 | dxd_gigante_king | drop | no verified DLC mission fact |
 | secret_heroes_1000 | drop | no verified enemy-hero counter |
-| secret_completionist | keep | `{"all": [{"fact": "missions", "op": ">=", "value": 1000}, {"fact": "hero.level", "op": ">=", "value": 30}]}` — exactly "every other kept achievement" (those two imply the other five). |
+| secret_completionist | keep (second pass: its `all` also holds the seven archfiend leaves) | `{"all": [{"fact": "missions", "op": ">=", "value": 1000}, {"fact": "hero.level", "op": ">=", "value": 30}]}` — exactly "every other kept achievement" (those two imply the other five). |
 
 Kept: 7. `story_prologue` survives, so the `arena` theme keeps its lock.
 
@@ -82,4 +89,25 @@ Kept: 7. `story_prologue` survives, so the `arena` theme keeps its lock.
 
 - **DATA04 earns** (sorted): `hero_level_10`, `hero_level_30`, `missions_1`, `missions_100`, `missions_1000`,
   `secret_completionist`, `story_prologue` (7).
+- **DATA08 earns** (sorted): `missions_1` (1).
+
+## Second pass (2026-10-18): Archfiends
+
+The user replayed the Archfiend dungeons on their own save (port 9999, read-only snapshots before / after,
+`DECO/build/tools/ach_snap.py`, `DECO/build/ach_snaps/`). An 8-slot table at `+0xEDCC` (0x28 bytes per slot) holds,
+at slot + 0x1E, how many times each Archfiend was defeated; slot 8 is 0 in both saves and unused. Slots: 1 Valor,
+2 Pureza, 3 Justicia, 4 Impetuosidad, 5 Contención (by elimination), 6 Inflexibilidad, 7 Tolerancia. Each replay
+moved only its own byte by 1 (and `missions` by 1). The first u32 of each slot (29, 100, 40, 36, 71, 58, 48) did not
+move and is not used.
+
+New ids (never published before): `archfiend_valor`, `archfiend_purity`, `archfiend_justice`, `archfiend_impetuosity`,
+`archfiend_restraint`, `archfiend_inflexibility`, `archfiend_tolerance` (each `archfiend.<name> >= 1`). Back from the
+drop list with their draft meaning: `story_first_archfiend`, `story_all_archfiends` (they never had a `when`, so no
+one could have earned them). English names are literal translations of the Spanish release, not checked against
+the English release.
+
+- **DATA04 earns now** (sorted): `archfiend_impetuosity`, `archfiend_inflexibility`, `archfiend_justice`,
+  `archfiend_purity`, `archfiend_restraint`, `archfiend_tolerance`, `archfiend_valor`, `hero_level_10`,
+  `hero_level_30`, `missions_1`, `missions_100`, `missions_1000`, `secret_completionist`, `story_all_archfiends`,
+  `story_first_archfiend`, `story_prologue` (16).
 - **DATA08 earns** (sorted): `missions_1` (1).
