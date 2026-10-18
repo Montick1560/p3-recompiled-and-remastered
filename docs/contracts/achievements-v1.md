@@ -1,0 +1,37 @@
+# Achievements v1 — contract between the game, the launcher and theme authors
+
+Source: `docs/superpowers/specs/2026-10-18-launcher-part5b-themes-achievements-design.md` §2, §3, §4.
+
+## Catalogue — `games/patapon3/achievements.json`
+
+Official and fixed: the project defines it, every player has the same list. The build copies it next to the exe
+(`game/<release>/achievements.json` in the portable package); the launcher reads the current release's copy.
+
+```
+{ "version": 1, "draft"?: true,
+  "achievements": [ { "id": "<[a-z0-9_]{1,64}>", "icon": "<emoji>", "hidden": bool,
+                      "name": {"es", "en"}, "desc": {"es", "en"},
+                      "when"?: { "fact", "op": ">=" | "==" | "!=", "value" } | {"all": [...]} | {"any": [...]} } ] }
+```
+
+- An `id` never changes once published (pushed with a verified `when`); a dropped id is never reused.
+- `draft: true` (launcher part 5b Plan 1): names and texts are provisional and no entry has `when` yet. The game
+  (Plan 2) evaluates only entries with a `when`; an entry enters for good only when its fact is verified.
+- Readers ignore unknown keys. Another `version` = no catalogue.
+
+## Earned — `<portable root>/achievements/unlocked.json`
+
+```
+{ "version": 1, "earned": { "<id>": { "date": "<ISO-8601 UTC>", "save": "DATA04", "hero": "Edson",
+                                      "release": "dxd-1.1.4" } } }
+```
+
+- Global on the PC (every release shares it), append-only. **Written only by the game** (temp file + rename);
+  the launcher only reads it. Missing, empty or corrupt = nothing earned.
+- An earned id the catalogue does not list is ignored by the launcher.
+
+## Themes
+
+A community theme may require an official achievement with `"unlock": "<id>"` in its `theme.json`; it stays
+locked until that id is earned. An id that is not in the catalogue keeps the theme locked forever. Themes can
+never add achievements.

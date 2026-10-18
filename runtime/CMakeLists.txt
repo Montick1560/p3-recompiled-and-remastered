@@ -339,6 +339,14 @@ if(EXISTS "${_game_options}")
                 "$<TARGET_FILE_DIR:psprecomp_runtime>/game_options.json")
 endif()
 
+# Official achievement catalogue (docs/contracts/achievements-v1.md), read by the launcher.
+set(_achievements "${CMAKE_CURRENT_SOURCE_DIR}/../games/${PSPRECOMP_GAME}/achievements.json")
+if(EXISTS "${_achievements}")
+    add_custom_command(TARGET psprecomp_runtime POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_achievements}"
+                "$<TARGET_FILE_DIR:psprecomp_runtime>/achievements.json")
+endif()
+
 # ── Code-overlay banks (M2) ────────────────────────────────────────────────
 # Each `psprecomp recompile --bank <name>` output dir defines an OBJECT
 # library <name> whose objects self-register with psp_overlay.cpp.
