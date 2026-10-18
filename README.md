@@ -249,7 +249,8 @@ character animations sampled between frames so they move at 60 too
 
 Input: keyboard (arrows = D-pad, X/Enter = CROSS, Z = CIRCLE, A = SQUARE, S = TRIANGLE,
 Q/W = L/R, Space = START, V or Tab = SELECT; mouse wheel = D-pad up/down, one press per notch) and any SDL game controller (XInput-style layout,
-hot-pluggable; keyboard and pads can be used together):
+hot-pluggable; keyboard and pads can be used together). The mapping is configurable in `settings.ini`
+`[controls]` (or `PSPRECOMP_CONTROLS`); the table below is the default:
 
 | Controller | PSP |
 |------------|-----|
@@ -259,9 +260,11 @@ hot-pluggable; keyboard and pads can be used together):
 | D-pad | D-pad |
 | Left stick | analog stick (dead zone 8000 of 32767) |
 
-Text entry: when the game opens the PSP on-screen keyboard (`sceUtilityOsk`), a text box is drawn over
-the game. Type with the PC keyboard (accents and IME work); Backspace deletes, Enter (or a controller's
-Start) accepts, Esc (or B) cancels and keeps the previous text.
+Text entry: when the game opens the PSP on-screen keyboard (`sceUtilityOsk`), a Steam Deck style
+keyboard is drawn over the game. Type with the PC keyboard (accents and IME work) or with a gamepad
+only (D-pad / left stick move, A presses, B backspace, X shift, Y space, LB/RB move the text cursor,
+Select switches layers, Start accepts); Esc or the grid's Cancel key cancels and keeps the previous
+text. Skins live in `skins/osk/` (`settings.ini` `[display] osk_skin`).
 
 Ad hoc multiplayer (verified on one PC between two runtime instances and between the runtime and
 PPSSPP 1.20.4 with either side hosting: Patapon 3's Heropuerta lobby, chat, choosing a quest and

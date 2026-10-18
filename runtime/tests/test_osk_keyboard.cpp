@@ -1,9 +1,12 @@
 // Unit tests for psp_osk_keyboard: the Steam Deck style key grid, navigation, layers, shift / caps,
 // accents and the edits it sends to its target.
 #include "psp_osk_keyboard.h"
+#include "psp_osk_skin.h"
 
+#include <cmath>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 static int failures = 0;
 #define CHECK(cond, msg) \
@@ -142,6 +145,25 @@ static void stick_repeat() {
     CHECK(s.update(0.8f, 0.0f, 600) == OskAction::Right, "right");
 }
 
+static void skins() {
+    OskColor c{};
+    CHECK(osk_parse_color("#1A9FFF", &c) && std::fabs(c.b - 1.0f) < 1e-6f && std::fabs(c.a - 1.0f) < 1e-6f, "#RRGGBB");
+    CHECK(osk_parse_color("#00000080", &c) && std::fabs(c.a - 128 / 255.0f) < 1e-6f, "#RRGGBBAA");
+    CHECK(!osk_parse_color("1A9FFF", &c) && !osk_parse_color("#12345", &c) && !osk_parse_color("#GGGGGG", &c), "bad colours");
+    std::vector<std::string> log;
+    OskSkin s = osk_skin_parse(R"({"name":"Patapon","key":"#F5F0E6","radius":4,"gap":6,"font":"f.ttf"})", "C:/s", &log);
+    CHECK(s.name == "Patapon" && std::fabs(s.key.r - 0xF5 / 255.0f) < 1e-6f && s.radius == 4 && s.gap == 6, "fields read");
+    CHECK(s.font == "C:/s/f.ttf", "font relative to the skin folder");
+    CHECK(log.empty(), "no log for a good skin");
+    const OskSkin d;
+    s = osk_skin_parse(R"({"key":"red","radius":-3,"opacity":7})", "C:/s", &log);
+    CHECK(std::fabs(s.key.r - d.key.r) < 1e-6f && s.radius == d.radius && s.opacity == d.opacity, "bad fields keep defaults");
+    CHECK(log.size() == 3, "one log line per bad field");
+    log.clear();
+    s = osk_skin_parse("{not json", "C:/s", &log);
+    CHECK(s.name == d.name && log.size() == 1, "invalid JSON -> built-in Deck skin");
+}
+
 int main() {
     starts_on_q_and_types();
     navigation_wraps_and_snaps();
@@ -149,6 +171,7 @@ int main() {
     accents();
     symbols_and_special_keys();
     stick_repeat();
+    skins();
     std::printf("%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }

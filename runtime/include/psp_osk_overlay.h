@@ -1,5 +1,6 @@
 #pragma once
 #include "psp_menu_prompt.h"
+#include "psp_osk_keyboard.h"
 
 // Draws the on-screen keyboard text box over the presented frame while a
 // sceUtilityOsk request is open (psp_osk_session.h). GL (main) thread only.
@@ -8,6 +9,11 @@
 // Returns true when the overlay drew (it used its own GL state, so callers
 // that track GL state must invalidate their shadow); false when inactive.
 bool psp_osk_overlay_draw(int win_w, int win_h, int rx, int ry, int rw, int rh);
+
+// The keyboard the event loop drives and this overlay draws (main thread only).
+OskKeyboard& psp_osk_keyboard();
+// Restart it (layer, focus, shift, pending accent): called when a request opens.
+void psp_osk_keyboard_reset();
 
 // The "back to the menu?" Yes/No box (psp_menu_prompt.h), drawn the same way
 // over the game image while psp_menu_prompt() is active; texts follow

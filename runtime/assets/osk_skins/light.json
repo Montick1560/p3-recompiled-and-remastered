@@ -1,0 +1,13 @@
+{
+  "name": "Claro / Light",
+  "background": "#00000059",
+  "panel": "#F2F4F7F5",
+  "key": "#FFFFFF",
+  "key_text": "#1E2228",
+  "focus": "#2D7FF9",
+  "focus_text": "#FFFFFF",
+  "accent": "#2D7FF9",
+  "radius": 10,
+  "gap": 8,
+  "opacity": 1
+}

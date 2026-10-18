@@ -437,9 +437,19 @@ launcher's Saves screen sets this variable. Unset or missing save: the newest, a
 ### `PSPRECOMP_OSK_FONT`
 - **Read in:** `runtime/src/psp_osk_overlay.cpp` (first time the text box is drawn).
 - **Type:** env (path to a .ttf file).
-- **Default:** `C:/Windows/Fonts/segoeui.ttf`, then `arial.ttf` (and common macOS/Linux paths).
+- **Default:** the skin's `font` when set, then `C:/Windows/Fonts/segoeui.ttf`, `arial.ttf` (and common macOS/Linux paths).
 - **Effect:** Font of the on-screen keyboard text box. Logged as `[OSK] font <path>`;
-  `[OSK] no font found` means the box draws without text.
+  `[OSK] no font found` means the box draws without text. Glyphs the main font lacks (⌫, ⇧,
+  Ⓐ Ⓑ Ⓧ Ⓨ) are drawn with a symbol fallback font (`seguisym.ttf`, else DejaVu Sans) when one exists.
+
+### `PSPRECOMP_OSK_DEMO`
+- **Read in:** `runtime/src/psp_event_loop.cpp` (main loop).
+- **Type:** env (`=1` to enable).
+- **Default:** off.
+- **Effect:** Two seconds after boot, opens a demo 16-character keyboard request ("Demo") over
+  whatever is on screen, so the skins can be captured without playing. Logs
+  `[OSK] demo keyboard open` and, when accepted, `[OSK] demo text: <text>`.
+- **Set it when:** taking screenshots of the on-screen keyboard skins.
 
 ### `PSPRECOMP_ADHOC_SERVER`, `PSPRECOMP_ADHOC_NICK`, `PSPRECOMP_ADHOC_MAC`, `PSPRECOMP_ADHOC_PORT_OFFSET`, `PSPRECOMP_ADHOC_BIND`, `PSPRECOMP_ADHOC_MAC_FILE`
 - **Read in:** `runtime/src/net/adhoc_config.cpp` (`adhoc_config_load`), once, from

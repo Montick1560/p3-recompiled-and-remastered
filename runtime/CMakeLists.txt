@@ -173,6 +173,7 @@ set(RUNTIME_SOURCES
     src/psp_text_edit.cpp
     src/psp_osk_session.cpp
     src/psp_osk_keyboard.cpp
+    src/psp_osk_skin.cpp
     src/psp_osk_overlay.cpp
     src/net/adhoc_config.cpp
     src/net/pro_protocol.cpp
@@ -799,8 +800,9 @@ target_compile_options(test_osk_session PRIVATE -O2 -Wall -Wextra -Wno-unused-pa
 target_link_libraries(test_osk_session PRIVATE pthread)
 add_test(NAME osk_session_tests COMMAND test_osk_session)
 
-add_executable(test_osk_keyboard tests/test_osk_keyboard.cpp src/psp_osk_keyboard.cpp)
-target_include_directories(test_osk_keyboard PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_executable(test_osk_keyboard tests/test_osk_keyboard.cpp src/psp_osk_keyboard.cpp src/psp_osk_skin.cpp)
+target_include_directories(test_osk_keyboard PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                           ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
 target_compile_options(test_osk_keyboard PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME osk_keyboard_tests COMMAND test_osk_keyboard)
 

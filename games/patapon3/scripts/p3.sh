@@ -169,6 +169,7 @@ cmd_build() {
         -DPSPRECOMP_BANK_DIRS="$(bank_dirs)" >/dev/null
     cmake --build "$BUILD" --target psprecomp_runtime
     cp -u "$SDL2_PKG/bin/SDL2.dll" "$BUILD/"
+    mkdir -p "$BUILD/skins/osk" && cp -u "$REPO/runtime/assets/osk_skins/"*.json "$BUILD/skins/osk/"
     if [[ -f "$DISC0/PSP_GAME/SYSDIR/EBOOT.BIN" && -f "$DISC0/PSP_GAME/PARAM.SFO" ]]; then
         python -I "$REPO/scripts/release_info.py" "$DISC0" "$RELEASE_ID" "$RELEASE_NAME" "$BUILD/release.json" "$REPO/games/patapon3/release_saves.json"
     else

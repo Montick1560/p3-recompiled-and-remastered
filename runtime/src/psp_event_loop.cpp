@@ -22,6 +22,7 @@
 #include <atomic>
 #include <chrono>
 #include <map>
+#include <string>
 #include <thread>
 
 // --- Global state definitions (declared extern in psp_runtime.h) ---
@@ -153,11 +154,25 @@ static void publish_wheel() {
     g_wheel_buttons.store(g_wheel.buttons(steady_ms()), std::memory_order_relaxed);
 }
 
+// The keyboard grid edits the game's text through the OSK session.
+struct SessionTarget : OskTarget {
+    void type(const std::string& s) override { osk_session().type(s); }
+    void backspace() override { osk_session().backspace(); }
+    void move_cursor(int d) override { osk_session().move_cursor(d); }
+    void accept() override { osk_session().confirm(); }
+    void cancel() override { osk_session().cancel(); }
+};
+static SessionTarget g_osk_target;
+static OskStickRepeat g_osk_stick;
+static float g_osk_axis_x = 0.0f, g_osk_axis_y = 0.0f;
+
 // While the game waits on the on-screen keyboard (sceUtilityOsk), keyboard
 // input edits the text instead of pressing PSP buttons: typed characters
-// (SDL_TEXTINPUT, accents and IME included), Backspace, Enter = accept,
-// Esc = cancel. A controller's Start accepts and B cancels. Returns true
-// when the event was consumed.
+// (SDL_TEXTINPUT, accents and IME included), Backspace, arrows move the text
+// cursor, Enter = accept, Esc = cancel. Gamepad buttons follow the fixed
+// keyboard layout (Global Constraints): D-pad / left stick move, A press,
+// B backspace, X shift, Y space, LB/RB text cursor, back layer, Start accept.
+// Returns true when the event was consumed.
 static bool handle_osk_event(const SDL_Event& ev) {
     OskSession& osk = osk_session();
     if (!osk.active()) return false;
@@ -171,16 +186,32 @@ static bool handle_osk_event(const SDL_Event& ev) {
             return false;  // fullscreen toggle still works
         }
         if (ev.key.keysym.sym == SDLK_BACKSPACE) osk.backspace();
+        else if (ev.key.keysym.sym == SDLK_LEFT) osk.move_cursor(-1);
+        else if (ev.key.keysym.sym == SDLK_RIGHT) osk.move_cursor(1);
         else if (ev.key.keysym.sym == SDLK_RETURN || ev.key.keysym.sym == SDLK_KP_ENTER) osk.confirm();
         else if (ev.key.keysym.sym == SDLK_ESCAPE) osk.cancel();
         return true;
     case SDL_KEYUP:
         return true;
-    case SDL_CONTROLLERBUTTONDOWN:
-        if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_START) osk.confirm();
-        else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_B) osk.cancel();
+    case SDL_CONTROLLERBUTTONDOWN: {
+        static const std::pair<int, OskAction> kPad[] = {
+            {SDL_CONTROLLER_BUTTON_DPAD_UP, OskAction::Up}, {SDL_CONTROLLER_BUTTON_DPAD_DOWN, OskAction::Down},
+            {SDL_CONTROLLER_BUTTON_DPAD_LEFT, OskAction::Left}, {SDL_CONTROLLER_BUTTON_DPAD_RIGHT, OskAction::Right},
+            {SDL_CONTROLLER_BUTTON_A, OskAction::Press}, {SDL_CONTROLLER_BUTTON_B, OskAction::Backspace},
+            {SDL_CONTROLLER_BUTTON_X, OskAction::Shift}, {SDL_CONTROLLER_BUTTON_Y, OskAction::Space},
+            {SDL_CONTROLLER_BUTTON_LEFTSHOULDER, OskAction::CursorLeft},
+            {SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, OskAction::CursorRight},
+            {SDL_CONTROLLER_BUTTON_BACK, OskAction::Layer}, {SDL_CONTROLLER_BUTTON_START, OskAction::Accept}};
+        for (const auto& [b, a] : kPad) {
+            if (ev.cbutton.button == b) { psp_osk_keyboard().act(a, g_osk_target); break; }
+        }
         return true;
+    }
     case SDL_CONTROLLERBUTTONUP:
+        return true;
+    case SDL_CONTROLLERAXISMOTION:
+        if (ev.caxis.axis == SDL_CONTROLLER_AXIS_LEFTX) g_osk_axis_x = ev.caxis.value / 32767.0f;
+        if (ev.caxis.axis == SDL_CONTROLLER_AXIS_LEFTY) g_osk_axis_y = ev.caxis.value / 32767.0f;
         return true;
     default:
         return false;
@@ -196,6 +227,10 @@ static void sync_osk_text_input() {
     was_active = active;
     if (active) {
         g_host_buttons.store(0, std::memory_order_relaxed);
+        psp_osk_keyboard_reset();
+        for (auto& [id, c] : g_controllers) g_pads.remove(id);
+        publish_pads();
+        g_osk_axis_x = g_osk_axis_y = 0;
         SDL_StartTextInput();
     } else {
         SDL_StopTextInput();
@@ -403,6 +438,10 @@ int psp_runtime_init_sdl() {
 // psp_event_loop — main-thread loop: SDL events + render queue + alive check
 // ---------------------------------------------------------------------------
 void psp_event_loop(uint8_t* rdram) {
+    const bool osk_demo =
+        std::getenv("PSPRECOMP_OSK_DEMO") && std::string(std::getenv("PSPRECOMP_OSK_DEMO")) == "1";
+    const uint64_t demo_at = static_cast<uint64_t>(steady_ms()) + 2000;
+    bool demo_open = false;
     while (!g_should_exit.load()) {
         // 1. Pump SDL events (window close, keyboard input)
         SDL_Event ev;
@@ -414,6 +453,22 @@ void psp_event_loop(uint8_t* rdram) {
         if (g_menu_combo.update((g_pads.buttons() & 0x0009u) == 0x0009u, steady_ms()))
             open_menu_prompt();
         sync_osk_text_input();
+        if (osk_session().active()) {
+            if (auto a = g_osk_stick.update(g_osk_axis_x, g_osk_axis_y, static_cast<uint64_t>(steady_ms())))
+                psp_osk_keyboard().act(*a, g_osk_target);
+        }
+
+        // PSPRECOMP_OSK_DEMO=1: one keyboard request over whatever is on screen, to look at the skins.
+        if (osk_demo && !demo_open && static_cast<uint64_t>(steady_ms()) >= demo_at &&
+            !osk_session().active()) {
+            osk_session().open("Demo", "", 16);
+            demo_open = true;
+            std::fprintf(stderr, "[OSK] demo keyboard open\n");
+        }
+        if (demo_open) {
+            std::string text;
+            if (osk_session().poll(&text)) std::fprintf(stderr, "[OSK] demo text: %s\n", text.c_str());
+        }
 
         // 2. Drain render queue — execute pending GL work from game threads
         render_queue_process();

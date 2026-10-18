@@ -1,0 +1,13 @@
+{
+  "name": "Deck",
+  "background": "#00000073",
+  "panel": "#1B2838F5",
+  "key": "#2A3F5A",
+  "key_text": "#EBEEF2",
+  "focus": "#1A9FFF",
+  "focus_text": "#FFFFFF",
+  "accent": "#1A9FFF",
+  "radius": 10,
+  "gap": 8,
+  "opacity": 1
+}
