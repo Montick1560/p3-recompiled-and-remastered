@@ -2348,3 +2348,58 @@ git -c user.name="Patapon Community" -c user.email=rexgamer1560@gmail.com commit
   Temas and Logros on their PC (sound on, keyboard and DualSense) and later on the Steam Deck (WebKitGTK autoplay and
   `.webm` playback are part 7's checks); push launcher + psprecomp only on their OK. Next: Plan 2 (game) — writing-plans
   from spec §4 and §5.
+
+## Findings (2026-10-18, Claude)
+
+Tasks 1–6 built by DeepSeek v4.1 flash (`#max`, OpenCode, the user's DeepSeek key), one brief at a time
+(`DECO/build/briefs_p5b/T1..T6.md`), every run first try, no hangs. Every new file was diffed against this plan's code
+blocks (identical, whitespace aside); the edits to existing files were read line by line; gates re-run and committed
+by Claude. Nothing pushed.
+
+**Commits.** psprecomp `patapon3-windows`: e3d2cb1 (T1 catalogue, contract, CMake copy), 9cfba80 (T2 settings
+contract). launcher `main`: be816bd (T1), 1421081 (T2), 7c4494d (T3), bf92c3d (T4), b7edefd (T5), 7f70a68 (fix
+below), c766ec1 (T6).
+
+**Gates.** cargo test 101 passed + 2 ignored, `cargo build` 0 warnings; Vitest 75/75 (74 planned + 1 fix test), tsc
+clean; `node --test scripts` 3/3. `npm run tauri build -- --no-bundle` → `e2e_portable3` and `e2e_portable`
+repackaged: `game/{dxd-1.1.4,dxd-1.1.5b,vanilla-eu}/achievements.json` and `themes/{default,noche,arena}` in both;
+`versions/`, `textures/` untouched, `e2e_portable3/settings.ini` restored byte-identical after the E2E (SHA-256
+7909eb91…).
+
+| E2E (CDP on e2e_portable3, scratch WebView2 profile, game on 9998) | Result |
+|---|---|
+| Main menu | Iniciar · Partidas · Logros · Temas · Opciones · Salir; `img.logo` naturalWidth 1200 (narrowed asset scope OK) |
+| `default`, no music | no `#theme-music`, `div.backdrop` (background.png) |
+| Logros, nothing earned | "0 / 24 · 0 %", 24 pending, 2 "???", E → "Nada por aquí todavía.", E → 24, QQ back |
+| Temas | Patapon "✓ En uso" · 🔒 Arena "Consigue: El despertar" · Noche (sorted by id) |
+| Focus Arena (locked) | previews: `--c-bg` #2a1708, music playing, volume 0.49 |
+| Focus Noche | `video.backdrop` playing, `#theme-music` playing, volume 0.56 (0.8 × 0.7) **before any trusted input**: autoplay works, the retry path was not needed |
+| Esc | default back, no video, no music |
+| Enter on Noche, Salir, relaunch | `[launcher] theme = noche`; after relaunch Noche shown, video + music playing |
+| Options › General › Volumen de la música 70 → 30, Guardar | `music_volume = 30`, `#theme-music.volume` 0.24 |
+| `unlocked.json` with story_prologue, missions_1, vs_1 | Logros "3 / 24 · 13 %", "18 oct 2026 · Edson", "🎨 Abre el tema Arena" → Enter → Temas on Arena, unlocked → applied (`theme = arena`) → Esc → Logros → Esc → menu |
+| `unlocked.json` = `{` | Logros "0 / 24 · 0 %", Arena locked, default shown, `theme = arena` kept, file SHA-256 unchanged (021fb596…) |
+| 1920×1080 and 1280×800, Logros and Temas | everything inside the viewport, Temas grid without scroll (`build/e2e5b/06_*.png`) |
+| Iniciar DxD 1.1.4 with Noche, `e2e3.py hideout` | while the game runs `#theme-music.paused` and `video.backdrop.paused` true |
+| Launcher tree CPU (launcher + 7 msedgewebview2) over 30 s in the hideout | Noche 0.219 s, default 0.203 s (limit: default + 0.5 s) |
+| F1 → Sí | back in the launcher, music and video resume |
+
+**Plan defects found.**
+1. T5: Logros → Temas (locked theme, previewed) → Enter → Logros → Esc left the main menu showing the locked theme's
+   colours and music; only Esc out of Temas restored the applied theme. The Temas → Logros link restores it too
+   (7f70a68, new ThemesFlow test that failed before).
+2. Gates: with Vitest 5, `npx vitest run | tail -5` prints jsdom's environment notice, not the summary; grep
+   `Tests ` instead.
+3. Tooling: `Emulation.setDeviceMetricsOverride` lasts only for its DevTools session, so a separate `size` call is
+   lost when `cdp.mjs` exits; `build/e2e3/cdp.mjs` now takes `CDP_SIZE="<w> <h>"` (applied per call) and a trusted
+   `press` command.
+4. A corrupt `unlocked.json` is silent (no `[ACH]` line), unlike a bad catalogue; acceptable per the contract
+   ("nothing earned"), worth a log line in Plan 2 when the game owns the file.
+5. Selection under a still mouse: Chromium sends a mouse move after layout changes, so a pointer resting over the
+   window selects the row/card under it (`onMouseEnter`) when Logros/Temas open. Same as the other screens; not
+   changed.
+
+**Not verified here (user check).** Sound itself (the E2E reads element state, nobody listened), the DualSense / gilrs
+path (Step 3: move/confirm/back sounds with Noche, L1/R1 filters), the user's own PC and later the Steam Deck
+(WebKitGTK autoplay, `.webm`; part 7). Next: Plan 2 (game: progress struct, evaluator, toast) with writing-plans
+from spec §4 and §5; the catalogue stays a draft until then.
