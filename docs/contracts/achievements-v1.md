@@ -20,6 +20,8 @@ Official and fixed: the project defines it, every player has the same list. The 
 - Every entry has a `when` verified against the user's saves and the game (`docs/p3_achievement_facts.md`);
   the game evaluates them (psp_achievements). An id published with a `when` never changes; a dropped id is
   never reused.
+- Optional top-level `"credits": {"es", "en"}`: one line the launcher shows at the bottom of Logros (for the
+  sources a catalogue owes ideas to). The game ignores it.
 - Readers ignore unknown keys. Another `version` = no catalogue.
 
 ## Earned — `<portable root>/achievements/unlocked.json`
