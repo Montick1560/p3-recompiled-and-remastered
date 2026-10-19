@@ -139,3 +139,10 @@ Achievements: `vs_1` (versus ≥ 1) and `vs_50` (≥ 50) back with their draft m
 game's "enfrentamiento"), new `coop_1`, `coop_100`, `recruit_10`, `team_points_10000`; `secret_completionist` gains
 their top leaves. DATA04 earns all 22; DATA08 earns `missions_1`. "% victorias" (56 %) is not stored as a number
 in the block and "Máx. nivel de clase" is not in it.
+
+### Team ranking screen (Rango inter. del equipo)
+
+"Héroes derrotados — Edson 15,542" = the synced block's `+0x22558` (0x3CB6) exactly; live copy `+0xF4D8` = 15732 in
+DATA04, 0 in DATA08. Fact `team.heroes_defeated` (0xF4D8, 4 bytes, 0..100000000). `heroes_defeated_10`,
+`heroes_defeated_100` and hidden `secret_heroes_1000` come back with their draft meaning; `secret_completionist`
+gains `team.heroes_defeated >= 1000`. DATA04 earns all 25; DATA08 earns `missions_1`.
