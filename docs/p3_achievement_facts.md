@@ -210,7 +210,7 @@ All from facts already verified (`mission.<id>`, `kaching`, `playtime.seconds`, 
 region bosses Majidonga 33, Dogaeen 73, Ganodias 113, Shooshookle 153, Cioking 193, Zuttankarmen 233;
 `dragon_hunter` (33, 55, 56), `dragon_lord` (those + [Multi] dragons 42, 82, 202, 282); `bonedeth_all` (57, 95, 135,
 175, 215); `racer_all` (62, 64, 182, 183); `hoshipon_all` (212, 213); `replay_multi_100` (any [Multi] >= 100, not in
-`secret_completionist`: an `any`); `replay_tomb_100` (28 "Tomb of Tolerance" >= 100, the list's name for id 28);
+`secret_completionist`: an `any`); `replay_libera_100` (282 [Multi] Libera >= 100; the user preferred it to a "Tomb of Tolerance" one);
 `kaching_1m`; `playtime_100h` / `playtime_1000h` (seconds); `ton_all_40` / `chin_all_40` / `kan_all_40`.
 DATA04 earns all but `racer_all` (183 "A Horse's Pride" = 0) and the three family masters (Ton Wooyari 36, Chin
 Taterazay 39, Kan Yumiyacha 32).
