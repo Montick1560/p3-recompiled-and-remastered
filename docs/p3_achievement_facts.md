@@ -117,3 +117,25 @@ the English release.
 Beating the special mission "Goruru, el engendro legendario" once moved one byte, `+0xEEA2` (slot 6 + 0x0E), 5 → 6
 (0 in DATA08); beating it again moved nothing specific. So it is not a defeat counter (a "best level beaten" max is
 likely). Left out until it is checked with the game's debug mode.
+
+## Third pass (2026-10-18): team stats (Tótem de equipo)
+
+The team totem screen of the user's save shows "Misiones coops. completadas 1597, Enfrentamientos completados 994,
+Reclutado 222, Puntos de tu equipo 106180, Tiempo de juego 1843:53:45" for its last sync (2025/03/08). Those exact
+values are a block at `+0x22500` (coop `+0x22534`, versus `+0x22538`, recruited `+0x22540`, points `+0x2254C`,
+play time `+0x22584`). The same layout sits 0x13080 bytes earlier at `+0xF480` with the live values (play time
+`+0xF504` = the live play time, verified ticking; coop 1622, versus 1009, recruited 222, points 106202 in DATA04,
+all ≥ the synced ones); DATA08 is 0 in both blocks. Facts use the live block:
+
+| fact | offset | size | signed | bit | count | min | max | DATA04 | DATA08 | evidence |
+|---|---|---|---|---|---|---|---|---|---|---|
+| team.coop_missions | 0xF4B4 | 4 | no | -1 | 0 | 0 | 1000000 | 1622 | 0 | totem "Misiones coops. completadas" (synced copy 1597) |
+| team.versus | 0xF4B8 | 4 | no | -1 | 0 | 0 | 1000000 | 1009 | 0 | totem "Enfrentamientos completados" (synced copy 994) |
+| team.recruited | 0xF4C0 | 4 | no | -1 | 0 | 0 | 1000000 | 222 | 0 | totem "Reclutado" 222 |
+| team.points | 0xF4CC | 4 | no | -1 | 0 | 0 | 100000000 | 106202 | 0 | totem "Puntos de tu equipo" (synced copy 106180) |
+
+Not seen moving live (needs online play); verified by the screen values, the twin layout and the live play time.
+Achievements: `vs_1` (versus ≥ 1) and `vs_50` (≥ 50) back with their draft meaning ("desafío VS" reworded to the
+game's "enfrentamiento"), new `coop_1`, `coop_100`, `recruit_10`, `team_points_10000`; `secret_completionist` gains
+their top leaves. DATA04 earns all 22; DATA08 earns `missions_1`. "% victorias" (56 %) is not stored as a number
+in the block and "Máx. nivel de clase" is not in it.

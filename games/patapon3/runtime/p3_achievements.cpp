@@ -60,6 +60,10 @@ const PspFact kFacts[] = {
     {"archfiend.restraint", 0xEE8A, 1, false, -1, 0, 0, 255},
     {"archfiend.inflexibility", 0xEEB2, 1, false, -1, 0, 0, 255},
     {"archfiend.tolerance", 0xEEDA, 1, false, -1, 0, 0, 255},
+    {"team.coop_missions", 0xF4B4, 4, false, -1, 0, 0, 1000000},
+    {"team.versus", 0xF4B8, 4, false, -1, 0, 0, 1000000},
+    {"team.recruited", 0xF4C0, 4, false, -1, 0, 0, 1000000},
+    {"team.points", 0xF4CC, 4, false, -1, 0, 0, 100000000},
 };
 
 const PspAchievementSource kSources[] = {
