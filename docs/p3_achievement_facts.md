@@ -180,3 +180,9 @@ Cannogabang). Each companion block has only its family unlocked in DATA04; in DA
 at Nv 1 (the Cuartel showed "Kan Nv1, Chin Nv1, Ton Nv1"). Facts `ton.<class>.level`, `chin.<class>.level`,
 `kan.<class>.level` (21). Achievements `ton_32`, `chin_32`, `kan_32` (any class of that hero ≥ 32). They are not part
 of `secret_completionist`: an `any` cannot sit inside its `all` (one level of nesting). DATA04 earns the three.
+
+### The ending
+
+`story_ending` "El Final" (draft id, same meaning): the Archfiend of Tolerance is the last stage and only opens after
+the other six (user), so the ending = all seven `archfiend.*` ≥ 1, the same condition as `story_all_archfiends`.
+Covered by `secret_completionist` (it already holds the seven leaves). DATA04 earns it; DATA08 does not.
