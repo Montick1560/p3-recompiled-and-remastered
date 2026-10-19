@@ -186,3 +186,20 @@ of `secret_completionist`: an `any` cannot sit inside its `all` (one level of ne
 `story_ending` "El Final" (draft id, same meaning): the Archfiend of Tolerance is the last stage and only opens after
 the other six (user), so the ending = all seven `archfiend.*` ≥ 1, the same condition as `story_all_archfiends`.
 Covered by `secret_completionist` (it already holds the seven leaves). DATA04 earns it; DATA08 does not.
+
+## Per-mission clear counts (2026-10-18)
+
+With the community "Patapon 3 Master ID List" (Missions tab; the user's copy, not vendored): the save keeps one byte
+per mission id at `+0xEDCA + id` = times cleared (capped at 100). The "Archfiend table" above is this array: missions
+32, 72, 112, 152, 192, 232 (Valor, Purity, Justice, Earnestness, Restraint, Adamance) and 272 (Tolerance, not named in
+the list). The only DATA08 mission is 0 (= 1); the live prologue clear moved id 1 from 0 to 1. Facts `mission.<id>`
+(1 byte, 0..255). English Archfiend names corrected to the official ones: Impetuosidad = Earnestness,
+Inflexibilidad = Adamance.
+
+New achievements (all `mission.<id> >= 1`, all inside `secret_completionist`): Dark Heroes Naughtyfins 53, Sonarchy
+93, Ravenous 133, Buzzcrave 173, Slogturtle 222 (`dark_hero_naughtyfins` / `_sonarchy` / `_slogturtle` keep their draft
+meaning; `_ravenous`, `_buzzcrave` are new); Goruru = 216 "Legendary Field Gorl" (moved 5 -> 6 live on the first clear,
+did not move on the second); [Multi] Valo 42, Inosen 82, Justi 122, Feisu 162, Hyumitto 202, Forudo 242 and Libera 282
+(282 inferred from the 40-step pattern and the save detail "Última misión: [Multi] El dragón oscuro Libera"; not named
+in the list); special bosses Manboth 54, Kacchindonga 56, Centura 96, Mochicchichi 136, Zaknel 176. Not found yet:
+"Ragewolf and the Mysterious Birch Grove", "The Legendary Gigantus", Covet-Hiss, Gigante King (not in the list).
