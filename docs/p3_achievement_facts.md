@@ -169,3 +169,14 @@ Facts `class.<name>.level` (4 bytes, 0..99) for the 21 hero classes 2, 3, 4, 5, 
 (all 21 ≥ 40); `secret_completionist` gains the 21 ≥ 40 leaves. DATA04 (Yumiyacha 35, Destrobo 34, Guardira 35,
 Jamsch 36, Pyokorider 38, Alosson 38, the rest 40) earns `class_level_32` and `class_level_40`, not `class_all_40`,
 and so no longer `secret_completionist` (already earned stays earned); DATA08 earns `missions_1`.
+
+### Ton, Chin and Kan
+
+The class table is one of four identical blocks of 35 records (class id 0..34, 0x84 bytes, level `+0x44`, unlocked
+`+0x38`), 0x1620 bytes apart: `+0x94F8` Uberhero, `+0xAB18` Ton (spear family: Yarida, Kibadda, Piekron, Wooyari,
+Pyokorider, Cannassault, Charibasa), `+0xC138` Chin (shield family: Taterazay, Destrobo, Guardira, Tondenga, Myamsar,
+Bowmunk, Grenburr), `+0xD758` Kan (bow family: Yumiyacha, Alosson, Wondabarappa, Jamsch, Oohoroc, Pingrek,
+Cannogabang). Each companion block has only its family unlocked in DATA04; in DATA08 each has only its base class
+at Nv 1 (the Cuartel showed "Kan Nv1, Chin Nv1, Ton Nv1"). Facts `ton.<class>.level`, `chin.<class>.level`,
+`kan.<class>.level` (21). Achievements `ton_32`, `chin_32`, `kan_32` (any class of that hero ≥ 32). They are not part
+of `secret_completionist`: an `any` cannot sit inside its `all` (one level of nesting). DATA04 earns the three.

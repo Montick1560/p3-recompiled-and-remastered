@@ -21,12 +21,12 @@ static std::string slurp(const std::string& p) {
 }
 
 static const std::vector<std::string> kWant04 = {"archfiend_impetuosity", "archfiend_inflexibility", "archfiend_justice",
-    "archfiend_purity", "archfiend_restraint", "archfiend_tolerance", "archfiend_valor", "class_level_32", "class_level_40",
+    "archfiend_purity", "archfiend_restraint", "archfiend_tolerance", "archfiend_valor", "chin_32", "class_level_32", "class_level_40",
     "coop_1", "coop_100",
-    "hero_level_10", "hero_level_30", "heroes_defeated_10", "heroes_defeated_100",
+    "hero_level_10", "hero_level_30", "heroes_defeated_10", "heroes_defeated_100", "kan_32",
     "missions_1", "missions_100", "missions_1000", "multi_100", "multi_1000", "perfect_1000", "perfect_100000",
     "popular_10", "popular_30", "recruit_10", "secret_heroes_1000", "story_all_archfiends",
-    "story_first_archfiend", "story_prologue", "team_points_10000", "vs_1", "vs_50"};
+    "story_first_archfiend", "story_prologue", "team_points_10000", "ton_32", "vs_1", "vs_50"};
 static const std::vector<std::string> kWant08 = {"missions_1"};
 
 // Puts the save at a heap address and the dxd-1.1.4 chain (from the doc) in front of it.
