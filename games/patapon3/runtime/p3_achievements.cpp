@@ -65,6 +65,9 @@ const PspFact kFacts[] = {
     {"team.recruited", 0xF4C0, 4, false, -1, 0, 0, 1000000},
     {"team.points", 0xF4CC, 4, false, -1, 0, 0, 100000000},
     {"team.heroes_defeated", 0xF4D8, 4, false, -1, 0, 0, 100000000},
+    {"team.multiplayer", 0xF4B0, 4, false, -1, 0, 0, 1000000},
+    {"team.cards", 0xF4C4, 4, false, -1, 0, 0, 1000000},
+    {"team.perfects", 0xF4D0, 4, false, -1, 0, 0, 1000000000},
 };
 
 const PspAchievementSource kSources[] = {

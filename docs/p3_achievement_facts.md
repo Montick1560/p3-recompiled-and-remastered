@@ -146,3 +146,10 @@ in the block and "Máx. nivel de clase" is not in it.
 DATA04, 0 in DATA08. Fact `team.heroes_defeated` (0xF4D8, 4 bytes, 0..100000000). `heroes_defeated_10`,
 `heroes_defeated_100` and hidden `secret_heroes_1000` come back with their draft meaning; `secret_completionist`
 gains `team.heroes_defeated >= 1000`. DATA04 earns all 25; DATA08 earns `missions_1`.
+
+The user read on the ranking screen: "Multijugadores completados" 1157 = synced `+0x22530`, "Tarjetas conseguidas"
+33 = synced `+0x22544`. "Perfectos" = synced `+0x22550` (669968; to be confirmed on screen); its live copy `+0xF4D0`
+moved with every mission played live (+106, +17, +27), DATA08 39 (prologue drums). Facts: `team.multiplayer`
+(0xF4B0, 1171 in DATA04), `team.cards` (0xF4C4, 33), `team.perfects` (0xF4D0, 681315). Achievements `multi_100`,
+`multi_1000`, `popular_10`, `popular_30`, `perfect_1000`, `perfect_100000`; `secret_completionist` gains the top
+three. Synced `+0x2253C` (1771) is not identified. DATA04 earns all 31; DATA08 earns `missions_1`.
