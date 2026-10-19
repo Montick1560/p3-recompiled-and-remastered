@@ -147,6 +147,14 @@ const PspFact kFacts[] = {
     {"mission.213", 0xEE9F, 1, false, -1, 0, 0, 255},
     {"mission.215", 0xEEA1, 1, false, -1, 0, 0, 255},
     {"mission.233", 0xEEB3, 1, false, -1, 0, 0, 255},
+    {"mission.63", 0xEE09, 1, false, -1, 0, 0, 255},
+    {"mission.103", 0xEE31, 1, false, -1, 0, 0, 255},
+    {"mission.104", 0xEE32, 1, false, -1, 0, 0, 255},
+    {"mission.143", 0xEE59, 1, false, -1, 0, 0, 255},
+    {"mission.144", 0xEE5A, 1, false, -1, 0, 0, 255},
+    {"mission.184", 0xEE82, 1, false, -1, 0, 0, 255},
+    {"mission.223", 0xEEA9, 1, false, -1, 0, 0, 255},
+    {"mission.224", 0xEEAA, 1, false, -1, 0, 0, 255},
 };
 
 const PspAchievementSource kSources[] = {

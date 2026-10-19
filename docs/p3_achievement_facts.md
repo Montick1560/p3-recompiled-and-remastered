@@ -214,3 +214,15 @@ region bosses Majidonga 33, Dogaeen 73, Ganodias 113, Shooshookle 153, Cioking 1
 `kaching_1m`; `playtime_100h` / `playtime_1000h` (seconds); `ton_all_40` / `chin_all_40` / `kan_all_40`.
 DATA04 earns all but `racer_all` (183 "A Horse's Pride" = 0) and the three family masters (Ton Wooyari 36, Chin
 Taterazay 39, Kan Yumiyacha 32).
+
+### Inspired by the PS4/PS5 trophies and the RetroAchievements set (2026-10-18)
+
+Conditions taken from those lists (names and texts are our own), only where they reduce to facts already verified:
+`dungeon_twice` (any Archfiend >= 2), `sukopon_boss` (any Sukopon boss 54, 56, 96, 136, 176, 216 >= 1),
+`unit_level_30` (any of the 42 hero/companion class levels >= 30), `uberhero_15/25`, `ton_15/25`, `chin_15/25`,
+`kan_15/25`; Dark Hero rematches named in the ID list (63 "Ephemeral Dreams Dashed", 103 "Total Ultrasonic Air
+Defense!", 143 "Anything for a Rare Item", 183 "A Horse's Pride", 223 "What He Fights For") and Dark Uberhero missions
+(64, 104, 144, 184, 224); `duel_twice` (any of the ten duel missions >= 2). In-mission conditions (no summon, no
+Fever, flags, timers, scores) are not readable from the progress struct and are left out. Class unlocks wait for the
+unlock flag (+0x38) to be confirmed live. DATA04 misses `rematch_naughtyfins` (63 = 0), `rematch_buzzcrave`
+(183 = 0) and `dark_uber_pride` (64 = 0).
