@@ -111,3 +111,9 @@ the English release.
   `hero_level_30`, `missions_1`, `missions_100`, `missions_1000`, `secret_completionist`, `story_all_archfiends`,
   `story_first_archfiend`, `story_prologue` (16).
 - **DATA08 earns** (sorted): `missions_1` (1).
+
+## Goruru (not used, 2026-10-18)
+
+Beating the special mission "Goruru, el engendro legendario" once moved one byte, `+0xEEA2` (slot 6 + 0x0E), 5 → 6
+(0 in DATA08); beating it again moved nothing specific. So it is not a defeat counter (a "best level beaten" max is
+likely). Left out until it is checked with the game's debug mode.
