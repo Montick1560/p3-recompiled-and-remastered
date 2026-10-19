@@ -153,3 +153,19 @@ moved with every mission played live (+106, +17, +27), DATA08 39 (prologue drums
 (0xF4B0, 1171 in DATA04), `team.cards` (0xF4C4, 33), `team.perfects` (0xF4D0, 681315). Achievements `multi_100`,
 `multi_1000`, `popular_10`, `popular_30`, `perfect_1000`, `perfect_100000`; `secret_completionist` gains the top
 three. Synced `+0x2253C` (1771) is not identified. DATA04 earns all 31; DATA08 earns `missions_1`.
+
+## Class levels (2026-10-18)
+
+One 0x84-byte record per class id N (1..34, PataponRichPresence list) at `+0x957C + (N-1)*0x84`: exp `+0x40`, level
+`+0x44`, unlocked flag (probably) `+0x38`. Evidence: the current class's exp/level (`+0xF290`/`+0xF294`) equals its
+record in every snapshot: Yumiyacha (4) Nv 35 = record 4 in DATA04 (and the save detail "Yumiyacha Nv 35"),
+Pyokorider (14) Nv 38 = record 14 live, Charibasa (16) / Yarida (2) Nv 40 live; DATA08 has only Yarida unlocked at
+Nv 1 (the Cuartel showed "Yarida Nv 1"). Classes 1, 6, 7, 8, 10, 11 (Hatapon, Dekapon, Megapon, Mahopon, Charipon,
+Chakapon) stay Nv 1 and locked even in DATA04 (not hero classes). The Dark Hero classes 28..34 are Nv 32..34 with
+exp 0 in DATA04 (they do not level with exp): left out of the class achievements.
+
+Facts `class.<name>.level` (4 bytes, 0..99) for the 21 hero classes 2, 3, 4, 5, 9, 12..27. Achievements:
+`class_level_32` "Héroe sin par" (any ≥ 32), `class_level_40` "Héroe curtido" (any ≥ 40), `class_all_40` "Supremacía"
+(all 21 ≥ 40); `secret_completionist` gains the 21 ≥ 40 leaves. DATA04 (Yumiyacha 35, Destrobo 34, Guardira 35,
+Jamsch 36, Pyokorider 38, Alosson 38, the rest 40) earns `class_level_32` and `class_level_40`, not `class_all_40`,
+and so no longer `secret_completionist` (already earned stays earned); DATA08 earns `missions_1`.
