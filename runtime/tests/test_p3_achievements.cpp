@@ -22,15 +22,17 @@ static std::string slurp(const std::string& p) {
 
 static const std::vector<std::string> kWant04 = {
     "archfiend_impetuosity", "archfiend_inflexibility", "archfiend_justice", "archfiend_purity",
-    "archfiend_restraint", "archfiend_tolerance", "archfiend_valor", "boss_centura", "boss_goruru",
-    "boss_kacchindonga", "boss_manboth", "boss_mochicchichi", "boss_zaknel", "chin_32", "class_level_32",
+    "archfiend_restraint", "archfiend_tolerance", "archfiend_valor", "bonedeth_all", "boss_centura", "boss_cioking",
+    "boss_dogaeen", "boss_ganodias", "boss_goruru", "boss_kacchindonga", "boss_majidonga", "boss_manboth",
+    "boss_mochicchichi", "boss_shooshookle", "boss_zaknel", "boss_zuttankarmen", "chin_32", "class_level_32",
     "class_level_40", "coop_1", "coop_100", "dark_hero_buzzcrave", "dark_hero_naughtyfins", "dark_hero_ravenous",
-    "dark_hero_slogturtle", "dark_hero_sonarchy", "hero_level_10", "hero_level_30", "heroes_defeated_10",
-    "heroes_defeated_100", "kan_32", "missions_1", "missions_100", "missions_1000", "multi_100", "multi_1000",
-    "multi_feisu", "multi_forudo", "multi_hyumitto", "multi_inosen", "multi_justi", "multi_libera", "multi_valo",
-    "perfect_1000", "perfect_100000", "popular_10", "popular_30", "recruit_10", "secret_heroes_1000",
-    "story_all_archfiends", "story_ending", "story_first_archfiend", "story_prologue", "team_points_10000",
-    "ton_32", "vs_1", "vs_50"};
+    "dark_hero_slogturtle", "dark_hero_sonarchy", "dragon_hunter", "dragon_lord", "hero_level_10", "hero_level_30",
+    "heroes_defeated_10", "heroes_defeated_100", "hoshipon_all", "kaching_1m", "kan_32", "missions_1",
+    "missions_100", "missions_1000", "multi_100", "multi_1000", "multi_feisu", "multi_forudo", "multi_hyumitto",
+    "multi_inosen", "multi_justi", "multi_libera", "multi_valo", "perfect_1000", "perfect_100000", "playtime_1000h",
+    "playtime_100h", "popular_10", "popular_30", "recruit_10", "replay_multi_100", "replay_tomb_100",
+    "secret_heroes_1000", "story_all_archfiends", "story_ending", "story_first_archfiend", "story_prologue",
+    "team_points_10000", "ton_32", "vs_1", "vs_50"};
 static const std::vector<std::string> kWant08 = {"missions_1"};
 
 // Puts the save at a heap address and the dxd-1.1.4 chain (from the doc) in front of it.

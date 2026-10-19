@@ -203,3 +203,14 @@ did not move on the second); [Multi] Valo 42, Inosen 82, Justi 122, Feisu 162, H
 (282 inferred from the 40-step pattern and the save detail "Última misión: [Multi] El dragón oscuro Libera"; not named
 in the list); special bosses Manboth 54, Kacchindonga 56, Centura 96, Mochicchichi 136, Zaknel 176. Not found yet:
 "Ragewolf and the Mysterious Birch Grove", "The Legendary Gigantus", Covet-Hiss, Gigante King (not in the list).
+
+### Batch from the ID list (2026-10-18)
+
+All from facts already verified (`mission.<id>`, `kaching`, `playtime.seconds`, `ton/chin/kan.<class>.level`):
+region bosses Majidonga 33, Dogaeen 73, Ganodias 113, Shooshookle 153, Cioking 193, Zuttankarmen 233;
+`dragon_hunter` (33, 55, 56), `dragon_lord` (those + [Multi] dragons 42, 82, 202, 282); `bonedeth_all` (57, 95, 135,
+175, 215); `racer_all` (62, 64, 182, 183); `hoshipon_all` (212, 213); `replay_multi_100` (any [Multi] >= 100, not in
+`secret_completionist`: an `any`); `replay_tomb_100` (28 "Tomb of Tolerance" >= 100, the list's name for id 28);
+`kaching_1m`; `playtime_100h` / `playtime_1000h` (seconds); `ton_all_40` / `chin_all_40` / `kan_all_40`.
+DATA04 earns all but `racer_all` (183 "A Horse's Pride" = 0) and the three family masters (Ton Wooyari 36, Chin
+Taterazay 39, Kan Yumiyacha 32).
