@@ -47,8 +47,8 @@ static PromptAtlasSpec spec_for(const RgbaImage& img) {
     s.width = 256;
     s.height = 128;
     s.format = 4;
-    s.sig_x = 0; s.sig_y = 99; s.sig_w = 128; s.sig_h = 29;
-    s.sig_hashes = {prompt_atlas_signature(img.px.data(), img.w, s.sig_x, s.sig_y, s.sig_w, s.sig_h)};
+    s.sig_rects = {{0, 99, 79, 17}, {0, 116, 125, 12}};
+    s.sig_hashes = {prompt_atlas_signature(img.px.data(), img.w, s.sig_rects)};
     s.cells = {{PromptGlyph::Cross, 41, 117, 9, 11},
                {PromptGlyph::LR, 96, 117, 16, 11},
                {PromptGlyph::StickVertical, 115, 117, 9, 11},
@@ -66,15 +66,20 @@ static bool in_cells(const PromptAtlasSpec& s, int x, int y, int k) {
 
 static void signature_sees_only_its_region() {
     RgbaImage img = synthetic_atlas();
-    const uint64_t a = prompt_atlas_signature(img.px.data(), img.w, 0, 99, 128, 29);
-    CHECK(a == prompt_atlas_signature(img.px.data(), img.w, 0, 99, 128, 29), "stable");
+    const std::vector<PromptRect> R = {{0, 99, 79, 17}, {0, 116, 125, 12}};
+    const uint64_t a = prompt_atlas_signature(img.px.data(), img.w, R);
+    CHECK(a == prompt_atlas_signature(img.px.data(), img.w, R), "stable");
     img.px[(10 * 256 + 200) * 4 + 3] ^= 0xFF;  // outside the region
-    CHECK(a == prompt_atlas_signature(img.px.data(), img.w, 0, 99, 128, 29), "outside change ignored");
+    CHECK(a == prompt_atlas_signature(img.px.data(), img.w, R), "outside change ignored");
     img.px[(120 * 256 + 50) * 4 + 3] ^= 0xFF;  // inside
-    CHECK(a != prompt_atlas_signature(img.px.data(), img.w, 0, 99, 128, 29), "inside change seen");
+    CHECK(a != prompt_atlas_signature(img.px.data(), img.w, R), "inside change seen");
     RgbaImage faint = synthetic_atlas();
-    for (size_t i = 3; i < faint.px.size(); i += 4) if (faint.px[i] == 0xFF) faint.px[i] = 0xC0;
-    CHECK(a == prompt_atlas_signature(faint.px.data(), faint.w, 0, 99, 128, 29), "mask, not exact alpha");
+    for (size_t i = 3; i < faint.px.size(); i += 4) if (faint.px[i] == 0xFF) faint.px[i] = 0x11;
+    CHECK(a == prompt_atlas_signature(faint.px.data(), faint.w, R),
+          "any non-zero alpha counts: the palette's alpha ramp differs per language");
+    RgbaImage second = synthetic_atlas();
+    second.px[(126 * 256 + 110) * 4 + 3] ^= 0xFF;  // in the second rectangle only
+    CHECK(a != prompt_atlas_signature(second.px.data(), second.w, R), "the second rectangle counts");
 }
 
 static void compose_changes_only_cells(int k) {

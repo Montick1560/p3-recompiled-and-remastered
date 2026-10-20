@@ -31,12 +31,14 @@ const RgbaImage* prepared_icon(const std::string& name, uint8_t gray, uint8_t ho
 
 }  // namespace
 
-uint64_t prompt_atlas_signature(const uint8_t* rgba, int w, int x, int y, int rw, int rh) {
+uint64_t prompt_atlas_signature(const uint8_t* rgba, int w, const std::vector<PromptRect>& rects) {
     uint64_t h = 0xCBF29CE484222325ull;
-    for (int yy = y; yy < y + rh; yy++) {
-        for (int xx = x; xx < x + rw; xx++) {
-            h ^= rgba[(static_cast<size_t>(yy) * w + xx) * 4 + 3] >= 0x40 ? 1u : 0u;
-            h *= 0x100000001B3ull;
+    for (const PromptRect& r : rects) {
+        for (int yy = r.y; yy < r.y + r.h; yy++) {
+            for (int xx = r.x; xx < r.x + r.w; xx++) {
+                h ^= rgba[(static_cast<size_t>(yy) * w + xx) * 4 + 3] != 0 ? 1u : 0u;
+                h *= 0x100000001B3ull;
+            }
         }
     }
     return h;

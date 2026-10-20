@@ -8,7 +8,9 @@
 // game draws some cells rotated by 90 degrees through the UVs (the hideout's "L/R/+" uses the
 // up/down D-pad turned sideways), which the drawn icons tolerate. The pill sprites start at row 101,
 // so the pill cells are the pills' own extent (y 102..113). The atlas is recognised by the
-// alpha mask of the pills + glyph area left of the labels (x 0..78, y 99..127).
+// coverage of the pills (x 0..78, y 99..115) and the glyph row (x 0..124, y 116..127): identical in
+// the Spanish, English, French, Italian and German atlases (only the labels and the palette's alpha
+// ramp differ, so the signature ignores alpha levels).
 #include "p3_prompts.h"
 
 #include "psp_ge_constants.h"
@@ -21,12 +23,9 @@ void p3_prompts_register() {
     s.width = 256;
     s.height = 128;
     s.format = GE_TFMT_CLUT4;
-    s.sig_x = 0;
-    s.sig_y = 99;
-    s.sig_w = 79;
-    s.sig_h = 29;
+    s.sig_rects = {{0, 99, 79, 17}, {0, 116, 125, 12}};
     s.sig_hashes = {
-        0x71A00DAEC75E1209ull,  // DxD 1.1.4, Spanish
+        0xBDBB50705ED7F138ull,  // DxD 1.1.4: Spanish, English, French, Italian, German
     };
     s.gray = 0x7F;
     s.hole = 0x17;

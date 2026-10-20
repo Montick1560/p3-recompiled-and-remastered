@@ -16,17 +16,22 @@ struct PromptCell {
     int x, y, w, h;  // texels of the original atlas
 };
 
+struct PromptRect {
+    int x, y, w, h;
+};
+
 struct PromptAtlasSpec {
     int width = 0, height = 0, format = 0;    // GE texture size and GE_TFMT_*
-    int sig_x = 0, sig_y = 0, sig_w = 0, sig_h = 0;  // recognition region
+    std::vector<PromptRect> sig_rects;        // recognition regions (texels)
     std::vector<uint64_t> sig_hashes;         // accepted prompt_atlas_signature() values
     std::vector<PromptCell> cells;
     uint8_t gray = 0x7F;  // the atlas's glyph colour: icon tint and the L/R slash
     uint8_t hole = 0x17;  // the dark interior of the atlas's glyphs: fills an icon's cut-out symbol
 };
 
-// FNV-1a 64 of the region's alpha mask (a >= 0x40 -> 1), row by row; `w` = image width.
-uint64_t prompt_atlas_signature(const uint8_t* rgba, int w, int x, int y, int rw, int rh);
+// FNV-1a 64 of the regions' coverage mask (alpha != 0 -> 1), row by row; `w` = image width. Only
+// coverage counts: a palette's alpha ramp may differ per language while every glyph sits in place.
+uint64_t prompt_atlas_signature(const uint8_t* rgba, int w, const std::vector<PromptRect>& rects);
 
 // Registers the patcher for `spec` (one atlas; a later call replaces it). PSPRECOMP_BUTTON_ICONS:
 // gray (default) / color; "off" registers nothing. PSPRECOMP_PROMPTS_SIG_LOG=1 logs the signature of

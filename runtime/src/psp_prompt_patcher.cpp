@@ -21,7 +21,7 @@ bool candidate(const GeTexDecodeParams& p) {
 }
 
 bool recognise(const GeTexDecodeParams& p, const uint8_t* rgba) {
-    const uint64_t sig = prompt_atlas_signature(rgba, p.width, g_spec.sig_x, g_spec.sig_y, g_spec.sig_w, g_spec.sig_h);
+    const uint64_t sig = prompt_atlas_signature(rgba, p.width, g_spec.sig_rects);
     const bool ok = std::find(g_spec.sig_hashes.begin(), g_spec.sig_hashes.end(), sig) != g_spec.sig_hashes.end();
     if (g_sig_log) {
         std::fprintf(stderr, "[PROMPTS] candidate 0x%08X sig=%016llX %s\n", p.addr,
