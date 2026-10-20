@@ -1,6 +1,7 @@
 // Unit tests for psp_prompt_atlas: recognising a help-bar atlas by a region of its alpha mask, and
 // composing a device / style variant (only the cells change, at any scale).
 #include "psp_prompt_atlas.h"
+#include "psp_prompt_raster.h"
 
 #include <algorithm>
 #include <cctype>
@@ -55,9 +56,11 @@ static PromptAtlasSpec spec_for(const RgbaImage& img) {
     return s;
 }
 
+// Inside a cell or its half-texel ring (the bilinear bleed of an enlarged image, cleared too).
 static bool in_cells(const PromptAtlasSpec& s, int x, int y, int k) {
+    const int m = k / 2;
     for (const PromptCell& c : s.cells)
-        if (x >= c.x * k && x < (c.x + c.w) * k && y >= c.y * k && y < (c.y + c.h) * k) return true;
+        if (x >= c.x * k - m && x < (c.x + c.w) * k + m && y >= c.y * k - m && y < (c.y + c.h) * k + m) return true;
     return false;
 }
 
@@ -101,6 +104,13 @@ static void compose_changes_only_cells(int k) {
             }
         }
     CHECK(outside_same, "pixels outside the cells are untouched");
+    bool clear_is_gray = true;  // transparent texels keep the atlas colour: no dark fringe when filtered
+    for (int y = 100 * k; y < 114 * k; y++)
+        for (int x = 1 * k; x < 38 * k; x++) {
+            const uint8_t* p = &img.px[(static_cast<size_t>(y) * img.w + x) * 4];
+            if (p[3] == 0 && (p[0] != 0x7F || p[1] != 0x7F || p[2] != 0x7F)) clear_is_gray = false;
+        }
+    CHECK(clear_is_gray, "cleared texels are (gray, 0) like the atlas's own transparent texels");
     CHECK(cross_opaque && green, "Xbox colour A is drawn in the cross cell");
 
     RgbaImage gray = before;
@@ -125,6 +135,32 @@ static void compose_changes_only_cells(int k) {
     CHECK(stick_same, "a glyph without an icon (keyboard stick) keeps the game's pixels");
 }
 
+// A bilinear x4 enlargement spreads each texel half a texel outwards: the ring around a redrawn cell
+// must not keep the old glyph's bleed (a faint box around the new icon).
+static void compose_clears_the_bilinear_halo() {
+    RgbaImage base;
+    base.w = 256;
+    base.h = 128;
+    base.px.assign(256 * 128 * 4, 0);
+    for (int y = 100; y < 114; y++)
+        for (int x = 1; x < 38; x++) {
+            uint8_t* p = &base.px[(y * 256 + x) * 4];
+            p[0] = p[1] = p[2] = 0x7F;
+            p[3] = 0xFF;
+        }
+    PromptAtlasSpec spec = spec_for(base);
+    RgbaImage img = rgba_resample(base, 1024, 512);
+    CHECK(img.px[(410 * 1024 + 2) * 4 + 3] > 0, "the enlargement bleeds left of the cell");
+    prompt_atlas_compose(spec, InputDevice::Keyboard, PromptStyle::Gray, defaults(), img);
+    bool halo = false;
+    for (int y = 398; y < 458; y++)
+        for (int x = 0; x < 160; x++) {
+            const bool ring = x < 4 || x >= 152 || y < 400 || y >= 456;
+            if (ring && img.px[(static_cast<size_t>(y) * 1024 + x) * 4 + 3] > 0) halo = true;
+        }
+    CHECK(!halo, "no bleed of the old pill around the cell");
+}
+
 static void variant_round_trip() {
     for (int d = 0; d < 4; d++)
         for (int s = 0; s < 2; s++) {
@@ -141,6 +177,7 @@ int main() {
     signature_sees_only_its_region();
     compose_changes_only_cells(1);
     compose_changes_only_cells(4);
+    compose_clears_the_bilinear_halo();
     variant_round_trip();
     std::printf("%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
