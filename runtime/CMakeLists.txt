@@ -150,6 +150,7 @@ set(RUNTIME_SOURCES
     src/psp_controls.cpp
     src/psp_input_device.cpp
     src/psp_prompts.cpp
+    src/psp_prompt_raster.cpp
     src/psp_eboot_loader.cpp
     src/psp_menu_prompt.cpp
     src/psp_achievements.cpp
@@ -779,6 +780,24 @@ add_executable(test_prompts tests/test_prompts.cpp src/psp_prompts.cpp src/psp_c
 target_include_directories(test_prompts PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_prompts PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME prompts_tests COMMAND test_prompts)
+
+# Button-prompt icons (Kenney Input Prompts 1.5, CC0) embedded in the exe: no data folder to ship.
+file(GLOB PSP_PROMPT_ICON_PNGS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/assets/button_prompts/*.png)
+set(PSP_PROMPT_ICONS_CPP ${CMAKE_CURRENT_BINARY_DIR}/prompt_icons_data.cpp)
+add_custom_command(OUTPUT ${PSP_PROMPT_ICONS_CPP}
+    COMMAND ${CMAKE_COMMAND} -DOUT=${PSP_PROMPT_ICONS_CPP} -DSYMBOL=g_prompt_icons
+            "-DFILES=${PSP_PROMPT_ICON_PNGS}" -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_files.cmake
+    DEPENDS ${PSP_PROMPT_ICON_PNGS} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_files.cmake
+    COMMENT "Embedding button-prompt icons" VERBATIM)
+target_sources(psprecomp_runtime PRIVATE ${PSP_PROMPT_ICONS_CPP})
+
+# Button-prompt raster helpers + the embedded icon set. Pure (no GL).
+add_executable(test_prompt_raster tests/test_prompt_raster.cpp src/psp_prompt_raster.cpp src/psp_prompts.cpp
+    src/psp_controls.cpp src/psp_input_device.cpp src/psp_texrep_png.cpp ${PSP_PROMPT_ICONS_CPP})
+target_include_directories(test_prompt_raster PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
+target_compile_options(test_prompt_raster PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME prompt_raster_tests COMMAND test_prompt_raster)
 
 add_executable(test_perf tests/test_perf.cpp src/psp_perf.cpp)
 target_include_directories(test_perf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
