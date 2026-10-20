@@ -26,6 +26,13 @@
       "tab": "general", "env": "PSPRECOMP_ACHIEVEMENT_TOASTS", "map": {"true": "1", "false": "0"},
       "label": {"es": "Avisos de logros", "en": "Achievement pop-ups"},
       "description": {"es": "Muestra un aviso en el juego al conseguir un logro (se guardan igual).", "en": "Shows a pop-up in game when you earn an achievement (they are recorded either way)."}
+    },
+    {
+      "section": "game", "key": "button_icons", "type": "enum", "values": ["gray", "color"], "default": "gray",
+      "tab": "general", "env": "PSPRECOMP_BUTTON_ICONS",
+      "label": {"es": "Iconos de botones", "en": "Button icons"},
+      "description": {"es": "Las barras de ayuda muestran las teclas o los botones de tu mando.", "en": "Help bars show your keys or your controller's buttons."},
+      "display": {"gray": {"es": "Gris", "en": "Gray"}, "color": {"es": "Color", "en": "Color"}}
     }
   ]
 }

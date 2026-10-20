@@ -186,6 +186,11 @@ How it got here:
 
 **Launcher (in progress).** A community launcher for the Patapon 3 port (main menu, options, launch and "back to the menu") is being built in a separate project. The game side reads a versioned `settings.ini` (`--settings`, `--log`; contract in [docs/contracts/settings-v1.md](docs/contracts/settings-v1.md)), and F1 or Select+Start held 1 s asks "Back to the menu?" and quits with exit code 10. Design: [docs/superpowers/specs/2026-10-17-launcher-part1-design.md](docs/superpowers/specs/2026-10-17-launcher-part1-design.md).
 
+**PC button prompts.** The Patapon 3 help bars show the keys or controller buttons the player
+actually uses (keyboard, Xbox / Steam Deck, DualShock 4, DualSense; the last input wins, launcher
+remaps included), in the game's gray or in colour (`PSPRECOMP_BUTTON_ICONS=gray|color|off`). Icons:
+[Kenney Input Prompts](https://kenney.nl/assets/input-prompts) (CC0), credited with thanks.
+
 See the [Roadmap](#roadmap) for where this is going next.
 
 ## Roadmap

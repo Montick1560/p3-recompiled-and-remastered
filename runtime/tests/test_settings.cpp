@@ -166,6 +166,17 @@ static void controls_and_skin() {
     CHECK(val(r, "PSPRECOMP_CONTROLS") == "<unset>" && logged(r, "PSPRECOMP_CONTROLS already set"), "env wins");
 }
 
+// Help-bar button icons (game_options.json button_icons -> PSPRECOMP_BUTTON_ICONS, psp_prompt_atlas.h).
+static void button_icons_key() {
+    const SettingsResolution d = psp_settings_resolve(slurp(kFix + "defaults.ini"), kCatalog, "C:/P", kNoEnv);
+    CHECK(val(d, "PSPRECOMP_BUTTON_ICONS") == "gray", "gray by default");
+    const SettingsResolution c = psp_settings_resolve("[game]\nbutton_icons = color\n", kCatalog, "C:/P", kNoEnv);
+    CHECK(val(c, "PSPRECOMP_BUTTON_ICONS") == "color", "color");
+    const SettingsResolution bad = psp_settings_resolve("[game]\nbutton_icons = blue\n", kCatalog, "C:/P", kNoEnv);
+    CHECK(val(bad, "PSPRECOMP_BUTTON_ICONS") == "gray" || val(bad, "PSPRECOMP_BUTTON_ICONS") == "<unset>",
+          "an invalid value keeps the default");
+}
+
 static void achievements_keys() {
     const SettingsResolution d = psp_settings_resolve(slurp(kFix + "defaults.ini"), kCatalog,
                                                       "C:/Juegos/Patapon 3", kNoEnv);
@@ -193,6 +204,7 @@ int main() {
     launcher_section_is_silent();
     controls_and_skin();
     achievements_keys();
+    button_icons_key();
     if (failures == 0) std::printf("test_settings: all passed\n");
     return failures == 0 ? 0 : 1;
 }

@@ -225,6 +225,7 @@ silently dropped. Full protocol details in the issue #35 section below.
 | `D <lists>` | Draw log: every PRIM of the next `<lists>` display lists prints a `[DL]` line to the log (full draw state, world/view/proj matrices, first two packed vertices) | `OK 0` |
 | `A` | Re-arm the per-function log budgets of `PSPRECOMP_FUNC_WATCH` / `_FUNC_ARGS` / `_OVL_ARGS` (send it right before the action you want traced) | `OK 0` |
 | `X <lo> <hi>` | Draw skip: PRIMs whose index inside their display list (`i=` in `[DL]` lines) is in `[lo, hi]` are not drawn (clears still run); bare `X` or `lo > hi` draws everything again. Bisects which draw paints a region | `OK 0` |
+| `P <keyboard\|xbox\|ps4\|ps5>` | Button prompts: show that input device's icons in the help bars now (input still switches it; `PSPRECOMP_INPUT_DEVICE=<name>` forces one for the whole run) | `OK 0` |
 
 ```bash
 printf 'B 10 250\n'   | nc 127.0.0.1 9999   # UP
