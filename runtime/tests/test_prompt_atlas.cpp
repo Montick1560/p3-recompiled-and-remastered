@@ -1,0 +1,147 @@
+// Unit tests for psp_prompt_atlas: recognising a help-bar atlas by a region of its alpha mask, and
+// composing a device / style variant (only the cells change, at any scale).
+#include "psp_prompt_atlas.h"
+
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <map>
+#include <string>
+
+static int failures = 0;
+#define CHECK(cond, msg) \
+    do { if (!(cond)) { std::printf("FAIL: %s (line %d)\n", msg, __LINE__); failures++; } } while (0)
+
+static const std::map<std::string, int32_t> kKeys = {
+    {"up", 1}, {"down", 2}, {"left", 3}, {"right", 4}, {"x", 5}, {"return", 6}, {"z", 7}, {"a", 8},
+    {"s", 9}, {"q", 10}, {"w", 11}, {"space", 12}, {"v", 13}, {"tab", 14}};
+static const std::map<std::string, int> kPads = {
+    {"a", 0}, {"b", 1}, {"x", 2}, {"y", 3}, {"back", 4}, {"start", 6}, {"leftstick", 7}, {"rightstick", 8},
+    {"leftshoulder", 9}, {"rightshoulder", 10}, {"dpup", 11}, {"dpdown", 12}, {"dpleft", 13}, {"dpright", 14}};
+static std::string lower(std::string s) { for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return s; }
+static ControlMap defaults() {
+    std::vector<std::string> log;
+    return ControlMap::build(
+        "", [](const std::string& n) { auto it = kKeys.find(lower(n)); return it == kKeys.end() ? 0 : it->second; },
+        [](const std::string& n) { auto it = kPads.find(lower(n)); return it == kPads.end() ? -1 : it->second; }, &log);
+}
+
+// A 256x128 atlas: gray noise everywhere (labels), a "glyph row" pattern in the recognition region.
+static RgbaImage synthetic_atlas() {
+    RgbaImage img;
+    img.w = 256;
+    img.h = 128;
+    img.px.resize(256 * 128 * 4);
+    for (int y = 0; y < 128; y++)
+        for (int x = 0; x < 256; x++) {
+            uint8_t* p = &img.px[(y * 256 + x) * 4];
+            p[0] = p[1] = p[2] = 0x7F;
+            p[3] = static_cast<uint8_t>(((x * 7 + y * 13) % 5) == 0 ? 0xFF : 0x00);
+        }
+    return img;
+}
+
+static PromptAtlasSpec spec_for(const RgbaImage& img) {
+    PromptAtlasSpec s;
+    s.width = 256;
+    s.height = 128;
+    s.format = 4;
+    s.sig_x = 0; s.sig_y = 99; s.sig_w = 128; s.sig_h = 29;
+    s.sig_hashes = {prompt_atlas_signature(img.px.data(), img.w, s.sig_x, s.sig_y, s.sig_w, s.sig_h)};
+    s.cells = {{PromptGlyph::Cross, 41, 117, 9, 11},
+               {PromptGlyph::LR, 96, 117, 16, 11},
+               {PromptGlyph::StickVertical, 115, 117, 9, 11},
+               {PromptGlyph::Start, 1, 100, 37, 14}};
+    return s;
+}
+
+static bool in_cells(const PromptAtlasSpec& s, int x, int y, int k) {
+    for (const PromptCell& c : s.cells)
+        if (x >= c.x * k && x < (c.x + c.w) * k && y >= c.y * k && y < (c.y + c.h) * k) return true;
+    return false;
+}
+
+static void signature_sees_only_its_region() {
+    RgbaImage img = synthetic_atlas();
+    const uint64_t a = prompt_atlas_signature(img.px.data(), img.w, 0, 99, 128, 29);
+    CHECK(a == prompt_atlas_signature(img.px.data(), img.w, 0, 99, 128, 29), "stable");
+    img.px[(10 * 256 + 200) * 4 + 3] ^= 0xFF;  // outside the region
+    CHECK(a == prompt_atlas_signature(img.px.data(), img.w, 0, 99, 128, 29), "outside change ignored");
+    img.px[(120 * 256 + 50) * 4 + 3] ^= 0xFF;  // inside
+    CHECK(a != prompt_atlas_signature(img.px.data(), img.w, 0, 99, 128, 29), "inside change seen");
+    RgbaImage faint = synthetic_atlas();
+    for (size_t i = 3; i < faint.px.size(); i += 4) if (faint.px[i] == 0xFF) faint.px[i] = 0xC0;
+    CHECK(a == prompt_atlas_signature(faint.px.data(), faint.w, 0, 99, 128, 29), "mask, not exact alpha");
+}
+
+static void compose_changes_only_cells(int k) {
+    const RgbaImage base = synthetic_atlas();
+    const PromptAtlasSpec spec = spec_for(base);
+    RgbaImage img;
+    img.w = 256 * k;
+    img.h = 128 * k;
+    img.px.resize(static_cast<size_t>(img.w) * img.h * 4);
+    for (int y = 0; y < img.h; y++)
+        for (int x = 0; x < img.w; x++)
+            for (int c = 0; c < 4; c++)
+                img.px[(static_cast<size_t>(y) * img.w + x) * 4 + c] = base.px[((y / k) * 256 + x / k) * 4 + c];
+    const RgbaImage before = img;
+    const ControlMap m = defaults();
+    prompt_atlas_compose(spec, InputDevice::Xbox, PromptStyle::Color, m, img);
+    bool outside_same = true, green = false, cross_opaque = false;
+    for (int y = 0; y < img.h; y++)
+        for (int x = 0; x < img.w; x++) {
+            const size_t i = (static_cast<size_t>(y) * img.w + x) * 4;
+            if (!in_cells(spec, x, y, k)) {
+                for (int c = 0; c < 4; c++) if (img.px[i + c] != before.px[i + c]) outside_same = false;
+            } else if (x >= 41 * k && x < 50 * k) {
+                const uint8_t* p = &img.px[i];
+                if (p[3] > 200) cross_opaque = true;
+                if (p[3] > 200 && p[1] > p[0] + 40 && p[1] > p[2] + 40) green = true;
+            }
+        }
+    CHECK(outside_same, "pixels outside the cells are untouched");
+    CHECK(cross_opaque && green, "Xbox colour A is drawn in the cross cell");
+
+    RgbaImage gray = before;
+    prompt_atlas_compose(spec, InputDevice::Xbox, PromptStyle::Gray, m, gray);
+    bool neutral = true;
+    for (int y = 117 * k; y < 128 * k; y++)
+        for (int x = 41 * k; x < 50 * k; x++) {
+            const uint8_t* p = &gray.px[(static_cast<size_t>(y) * gray.w + x) * 4];
+            if (p[3] > 0 && (std::max({p[0], p[1], p[2]}) - std::min({p[0], p[1], p[2]})) >= 24) neutral = false;
+        }
+    CHECK(neutral, "Gray: the A button has no colour");
+
+    RgbaImage kb = before;
+    prompt_atlas_compose(spec, InputDevice::Keyboard, PromptStyle::Gray, m, kb);
+    bool stick_same = true;
+    for (int y = 117 * k; y < 128 * k; y++)
+        for (int x = 115 * k; x < 124 * k; x++)
+            for (int c = 0; c < 4; c++) {
+                const size_t i = (static_cast<size_t>(y) * kb.w + x) * 4 + c;
+                if (kb.px[i] != before.px[i]) stick_same = false;
+            }
+    CHECK(stick_same, "a glyph without an icon (keyboard stick) keeps the game's pixels");
+}
+
+static void variant_round_trip() {
+    for (int d = 0; d < 4; d++)
+        for (int s = 0; s < 2; s++) {
+            const uint32_t v = prompt_atlas_variant(static_cast<InputDevice>(d), static_cast<PromptStyle>(s));
+            InputDevice dd;
+            PromptStyle ss;
+            CHECK(v != 0, "never 0");
+            CHECK(prompt_atlas_variant_decode(v, &dd, &ss) && dd == static_cast<InputDevice>(d) &&
+                      ss == static_cast<PromptStyle>(s), "decodes back");
+        }
+}
+
+int main() {
+    signature_sees_only_its_region();
+    compose_changes_only_cells(1);
+    compose_changes_only_cells(4);
+    variant_round_trip();
+    std::printf("%d failure(s)\n", failures);
+    return failures == 0 ? 0 : 1;
+}

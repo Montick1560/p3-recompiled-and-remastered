@@ -152,6 +152,8 @@ set(RUNTIME_SOURCES
     src/psp_prompts.cpp
     src/psp_prompt_raster.cpp
     src/psp_ge_texpatch.cpp
+    src/psp_prompt_atlas.cpp
+    src/psp_prompt_patcher.cpp
     src/psp_eboot_loader.cpp
     src/psp_menu_prompt.cpp
     src/psp_achievements.cpp
@@ -805,6 +807,15 @@ add_executable(test_ge_texpatch tests/test_ge_texpatch.cpp src/psp_ge_texpatch.c
 target_include_directories(test_ge_texpatch PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_ge_texpatch PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME ge_texpatch_tests COMMAND test_ge_texpatch)
+
+# Button-prompt atlas patcher: recognition signature + cell composition. Pure (no GL).
+add_executable(test_prompt_atlas tests/test_prompt_atlas.cpp src/psp_prompt_atlas.cpp src/psp_prompt_raster.cpp
+    src/psp_prompts.cpp src/psp_controls.cpp src/psp_input_device.cpp src/psp_texrep_png.cpp
+    src/psp_ge_texpatch.cpp src/psp_ge_texdecode.cpp ${PSP_PROMPT_ICONS_CPP})
+target_include_directories(test_prompt_atlas PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
+target_compile_options(test_prompt_atlas PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME prompt_atlas_tests COMMAND test_prompt_atlas)
 
 add_executable(test_perf tests/test_perf.cpp src/psp_perf.cpp)
 target_include_directories(test_perf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
