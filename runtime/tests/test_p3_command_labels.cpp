@@ -13,8 +13,12 @@ static int failures = 0;
 #define CHECK(cond, msg) \
     do { if (!(cond)) { std::printf("FAIL: %s (line %d)\n", msg, __LINE__); failures++; } } while (0)
 
-// One per (release, language) atlas whose label coverage differs (recon of part 2, 2026-10-20).
-static const std::vector<std::string> kExpected = {"dxd114-es", "dxd114-en"};
+// One per (release, language) atlas whose label coverage differs (recon of part 2, 2026-10-20): DxD 1.1.4
+// US English, DxD 1.1.5b es / en and vanilla EU en, de, fr, it, es share the DxD 1.1.4 atlases; vanilla adds
+// pt, nl, ru (and pl, left to the game: the bar font lacks the ś ć ł of two of its command names).
+static const std::vector<std::string> kExpected = {
+    "dxd114-es", "dxd114-en", "dxd114-fr", "dxd114-it", "dxd114-de", "dxd114-jp", "van-pt", "van-nl", "van-ru",
+};
 
 // Rows of names end at y 52 (the glyph row is y 53..63); the separators live in the glyph row.
 // `words`: a box much wider than its word means a misread or a wrong split (not for the separators).

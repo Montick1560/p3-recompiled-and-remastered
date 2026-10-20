@@ -21,7 +21,8 @@
 // transparent). It holds the command names of the language in rows of 11 texels (y 11k..11k+10, cap 8,
 // baseline 11k+9; up to y 52) and one glyph row (y 53..63): ':' '·' and the four drums. The cells are the
 // UV cells the game crops (10x10, recon 2026-10-20 with build/tools/texture_recon/recon_mission.py); the
-// atlas is recognised by the coverage of the glyph row's x 0..57, the same in both languages measured;
+// atlas is recognised by the coverage of the glyph row's x 0..57 (the same in most languages; Japanese and
+// Russian differ in a few faint texels: one hash each);
 // its names are redrawn from the word tables of p3_command_labels.cpp. Registered after the help bar, so
 // the help bar keeps atlas index 0 (its tags and cache keys do not move).
 #include "p3_prompts.h"
@@ -74,7 +75,9 @@ void p3_prompts_register() {
     c.format = GE_TFMT_CLUT4;
     c.sig_rects = {{0, 53, 58, 11}};
     c.sig_hashes = {
-        0xEE3E34178623FCD2ull,  // es, en (EU); DxD 1.1.4
+        0xEE3E34178623FCD2ull,  // es, en (EU and US), fr, it, de; DxD 1.1.4 / 1.1.5b and vanilla EU; pt, pl, nl (vanilla)
+        0x0CEDF975E89D9C77ull,  // ja (DxD, at 0x09340280): 3 faint texels of the triangle and cross
+        0xF6F6ED03BD6F714Dull,  // ru (vanilla): 5 faint texels of the cross are clear
     };
     c.gray = 0x7F;
     c.hole = 0x17;
