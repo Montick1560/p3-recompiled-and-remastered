@@ -39,6 +39,7 @@ float bar_text_width(const std::string& utf8, float px);
 // Draws `utf8` with its ink's left edge at `x` and its baseline at `baseline` (the first pixel row below
 // the letters), condensed horizontally by min(1, box_w / ink width) and never outside [x, x + box_w).
 // Colour `gray`, alpha = coverage * alpha / 255, blended "over" what is there. False (nothing drawn)
-// when a code point is missing from the font.
+// when a code point is missing from the font. Rows outside [clip_y0, clip_y1] are not drawn (a label
+// band: the game crops each label by its UVs).
 bool rgba_draw_text(RgbaImage& img, int x, int baseline, int box_w, float px, const std::string& utf8,
-                    uint8_t gray, uint8_t alpha);
+                    uint8_t gray, uint8_t alpha, int clip_y0 = 0, int clip_y1 = 1 << 30);

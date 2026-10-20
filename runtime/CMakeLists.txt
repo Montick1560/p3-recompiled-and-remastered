@@ -831,7 +831,8 @@ add_test(NAME bar_text_tests COMMAND test_bar_text)
 # Button-prompt atlas patcher: recognition signature + cell composition. Pure (no GL).
 add_executable(test_prompt_atlas tests/test_prompt_atlas.cpp src/psp_prompt_atlas.cpp src/psp_prompt_raster.cpp
     src/psp_prompts.cpp src/psp_controls.cpp src/psp_input_device.cpp src/psp_texrep_png.cpp
-    src/psp_ge_texpatch.cpp src/psp_ge_texdecode.cpp ${PSP_PROMPT_ICONS_CPP})
+    src/psp_ge_texpatch.cpp src/psp_ge_texdecode.cpp ${PSP_PROMPT_ICONS_CPP}
+    src/psp_bar_text.cpp src/stb_truetype_impl.cpp ${PSP_BAR_FONTS_CPP})
 target_include_directories(test_prompt_atlas PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
 target_compile_options(test_prompt_atlas PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)

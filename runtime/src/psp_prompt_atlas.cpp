@@ -76,13 +76,44 @@ void prompt_atlas_compose(const PromptAtlasSpec& spec, InputDevice d, PromptStyl
     }
 }
 
-uint32_t prompt_atlas_variant(InputDevice d, PromptStyle s) {
-    return 1u + static_cast<uint32_t>(d) * 2u + static_cast<uint32_t>(s);
+uint32_t prompt_atlas_variant(InputDevice d, PromptStyle s, bool icons, bool text) {
+    return (icons ? 1u + static_cast<uint32_t>(d) * 2u + static_cast<uint32_t>(s) : 0u) | (text ? 0x10u : 0u);
 }
 
-bool prompt_atlas_variant_decode(uint32_t v, InputDevice* d, PromptStyle* s) {
-    if (v < 1 || v > 8) return false;
-    *d = static_cast<InputDevice>((v - 1) / 2);
-    *s = static_cast<PromptStyle>((v - 1) % 2);
+bool prompt_atlas_variant_decode(uint32_t v, InputDevice* d, PromptStyle* s, bool* icons, bool* text) {
+    const uint32_t iv = v & 0xFu;
+    if (v == 0 || v > 0x18u || iv > 8) return false;
+    *icons = iv != 0;
+    *text = (v & 0x10u) != 0;
+    *d = static_cast<InputDevice>(iv != 0 ? (iv - 1) / 2 : 0);
+    *s = static_cast<PromptStyle>(iv != 0 ? (iv - 1) % 2 : 0);
     return true;
+}
+
+uint32_t prompt_atlas_recognise(const PromptAtlasSpec& spec, const uint8_t* rgba, int w) {
+    const uint64_t sig = prompt_atlas_signature(rgba, w, spec.sig_rects);
+    if (std::find(spec.sig_hashes.begin(), spec.sig_hashes.end(), sig) == spec.sig_hashes.end()) return 0;
+    if (spec.label_sig_rects.empty()) return 1;
+    const uint64_t labels = prompt_atlas_signature(rgba, w, spec.label_sig_rects);
+    for (size_t i = 0; i < spec.labels.size() && i < 254; i++) {
+        if (spec.labels[i].sig == labels) return 2 + static_cast<uint32_t>(i);
+    }
+    return 1;
+}
+
+void prompt_atlas_apply(const PromptAtlasSpec& spec, uint32_t v, const ControlMap& map, RgbaImage& img) {
+    InputDevice d;
+    PromptStyle s;
+    bool icons, text;
+    if (spec.width <= 0 || spec.height <= 0 || !prompt_atlas_variant_decode(v & 0xFFFFFu, &d, &s, &icons, &text)) return;
+    if (icons) prompt_atlas_compose(spec, d, s, map, img);
+    if (!text) return;
+    const uint32_t tag = (v >> 20) & 0xFFu;
+    const BarLabels* t = tag >= 2 && tag - 2 < spec.labels.size() ? &spec.labels[tag - 2] : nullptr;
+    std::vector<PromptRect> keep;
+    for (const PromptCell& c : spec.cells) keep.push_back({c.x, c.y, c.w, c.h});
+    const double sx = static_cast<double>(img.w) / spec.width, sy = static_cast<double>(img.h) / spec.height;
+    // The separators share the labels' palette: their alpha is the table's when the language is known.
+    bar_text_compose(t, spec.separators, spec.separator_cap, spec.gray, t != nullptr ? t->alpha : 0xFF,
+                     std::move(keep), sx, sy, img);
 }

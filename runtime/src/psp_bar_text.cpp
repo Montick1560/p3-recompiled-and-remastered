@@ -1,10 +1,14 @@
 #include "psp_bar_text.h"
+#include "psp_prompt_atlas.h"
 
 #include "stb_truetype.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
+#include <mutex>
+#include <set>
 
 struct EmbeddedFile {
     const char* name;
@@ -169,7 +173,7 @@ float bar_text_width(const std::string& utf8, float px) {
 }
 
 bool rgba_draw_text(RgbaImage& img, int x, int baseline, int box_w, float px, const std::string& utf8,
-                    uint8_t gray, uint8_t alpha) {
+                    uint8_t gray, uint8_t alpha, int clip_y0, int clip_y1) {
     const BarFont& f = bar_font();
     const std::vector<int> cps = decode_utf8(utf8);
     if (!has_all(f, cps) || box_w <= 0 || px <= 0) return false;
@@ -185,7 +189,7 @@ bool rgba_draw_text(RgbaImage& img, int x, int baseline, int box_w, float px, co
     if (r < l) return true;  // only spaces
     for (int y = 0; y < c.h; y++) {
         const int dy = baseline - c.base + y;
-        if (dy < 0 || dy >= img.h) continue;
+        if (dy < 0 || dy >= img.h || dy < clip_y0 || dy > clip_y1) continue;
         for (int cx = l; cx <= r; cx++) {
             const int dx = x + cx - l;
             if (dx < x || dx >= x + box_w || dx < 0 || dx >= img.w) continue;
@@ -204,4 +208,86 @@ bool rgba_draw_text(RgbaImage& img, int x, int baseline, int box_w, float px, co
         }
     }
     return true;
+}
+
+namespace {
+
+struct Px {
+    int x0, y0, x1, y1;  // half-open pixel rect
+    bool has(int x, int y) const { return x >= x0 && x < x1 && y >= y0 && y < y1; }
+};
+
+Px scaled(int x0, int y0, int x1_incl, int y1_incl, double sx, double sy) {
+    return {static_cast<int>(std::lround(x0 * sx)), static_cast<int>(std::lround(y0 * sy)),
+            static_cast<int>(std::lround((x1_incl + 1) * sx)), static_cast<int>(std::lround((y1_incl + 1) * sy))};
+}
+
+struct Job {
+    const BarRow* row;
+    const BarWord* word;
+    int cap;
+    uint8_t alpha;
+};
+
+void log_missing(const std::string& text) {
+    static std::mutex mu;
+    static std::set<std::string> logged;
+    std::lock_guard<std::mutex> lk(mu);
+    if (logged.insert(text).second) {
+        std::fprintf(stderr, "[PROMPTS] bar font lacks a character of \"%s\": the game's label stays\n", text.c_str());
+    }
+}
+
+}  // namespace
+
+void bar_text_compose(const BarLabels* labels, const BarRow& separators, int cap, uint8_t gray, uint8_t alpha,
+                      std::vector<PromptRect> keep, double sx, double sy, RgbaImage& img) {
+    std::vector<Job> jobs;
+    auto add_row = [&](const BarRow& row, int c, uint8_t a) {
+        for (const BarWord& w : row.words) {
+            if (bar_font_has(w.text)) {
+                jobs.push_back({&row, &w, c, a});
+            } else {
+                log_missing(w.text);
+                keep.push_back({w.x0, row.y0, w.x1 - w.x0 + 1, row.y1 - row.y0 + 1});
+            }
+        }
+    };
+    if (labels != nullptr) {
+        for (const BarRow& row : labels->rows) add_row(row, labels->cap, labels->alpha);
+    }
+    add_row(separators, cap, alpha);
+    if (jobs.empty()) return;
+    // An enlarged image (bilinear x scale) spreads each old letter half a source texel outside its box:
+    // clear that ring too, except over a kept rect or its own ring.
+    const int mx = static_cast<int>(sx / 2), my = static_cast<int>(sy / 2);
+    std::vector<Px> kept, kept_ring;
+    for (const PromptRect& k : keep) {
+        const Px p = scaled(k.x, k.y, k.x + k.w - 1, k.y + k.h - 1, sx, sy);
+        kept.push_back(p);
+        kept_ring.push_back({p.x0 - mx, p.y0 - my, p.x1 + mx, p.y1 + my});
+    }
+    auto inside = [](const std::vector<Px>& v, int x, int y) {
+        for (const Px& p : v)
+            if (p.has(x, y)) return true;
+        return false;
+    };
+    for (const Job& j : jobs) {
+        const Px b = scaled(j.word->x0, j.row->y0, j.word->x1, j.row->y1, sx, sy);
+        const int x0 = std::max(0, b.x0 - mx), y0 = std::max(0, b.y0 - my);
+        const int x1 = std::min(img.w, b.x1 + mx), y1 = std::min(img.h, b.y1 + my);
+        for (int y = y0; y < y1; y++)
+            for (int x = x0; x < x1; x++) {
+                if (inside(b.has(x, y) ? kept : kept_ring, x, y)) continue;
+                uint8_t* p = &img.px[(static_cast<size_t>(y) * img.w + x) * 4];
+                p[0] = p[1] = p[2] = gray;
+                p[3] = 0;
+            }
+    }
+    for (const Job& j : jobs) {
+        const Px b = scaled(j.word->x0, j.row->y0, j.word->x1, j.row->y1, sx, sy);
+        const int base = static_cast<int>(std::lround(j.row->baseline * sy));
+        rgba_draw_text(img, b.x0, base, b.x1 - b.x0, bar_font_px_for_cap(static_cast<float>(j.cap * sy)), j.word->text,
+                       gray, j.alpha, b.y0, b.y1 - 1);
+    }
 }
