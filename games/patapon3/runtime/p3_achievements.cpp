@@ -194,8 +194,6 @@ const PspFact kFacts[] = {
     {"item.789.count", 0x12A6, 2, false, -1, 0, 0, 65535},
     {"item.810.count", 0x1324, 2, false, -1, 0, 0, 65535},
     {"item.841.count", 0x13DE, 2, false, -1, 0, 0, 65535},
-    {"item.890.count", 0x1504, 2, false, -1, 0, 0, 65535},
-    {"item.911.count", 0x1582, 2, false, -1, 0, 0, 65535},
     {"class.yarida.unlocked", 0x9638, 4, false, -1, 0, 0, 255},
     {"class.taterazay.unlocked", 0x96BC, 4, false, -1, 0, 0, 255},
     {"class.yumiyacha.unlocked", 0x9740, 4, false, -1, 0, 0, 255},

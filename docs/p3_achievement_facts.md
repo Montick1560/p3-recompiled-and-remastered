@@ -305,6 +305,7 @@ reading put the record 2 bytes off; the notes above replace it.)
 Rarity (itemparam, PPEditor's field at entry +0x08: 0 basic, 1 common, 2 enchanted, 3 unique, 4 divine): 34 pieces
 of equipment have rarity 4, one per equipment category (texture `equipNNN_300_10`; uniques are `_202`); the game
 shows their names in green (user: Dolmorn Helm 653; uniques like Fendus are another colour). Facts
-`item.<id>.count` (u16, 0..65535) for the 34; `divine_1` "Toque divino" (any >= 1) and `divine_all` "Arsenal divino"
-(all 34), the 34 leaves also in `secret_completionist`. DATA04 holds 15 of the 34 by count (earns `divine_1`; Krauser 301 has count 1 but no slot in the equipment table, the other 14 match it), the user's
+`item.<id>.count` (u16, 0..65535) for 32 of them: the user left out Kaisak Ultimate Claw (890, "Garra trinchadora
+absoluta") and Deathmoon Ultimate Scythe (911, "Guadaña absoluta de la luna mortal"). `divine_1` "Toque divino"
+(any >= 1) and `divine_all` "Arsenal divino" (all 32), the 32 leaves also in `secret_completionist`. DATA04 holds 15 of the 34 by count (earns `divine_1`; Krauser 301 has count 1 but no slot in the equipment table, the other 14 match it), the user's
 debug-menu save "MoMo" 34, DATA08 and the new Edson save 0.
