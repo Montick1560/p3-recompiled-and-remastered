@@ -154,6 +154,8 @@ set(RUNTIME_SOURCES
     src/psp_ge_texpatch.cpp
     src/psp_prompt_atlas.cpp
     src/psp_prompt_patcher.cpp
+    src/psp_bar_text.cpp
+    src/stb_truetype_impl.cpp
     src/psp_eboot_loader.cpp
     src/psp_menu_prompt.cpp
     src/psp_achievements.cpp
@@ -807,6 +809,24 @@ add_executable(test_ge_texpatch tests/test_ge_texpatch.cpp src/psp_ge_texpatch.c
 target_include_directories(test_ge_texpatch PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_ge_texpatch PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME ge_texpatch_tests COMMAND test_ge_texpatch)
+
+# Bar font (Zen Maru Gothic Bold, SIL OFL 1.1) embedded in the exe for the sharp help-bar text.
+file(GLOB PSP_BAR_FONT_TTFS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/*.ttf)
+set(PSP_BAR_FONTS_CPP ${CMAKE_CURRENT_BINARY_DIR}/bar_fonts_data.cpp)
+add_custom_command(OUTPUT ${PSP_BAR_FONTS_CPP}
+    COMMAND ${CMAKE_COMMAND} -DOUT=${PSP_BAR_FONTS_CPP} -DSYMBOL=g_bar_fonts
+            "-DFILES=${PSP_BAR_FONT_TTFS}" -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_files.cmake
+    DEPENDS ${PSP_BAR_FONT_TTFS} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_files.cmake
+    COMMENT "Embedding the bar font" VERBATIM)
+target_sources(psprecomp_runtime PRIVATE ${PSP_BAR_FONTS_CPP})
+
+# Bar text: embedded font + word rasteriser. Pure (no GL).
+add_executable(test_bar_text tests/test_bar_text.cpp src/psp_bar_text.cpp src/stb_truetype_impl.cpp
+    ${PSP_BAR_FONTS_CPP})
+target_include_directories(test_bar_text PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
+target_compile_options(test_bar_text PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME bar_text_tests COMMAND test_bar_text)
 
 # Button-prompt atlas patcher: recognition signature + cell composition. Pure (no GL).
 add_executable(test_prompt_atlas tests/test_prompt_atlas.cpp src/psp_prompt_atlas.cpp src/psp_prompt_raster.cpp

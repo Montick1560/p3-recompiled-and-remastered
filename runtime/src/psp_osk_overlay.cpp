@@ -24,7 +24,6 @@
 #include <string>
 #include <vector>
 
-#define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
 
 // Defined below: the skin is read once per process (PSPRECOMP_OSK_SKIN).
