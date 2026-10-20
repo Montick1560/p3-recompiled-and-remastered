@@ -277,3 +277,10 @@ upgrade left it at 2). The user's main save and DATA04 = 3 (level 4), the early 
 neighbouring words are 0 in every save. Fact `smith.level` (0..15); `smith_2` / `smith_3` / `smith_4` (>= 1 / 2 / 3,
 conditions inspired by RetroAchievements and the PS trophy "Forge Onward"); `secret_completionist` gains
 `smith.level >= 3`. DATA04 earns the three; DATA08 none.
+
+## The Legendary Gigantus (2026-10-19)
+
+"El Legendario Gigantus" on the save "MoMo" (snapshots `m_gigantus_antes` / `m_gigantus_despues`) moved only mission
+byte id 15 (`+0xEDD9`) 2 -> 3 and `missions` by 1 (another low id whose Master ID List name, "Estate of Earnlestness",
+is not the mission title). DATA04 = 17. Fact `mission.15`; `boss_gigantus` "Coloso caído" (`>= 1`), in
+`secret_completionist`.

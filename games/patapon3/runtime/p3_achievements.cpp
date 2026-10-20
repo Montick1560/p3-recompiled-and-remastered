@@ -111,6 +111,7 @@ const PspFact kFacts[] = {
     {"kan.oohoroc.level", 0xE480, 4, false, -1, 0, 0, 99},
     {"kan.pingrek.level", 0xE504, 4, false, -1, 0, 0, 99},
     {"kan.cannogabang.level", 0xE588, 4, false, -1, 0, 0, 99},
+    {"mission.15", 0xEDD9, 1, false, -1, 0, 0, 255},
     {"mission.22", 0xEDE0, 1, false, -1, 0, 0, 255},
     {"mission.23", 0xEDE1, 1, false, -1, 0, 0, 255},
     {"mission.42", 0xEDF4, 1, false, -1, 0, 0, 255},
