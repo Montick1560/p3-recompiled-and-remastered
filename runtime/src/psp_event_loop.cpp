@@ -6,6 +6,7 @@
 #include "psp_present.h"
 #include "psp_pad.h"
 #include "psp_controls.h"
+#include "psp_input_device.h"
 #include "psp_wheel.h"
 #include "psp_osk_session.h"
 #include "psp_osk_overlay.h"
@@ -39,6 +40,8 @@ std::atomic<uint32_t> g_wheel_buttons{0};
 // today's mapping by default. Built once SDL is up (it resolves SDL key / button names).
 // ---------------------------------------------------------------------------
 static ControlMap g_controls;
+
+const ControlMap& psp_control_map() { return g_controls; }
 
 static void load_controls() {
     const char* spec = std::getenv("PSPRECOMP_CONTROLS");
@@ -91,6 +94,7 @@ static bool handle_controller_event(const SDL_Event& ev) {
             return true;
         }
         g_controllers[id] = c;
+        psp_input_device_note_connect(input_device_from_controller_type(SDL_GameControllerGetType(c)));
         const char* name = SDL_GameControllerName(c);
         std::fprintf(stderr, "[RT] controller connected: %s\n", name ? name : "(unnamed)");
         return true;
@@ -308,8 +312,29 @@ static bool handle_menu_prompt_event(const SDL_Event& ev) {
     return ev.type == SDL_TEXTINPUT || ev.type == SDL_MOUSEWHEEL;
 }
 
+// Button prompts follow the device of the last real input (psp_input_device.h).
+static void note_input_device(const SDL_Event& ev) {
+    auto pad_family = [](SDL_JoystickID id) {
+        auto it = g_controllers.find(id);
+        return input_device_from_controller_type(
+            it == g_controllers.end() ? 0 : static_cast<int>(SDL_GameControllerGetType(it->second)));
+    };
+    if (ev.type == SDL_KEYDOWN && !ev.key.repeat) {
+        psp_input_device_note_key();
+    } else if (ev.type == SDL_CONTROLLERBUTTONDOWN) {
+        psp_input_device_note_pad(pad_family(ev.cbutton.which));
+    } else if (ev.type == SDL_CONTROLLERAXISMOTION) {
+        const bool trigger = ev.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT ||
+                             ev.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT;
+        const bool moved = trigger ? pad_trigger_pressed(ev.caxis.value)
+                                   : (ev.caxis.value > kStickDeadzone || ev.caxis.value < -kStickDeadzone);
+        if (moved) psp_input_device_note_pad(pad_family(ev.caxis.which));
+    }
+}
+
 // Handle one SDL event: window close + keyboard button state + controllers.
 static void handle_sdl_event(const SDL_Event& ev) {
+    note_input_device(ev);
     if (handle_menu_prompt_event(ev)) return;
     if (handle_osk_event(ev)) return;
     if (handle_controller_event(ev)) return;
@@ -364,6 +389,7 @@ int psp_runtime_init_sdl() {
         std::fprintf(stderr, "[RT] game controllers unavailable: %s\n", SDL_GetError());
     }
     load_controls();
+    psp_input_device_init();
 
     // 2. Set GL attributes: OpenGL 3.3 core profile, double-buffered
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);

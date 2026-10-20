@@ -70,6 +70,9 @@ struct PspDebugHooks {
     void (*trace_rearm)() = nullptr;
     /// I command: one-line guest CPU lock state (psp_cpu.h). Returns length.
     int (*cpu_state)(char* buf, int size) = nullptr;
+    /// P command: set the button-prompt input device by name ("keyboard",
+    /// "xbox", "ps4", "ps5"). Returns false for an unknown name.
+    bool (*input_device)(const char* name) = nullptr;
 };
 
 /// Install the providers used by the I and S commands.

@@ -42,3 +42,7 @@ private:
     std::map<uint32_t, std::string> first_key_;
     std::map<uint32_t, std::string> pad_name_;
 };
+
+// The runtime's effective map (psp_event_loop.cpp): built when SDL starts, before the game runs, and
+// read-only after, so any thread may read it.
+const ControlMap& psp_control_map();

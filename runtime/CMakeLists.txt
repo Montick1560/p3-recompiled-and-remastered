@@ -148,6 +148,7 @@ set(RUNTIME_SOURCES
     src/psp_ini.cpp
     src/psp_settings.cpp
     src/psp_controls.cpp
+    src/psp_input_device.cpp
     src/psp_eboot_loader.cpp
     src/psp_menu_prompt.cpp
     src/psp_achievements.cpp
@@ -765,6 +766,12 @@ add_executable(test_controls tests/test_controls.cpp src/psp_controls.cpp src/ps
 target_include_directories(test_controls PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_controls PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME controls_tests COMMAND test_controls)
+
+# Last input device (keyboard / Xbox / DualShock 4 / DualSense) for button prompts. Pure.
+add_executable(test_input_device tests/test_input_device.cpp src/psp_input_device.cpp)
+target_include_directories(test_input_device PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_input_device PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME input_device_tests COMMAND test_input_device)
 
 add_executable(test_perf tests/test_perf.cpp src/psp_perf.cpp)
 target_include_directories(test_perf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

@@ -369,6 +369,12 @@ PspDebugReply psp_debug_handle_line(const char* line,
         g_hooks.draw_log(std::atoi(line + 2));
         return make_ok_empty();
     }
+    if (line[0] == 'P' && line[1] == ' ') {
+        // P <device>: show the button prompts of that device (it still follows input after).
+        if (!g_hooks.input_device) return make_err("unsupported");
+        if (!g_hooks.input_device(line + 2)) return make_err("usage: P keyboard|xbox|ps4|ps5");
+        return make_ok_empty();
+    }
     if (line[0] == 'X' && (line[1] == '\0' || line[1] == ' ')) {
         // X <lo> <hi>: hide those PRIM indices of every list; bare X = off.
         if (!g_hooks.draw_skip) return make_err("unsupported");

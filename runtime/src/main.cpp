@@ -24,6 +24,7 @@
 #include "psp_osk_overlay.h"
 #include "psp_eboot_loader.h"
 #include "psp_exit.h"
+#include "psp_input_device.h"
 
 // Build fingerprint of the output/ this binary was generated from (issue #36).
 // Guarded so pre-fingerprint output dirs still build (warning at configure
@@ -188,6 +189,12 @@ int main(int argc, char* argv[]) {
         hooks.draw_log           = ge_draw_request_log;
         hooks.draw_skip          = ge_draw_request_skip;
         hooks.hle_trace          = psp_hle_trace_set_live;
+        hooks.input_device       = [](const char* name) {
+            InputDevice d = InputDevice::Keyboard;
+            if (!input_device_parse(name, &d)) return false;
+            psp_input_device_force(d);
+            return true;
+        };
         psp_debug_socket_set_hooks(hooks);
     }
 
