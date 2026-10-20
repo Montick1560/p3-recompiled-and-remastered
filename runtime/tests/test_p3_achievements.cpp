@@ -27,7 +27,7 @@ static const std::vector<std::string> kWant04 = {
     "boss_mochicchichi", "boss_shooshookle", "boss_zaknel", "boss_zuttankarmen", "chin_15", "chin_25", "chin_32",
     "class_level_32", "class_level_40", "classes_15", "classes_5", "classes_all", "classes_bow", "classes_dark_all",
     "classes_every", "classes_shield", "classes_spear", "coop_1", "coop_100", "dark_hero_buzzcrave",
-    "dark_hero_naughtyfins", "dark_hero_ravenous", "dark_hero_slogturtle", "dark_hero_sonarchy", "dark_uber_justice",
+    "dark_hero_naughtyfins", "dark_hero_ragewolf", "dark_hero_ravenous", "dark_hero_slogturtle", "dark_hero_sonarchy", "dark_uber_justice",
     "dark_uber_shockwaves", "dark_uber_slogging", "dark_uber_treasure", "dragon_hunter", "dragon_lord", "duel_twice",
     "dungeon_twice", "hero_level_10", "hero_level_30", "heroes_defeated_10", "heroes_defeated_100", "hoshipon_all",
     "kaching_1m", "kan_15", "kan_25", "kan_32", "missions_1", "missions_100", "missions_1000", "multi_100",

@@ -246,3 +246,13 @@ Dark Hero classes, `classes_5` / `classes_15` (count), `classes_spear` / `classe
 class of that family), `classes_all` (the 21 hero classes), `classes_dark_all` (the 7 Dark Hero classes) and
 `classes_every` (all 28). `secret_completionist` gains the 28 unlock leaves. DATA04 earns all 35 (123 in total, also
 in the game: E2E on 9998 with DATA04 wrote 123 ids); DATA08 still earns `missions_1` only.
+
+## Ragewolf (2026-10-19)
+
+Live on the user's main save (snapshots `m_luna_antes` / `m_luna_despues`): clearing "Campos de pruebas y luna
+creciente", the first mission where Ragewolf is defeated (user), moved only mission byte id 22 (`+0xEDE0`) 6 -> 7 and
+`missions` by 1. The Master ID List names id 22 "Volcano Zone of the Lazy Demon": its low ids (< 32) do not match the
+mission titles (the prologue "¡Avance y ataque!" is id 1, "Patapon Training Grounds" there). Fact `mission.22`;
+`dark_hero_ragewolf` "Lobo domado" comes back with its draft meaning (`mission.22 >= 1`) and joins
+`secret_completionist`. DATA04 = 6, DATA08 = 0. The rematch "Will the Angry Wolf See a Full Moon?" is a different
+mission, not identified yet.
