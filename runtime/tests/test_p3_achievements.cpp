@@ -33,7 +33,7 @@ static const std::vector<std::string> kWant04 = {
     "kaching_1m", "kan_15", "kan_25", "kan_32", "missions_1", "missions_100", "missions_1000", "multi_100",
     "multi_1000", "multi_feisu", "multi_forudo", "multi_hyumitto", "multi_inosen", "multi_justi", "multi_libera",
     "multi_valo", "perfect_1000", "perfect_100000", "playtime_1000h", "playtime_100h", "popular_10", "popular_30",
-    "recruit_10", "rematch_ravenous", "rematch_slogturtle", "rematch_sonarchy", "replay_libera_100",
+    "recruit_10", "rematch_ragewolf", "rematch_ravenous", "rematch_slogturtle", "rematch_sonarchy", "replay_libera_100",
     "replay_multi_100", "secret_heroes_1000", "story_all_archfiends", "story_ending", "story_first_archfiend",
     "story_prologue", "sukopon_boss", "team_points_10000", "ton_15", "ton_25", "ton_32", "uberhero_15",
     "uberhero_25", "unit_level_30", "unlock_alosson", "unlock_bowmunk", "unlock_buzzcrave", "unlock_cannassault",

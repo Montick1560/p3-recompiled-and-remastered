@@ -254,5 +254,9 @@ creciente", the first mission where Ragewolf is defeated (user), moved only miss
 `missions` by 1. The Master ID List names id 22 "Volcano Zone of the Lazy Demon": its low ids (< 32) do not match the
 mission titles (the prologue "¡Avance y ataque!" is id 1, "Patapon Training Grounds" there). Fact `mission.22`;
 `dark_hero_ragewolf` "Lobo domado" comes back with its draft meaning (`mission.22 >= 1`) and joins
-`secret_completionist`. DATA04 = 6, DATA08 = 0. The rematch "Will the Angry Wolf See a Full Moon?" is a different
-mission, not identified yet.
+`secret_completionist`. DATA04 = 6, DATA08 = 0.
+
+The rematch "Will the Angry Wolf See a Full Moon?" (snapshots `m_wolf_antes` / `m_wolf_despues`) moved only id 23
+(`+0xEDE1`) 5 -> 6: first fight + 1, like Slogturtle 222 -> 223. Fact `mission.23`; `rematch_ragewolf` "Luna llena"
+(`mission.23 >= 1`), in `secret_completionist`. DATA04 = 5, DATA08 = 0. By the same pattern id 24 (43 in DATA04) may be
+Ragewolf's Dark Uberhero mission: not used until seen live.
