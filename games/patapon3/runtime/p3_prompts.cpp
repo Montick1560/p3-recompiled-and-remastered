@@ -1,4 +1,5 @@
-// p3_prompts.cpp — Patapon 3's help-bar atlas, for the PC button prompts (psp_prompt_atlas.h).
+// p3_prompts.cpp — Patapon 3's prompt atlases (help bar, mission command list), for the PC button
+// prompts (psp_prompt_atlas.h).
 //
 // Every help bar (hideout, barracks, forge, pause menus...) is a run of through-mode sprites cropping
 // one pre-rendered atlas: 256x128 CLUT4, swizzled (DxD 1.1.4 Spanish: 0x092E5300, CLUT 0x092E9340;
@@ -13,7 +14,18 @@
 // alpha levels); a few lack a faint halo or edge texels (one hash each, below). The labels are
 // redrawn sharp from the word tables of p3_prompt_labels.cpp: their coverage picks the language's
 // table (none for Polish: the bar font lacks its diacritics, so its labels stay the game's).
+//
+// The mission command list ("Avanzar: □·□·□·○  Atacar: ○·○·□·○ ...", bottom of the screen) is one
+// through-mode sprite PRIM cropping another pre-rendered atlas: 128x64 CLUT4, swizzled (DxD 1.1.4 Spanish
+// and EU English: 0x092E4100, CLUT 0x092E5140; 16 x 8888, colour 0x7F7F7F with an alpha ramp, index 0
+// transparent). It holds the command names of the language in rows of 11 texels (y 11k..11k+10, cap 8,
+// baseline 11k+9; up to y 52) and one glyph row (y 53..63): ':' '·' and the four drums. The cells are the
+// UV cells the game crops (10x10, recon 2026-10-20 with build/tools/texture_recon/recon_mission.py); the
+// atlas is recognised by the coverage of the glyph row's x 0..57, the same in both languages measured;
+// its names are redrawn from the word tables of p3_command_labels.cpp. Registered after the help bar, so
+// the help bar keeps atlas index 0 (its tags and cache keys do not move).
 #include "p3_prompts.h"
+#include "p3_command_labels.h"
 #include "p3_prompt_labels.h"
 
 #include "psp_ge_constants.h"
@@ -54,4 +66,27 @@ void p3_prompts_register() {
     s.separators = p3_bar_separators();
     s.separator_cap = 7;
     psp_prompts_register_atlas(std::move(s));
+
+    PromptAtlasSpec c;
+    c.name = "command-list";
+    c.width = 128;
+    c.height = 64;
+    c.format = GE_TFMT_CLUT4;
+    c.sig_rects = {{0, 53, 58, 11}};
+    c.sig_hashes = {
+        0xEE3E34178623FCD2ull,  // es, en (EU); DxD 1.1.4
+    };
+    c.gray = 0x7F;
+    c.hole = 0x17;
+    c.cells = {
+        {PromptGlyph::Square, 14, 53, 10, 10},
+        {PromptGlyph::Circle, 25, 53, 10, 10},
+        {PromptGlyph::Triangle, 36, 53, 10, 10},
+        {PromptGlyph::Cross, 47, 53, 10, 10},
+    };
+    c.label_sig_rects = p3_command_label_sig_rects();
+    c.labels = p3_command_labels();
+    c.separators = p3_command_separators();
+    c.separator_cap = 7;
+    psp_prompts_register_atlas(std::move(c));
 }

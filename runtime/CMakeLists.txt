@@ -732,6 +732,16 @@ if(PSPRECOMP_GAME STREQUAL "patapon3")
                                ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime)
     target_compile_options(test_p3_prompt_labels PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
     add_test(NAME p3_prompt_labels_tests COMMAND test_p3_prompt_labels)
+
+    # Patapon 3 command-list word tables: the same checks for the 128x64 mission command-list atlas.
+    add_executable(test_p3_command_labels tests/test_p3_command_labels.cpp src/psp_bar_text.cpp
+                   src/stb_truetype_impl.cpp ${CMAKE_CURRENT_BINARY_DIR}/bar_fonts_data.cpp
+                   ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime/p3_command_labels.cpp)
+    target_include_directories(test_p3_command_labels PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                               ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb
+                               ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime)
+    target_compile_options(test_p3_command_labels PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+    add_test(NAME p3_command_labels_tests COMMAND test_p3_command_labels)
 endif()
 
 # Present rectangle (aspect fit) and window scale parsing.
