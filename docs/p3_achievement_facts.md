@@ -260,3 +260,11 @@ The rematch "Will the Angry Wolf See a Full Moon?" (snapshots `m_wolf_antes` / `
 (`+0xEDE1`) 5 -> 6: first fight + 1, like Slogturtle 222 -> 223. Fact `mission.23`; `rematch_ragewolf` "Luna llena"
 (`mission.23 >= 1`), in `secret_completionist`. DATA04 = 5, DATA08 = 0. By the same pattern id 24 (43 in DATA04) may be
 Ragewolf's Dark Uberhero mission: not used until seen live.
+
+## Covet-Hiss and the seven Dark Heroes (2026-10-19)
+
+"La última lucha de los Héroes Oscuros" (snapshots `m_covet_antes` / `m_covet_despues`) moved only mission byte id
+262 (`+0xEED0`) 4 -> 5 and `missions` by 1 (the 40-step row after Slogturtle 222). Fact `mission.262`;
+`dark_hero_covet_hiss` "Sin codicia" back with its draft meaning and `dark_heroes_all` "Ocaso de los Héroes Oscuros"
+now = all seven first fights (22 Ragewolf, 53 Naughtyfins, 93 Sonarchy, 133 Ravenous, 173 Buzzcrave, 222 Slogturtle,
+262 Covet-Hiss; the draft said "five"). `secret_completionist` gains `mission.262`. DATA04 = 4 (earns both), DATA08 = 0.
