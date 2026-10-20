@@ -30,9 +30,15 @@ public:
     uint32_t key_mask(int32_t keycode) const;  // 0 when unbound
     uint32_t pad_mask(int button) const;       // 0 when unbound
     std::string describe() const;              // the effective map, canonical form, for the log
+    // Reverse lookup for on-screen prompts: the first key the action with this PSP mask kept (its name as
+    // configured, e.g. "X", "Return") and its pad button name ("a", "leftshoulder"); "" when none.
+    std::string key_name(uint32_t mask) const;
+    std::string pad_name(uint32_t mask) const;
 
 private:
     std::map<int32_t, uint32_t> keys_;
     std::map<int, uint32_t> pads_;
     std::vector<std::string> desc_;
+    std::map<uint32_t, std::string> first_key_;
+    std::map<uint32_t, std::string> pad_name_;
 };

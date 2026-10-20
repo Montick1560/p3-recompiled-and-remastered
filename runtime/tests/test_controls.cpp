@@ -91,12 +91,36 @@ static void empty_unbinds() {
     CHECK(m.key_mask(13) == 0 && m.key_mask(14) == 0 && m.pad_mask(4) == 0, "select fully unbound");
 }
 
+static void reverse_lookup_defaults() {
+    std::vector<std::string> log;
+    const ControlMap m = ControlMap::build("", kKey, kPad, &log);
+    CHECK(m.key_name(0x4000) == "X", "cross shows its first key X");
+    CHECK(m.key_name(0x0008) == "Space", "start key");
+    CHECK(m.key_name(0x0001) == "V", "select shows its first key V");
+    CHECK(m.pad_name(0x4000) == "a", "cross pad button");
+    CHECK(m.pad_name(0x0100) == "leftshoulder", "l pad button");
+    CHECK(m.key_name(0x0004).empty() && m.pad_name(0x0004).empty(), "no action -> empty");
+}
+
+static void reverse_lookup_remap() {
+    std::vector<std::string> log;
+    const ControlMap m = ControlMap::build("cross=K|y;circle=|", kKey, kPad, &log);
+    CHECK(m.key_name(0x4000) == "K" && m.pad_name(0x4000) == "y", "remapped cross");
+    CHECK(m.key_name(0x2000).empty() && m.pad_name(0x2000).empty(), "unbound circle");
+    std::vector<std::string> log2;
+    const ControlMap d = ControlMap::build("circle=X,Z|a", kKey, kPad, &log2);
+    CHECK(d.key_name(0x2000) == "Z", "dropped duplicate X is not circle's first key");
+    CHECK(d.pad_name(0x2000).empty(), "dropped duplicate pad button is not returned");
+}
+
 int main() {
     defaults_are_todays_mapping();
     spec_replaces_named_actions_only();
     invalid_entries_fall_back();
     duplicates_keep_the_first_action();
     empty_unbinds();
+    reverse_lookup_defaults();
+    reverse_lookup_remap();
     std::printf("%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }

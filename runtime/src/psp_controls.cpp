@@ -127,8 +127,10 @@ ControlMap ControlMap::build(const std::string& spec, const KeyLookup& key, cons
             } else if (b >= 0) {
                 pad_owner[b] = a.name;
                 m.pads_[b] = a.mask;
+                m.pad_name_[a.mask] = padname;
             }
         }
+        if (!kept.empty()) m.first_key_[a.mask] = kept.front();
         std::string joined;
         for (const std::string& n : kept) joined += (joined.empty() ? "" : ",") + n;
         m.desc_.push_back(std::string(a.name) + "=" + joined + "|" + padname);
@@ -150,4 +152,14 @@ std::string ControlMap::describe() const {
     std::string s;
     for (const std::string& d : desc_) s += (s.empty() ? "" : ";") + d;
     return s;
+}
+
+std::string ControlMap::key_name(uint32_t mask) const {
+    auto it = first_key_.find(mask);
+    return it == first_key_.end() ? std::string() : it->second;
+}
+
+std::string ControlMap::pad_name(uint32_t mask) const {
+    auto it = pad_name_.find(mask);
+    return it == pad_name_.end() ? std::string() : it->second;
 }
