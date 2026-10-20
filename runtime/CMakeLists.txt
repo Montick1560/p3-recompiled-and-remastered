@@ -151,6 +151,7 @@ set(RUNTIME_SOURCES
     src/psp_input_device.cpp
     src/psp_prompts.cpp
     src/psp_prompt_raster.cpp
+    src/psp_ge_texpatch.cpp
     src/psp_eboot_loader.cpp
     src/psp_menu_prompt.cpp
     src/psp_achievements.cpp
@@ -798,6 +799,12 @@ target_include_directories(test_prompt_raster PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
 target_compile_options(test_prompt_raster PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME prompt_raster_tests COMMAND test_prompt_raster)
+
+# Texture patch seam (recognition memo, per-list variant latch). Pure (no GL).
+add_executable(test_ge_texpatch tests/test_ge_texpatch.cpp src/psp_ge_texpatch.cpp src/psp_ge_texdecode.cpp)
+target_include_directories(test_ge_texpatch PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_ge_texpatch PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME ge_texpatch_tests COMMAND test_ge_texpatch)
 
 add_executable(test_perf tests/test_perf.cpp src/psp_perf.cpp)
 target_include_directories(test_perf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

@@ -1,6 +1,7 @@
 #include "psp_osk_overlay.h"
 #include "psp_exit.h"
 #include "psp_ge_draw.h"
+#include "psp_ge_texpatch.h"
 #include "psp_perf.h"
 #include "psp_ge_blend.h"
 #include "psp_ge_mask.h"
@@ -369,6 +370,7 @@ void ge_draw_mark_dirty() {
 
 void ge_draw_init() {
     g_render_scale = present_render_scale(std::getenv("PSPRECOMP_RENDER_SCALE"));
+    ge_texpatch_set_scale(g_render_scale);
     std::fprintf(stderr, "[DRAW] render scale %d (%dx%d)\n",
                  g_render_scale, fb_w(), fb_h());
     if (g_render_scale > 1) {
@@ -507,6 +509,7 @@ void ge_draw_begin_list() {
     glViewport(0, 0, fb_w(), fb_h());
     g_frame_counter++;
     g_list_prim_index = 0;
+    ge_texpatch_begin_list();  // patched textures use one variant for the whole list
 }
 
 // Debug socket `D <lists>`: remaining display lists to log ([DL] lines).

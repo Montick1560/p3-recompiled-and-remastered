@@ -2,14 +2,11 @@
 // RGBA8 helpers for drawing button prompts into a texture (pure, no GL), and the embedded icon set
 // (Kenney Input Prompts 1.5, CC0: runtime/assets/button_prompts, built into the exe by
 // runtime/cmake/embed_files.cmake).
+#include "psp_rgba_image.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
-
-struct RgbaImage {
-    int w = 0, h = 0;
-    std::vector<uint8_t> px;  // RGBA8, top row first
-};
 
 // The decoded 64x64 icon `name` (a psp_prompts.h icon name; "@arrows_all" / "@arrows_vertical" /
 // "@arrows_up" are arrow-key keycaps drawn here), nullptr when unknown. Decoded once and kept; safe

@@ -6,6 +6,8 @@
 #include "psp_ge_sampler.h"
 #include "psp_ge_texdecode.h"
 #include "psp_ge_texmemo.h"
+#include "psp_ge_texpatch.h"
+#include "psp_prompt_raster.h"
 #include "psp_ge_constants.h"
 #include "psp_memory.h"
 #include "psp_texrep.h"
@@ -151,6 +153,46 @@ static bool try_share(int slot, const uint8_t* rdram, const GeState& state,
     e.replace_pending = false;
     account_slot(slot, 0);  // the owner slot accounts the shared bytes
     return true;
+}
+
+// ---- Texture patches (psp_ge_texpatch.h) ----
+
+/// The image a patched texture uploads: the pack image when it is ready,
+/// else the decoded original enlarged to ge_texpatch_scale() (nearest or
+/// bilinear like the draw's magnification filter, so it looks the same),
+/// redrawn by its patcher.
+static RgbaImage build_patched(const uint8_t* rdram, const GeTexDecodeParams& params,
+                               const GeState& state, uint32_t patch, const GeTexrepImage* rep) {
+    RgbaImage img;
+    if (rep != nullptr) {
+        img.w = rep->w;
+        img.h = rep->h;
+        img.px.assign(rep->rgba, rep->rgba + static_cast<size_t>(rep->w) * rep->h * 4);
+    } else {
+        RgbaImage orig;
+        orig.w = params.width;
+        orig.h = params.height;
+        if (!ge_decode_texture(rdram, params, orig.px)) {
+            orig.px.assign(static_cast<size_t>(orig.w) * orig.h * 4, 0);
+        }
+        const int k = ge_texpatch_scale();
+        static const GeFilterOverride ov = ge_filter_override_parse(std::getenv("PSPRECOMP_TEX_FILTER"));
+        if (k == 1) {
+            img = std::move(orig);
+        } else if (ge_sampler_from_regs(state.tex_filter, state.tex_wrap, ov).mag_linear) {
+            img = rgba_resample(orig, orig.w * k, orig.h * k);
+        } else {
+            img.w = orig.w * k;
+            img.h = orig.h * k;
+            img.px.resize(static_cast<size_t>(img.w) * img.h * 4);
+            for (int y = 0; y < img.h; y++)
+                for (int x = 0; x < img.w; x++)
+                    std::memcpy(&img.px[(static_cast<size_t>(y) * img.w + x) * 4],
+                                &orig.px[(static_cast<size_t>(y / k) * orig.w + x / k) * 4], 4);
+        }
+    }
+    ge_texpatch_apply(patch, params, img);
+    return img;
 }
 
 // ---- Sampler ----
@@ -335,6 +377,13 @@ GLuint ge_texture_bind(
         }
         g_hash_memo.put(frame_num, masked_addr, params_hash, content_hash);
     }
+    // A patched texture (psp_ge_texpatch.h) is cached per variant: its own
+    // private GL texture, never shared under the pack file's path.
+    uint32_t patch = 0;
+    if (ge_texpatch_active()) {
+        patch = ge_texpatch_variant(rdram, params, content_hash);
+        if (patch != 0) content_hash ^= patch * 0x27D4EB2Fu;
+    }
 
     // Cache lookup
     int slot = find_or_evict(psp_addr, content_hash);
@@ -347,12 +396,21 @@ GLuint ge_texture_bind(
         entry.last_frame = frame_num;
         g_gl_lru.touch(slot);
         if (entry.replace_pending && ge_texrep_epoch() != entry.replace_epoch
-            && !try_share(slot, rdram, state, draw_max_v)) {
+            && (patch != 0 || !try_share(slot, rdram, state, draw_max_v))) {
             // A pack image finished decoding since the last try: retry.
             entry.replace_epoch = ge_texrep_epoch();
             GeTexrepImage rep;
             const GeTexrepResult r = ge_texrep_replacement(rdram, state, draw_max_v, &rep);
-            if (r == GeTexrepResult::Ready) {
+            if (r == GeTexrepResult::Ready && patch != 0) {
+                const RgbaImage img = build_patched(rdram, params, state, patch, &rep);
+                gl_state_bind_texture(entry.gl_tex);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, img.w, img.h, 0,
+                             GL_RGBA, GL_UNSIGNED_BYTE, img.px.data());
+                entry.forced_filter = static_cast<int>(rep.filter);
+                ge_texrep_image_uploaded(rep);
+                account_slot(slot, static_cast<size_t>(img.w) * img.h * 4);
+                trim_gl_budget(frame_num, slot);
+            } else if (r == GeTexrepResult::Ready) {
                 gl_state_bind_texture(entry.gl_tex);
                 glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, rep.w, rep.h, 0,
                              GL_RGBA, GL_UNSIGNED_BYTE, rep.rgba);
@@ -385,7 +443,7 @@ GLuint ge_texture_bind(
     // magenta placeholder).
     // A pack file already on the GPU for another slot is shared as is.
     if (perf_enabled()) g_perf.tex_misses.fetch_add(1, std::memory_order_relaxed);
-    const bool shared = try_share(slot, rdram, state, draw_max_v);
+    const bool shared = patch == 0 && try_share(slot, rdram, state, draw_max_v);
     GeTexrepImage rep;
     GeTexrepResult r = GeTexrepResult::None;
     if (!shared) {
@@ -400,8 +458,21 @@ GLuint ge_texture_bind(
         glGenTextures(1, &entry.gl_tex);
     }
     const bool bound = gl_state_bind_texture(entry.gl_tex);
+    size_t patched_bytes = 0;
     if (shared) {
         // Already uploaded; forced_filter came with the share.
+    } else if (patch != 0) {
+        // The slot may hold a pack texture other slots share: get a private one.
+        if (!entry.rep_path.empty()) {
+            release_gl_texture(entry);
+            glGenTextures(1, &entry.gl_tex);
+            gl_state_bind_texture(entry.gl_tex);
+        }
+        const RgbaImage img = build_patched(rdram, params, state, patch, replaced ? &rep : nullptr);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, img.w, img.h, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, img.px.data());
+        if (replaced) ge_texrep_image_uploaded(rep);
+        patched_bytes = static_cast<size_t>(img.w) * img.h * 4;
     } else if (replaced) {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, rep.w, rep.h, 0,
                      GL_RGBA, GL_UNSIGNED_BYTE, rep.rgba);
@@ -441,7 +512,7 @@ GLuint ge_texture_bind(
     // while over budget (this slot is in use right now, so it is kept). A
     // shared pack texture is accounted once, by the slot that uploaded it.
     g_gl_lru.remove(slot);
-    const size_t tex_bytes = shared ? 0 : (replaced
+    const size_t tex_bytes = patch != 0 ? patched_bytes : shared ? 0 : (replaced
         ? static_cast<size_t>(rep.w) * rep.h
         : static_cast<size_t>(width) * height) * 4;
     account_slot(slot, tex_bytes);
