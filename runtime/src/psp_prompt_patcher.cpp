@@ -20,7 +20,7 @@ bool candidate(const GeTexDecodeParams& p) {
     return p.width == g_spec.width && p.height == g_spec.height && p.format == g_spec.format;
 }
 
-bool recognise(const GeTexDecodeParams& p, const uint8_t* rgba) {
+uint32_t recognise(const GeTexDecodeParams& p, const uint8_t* rgba) {
     const uint64_t sig = prompt_atlas_signature(rgba, p.width, g_spec.sig_rects);
     const bool ok = std::find(g_spec.sig_hashes.begin(), g_spec.sig_hashes.end(), sig) != g_spec.sig_hashes.end();
     if (g_sig_log) {
@@ -31,7 +31,7 @@ bool recognise(const GeTexDecodeParams& p, const uint8_t* rgba) {
     if (ok && logged.insert(p.addr).second) {
         std::fprintf(stderr, "[PROMPTS] help-bar atlas recognised (%dx%d) at 0x%08X\n", p.width, p.height, p.addr);
     }
-    return ok;
+    return ok ? 1 : 0;
 }
 
 uint32_t variant() { return prompt_atlas_variant(psp_input_device(), g_style); }
@@ -39,7 +39,7 @@ uint32_t variant() { return prompt_atlas_variant(psp_input_device(), g_style); }
 void apply(uint32_t v, const GeTexDecodeParams&, RgbaImage& img) {
     InputDevice d;
     PromptStyle s;
-    if (prompt_atlas_variant_decode(v, &d, &s)) prompt_atlas_compose(g_spec, d, s, psp_control_map(), img);
+    if (prompt_atlas_variant_decode(v & 0xFFFFFu, &d, &s)) prompt_atlas_compose(g_spec, d, s, psp_control_map(), img);
 }
 
 }  // namespace

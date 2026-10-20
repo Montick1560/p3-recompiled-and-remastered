@@ -13,22 +13,24 @@
 struct GeTexPatcher {
     // Cheap pre-filter on the decode parameters (size, format): false = never this texture.
     bool (*candidate)(const GeTexDecodeParams& p);
-    // The decoded original (RGBA8, p.width x p.height): is this the texture? Memoised per content hash.
-    bool (*recognise)(const GeTexDecodeParams& p, const uint8_t* rgba);
+    // The decoded original (RGBA8, p.width x p.height): 0 = not this texture, else a tag 1..255 the
+    // patcher chooses (e.g. which language of the texture this is). Memoised per content hash.
+    uint32_t (*recognise)(const GeTexDecodeParams& p, const uint8_t* rgba);
     // The variant to draw now (0 = leave the texture alone). Read once per display list.
     uint32_t (*variant)();
-    // Redraw `img` (the original, or a larger pack image: scale = img.w / p.width) for `variant`.
+    // Redraw `img` (the original, or a larger pack image: scale = img.w / p.width) for `variant`:
+    // (tag << 20) | the latched variant, so the tag is (variant >> 20) & 0xFF.
     void (*apply)(uint32_t variant, const GeTexDecodeParams& p, RgbaImage& img);
 };
 
-// At most 4 patchers; a patcher variant must fit in 28 bits.
+// At most 4 patchers; a patcher variant must fit in 20 bits; the tag in 8.
 void ge_texpatch_register(const GeTexPatcher& p);
 
 // GE thread, at the start of every display list: latch each patcher's variant.
 void ge_texpatch_begin_list();
 
 // GE thread, every texture bind (after its content hash): the latched variant of the patcher that
-// recognises this texture, tagged with the patcher in the top 4 bits; 0 = not patched. The original
+// recognises this texture, (patcher + 1) << 28 | tag << 20 | variant; 0 = not patched. The original
 // is decoded at most once per new content hash (memo of 512 hashes, cleared when full).
 uint32_t ge_texpatch_variant(const uint8_t* rdram, const GeTexDecodeParams& p, uint32_t content_hash);
 

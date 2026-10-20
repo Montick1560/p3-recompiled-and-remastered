@@ -12,8 +12,12 @@ constexpr size_t kMemoMax = 512;
 GeTexPatcher g_patchers[kMaxPatchers];
 int g_count = 0;
 uint32_t g_latched[kMaxPatchers] = {};
-// content hash -> index of the patcher that recognised it, -1 = none. GE thread only.
-std::unordered_map<uint32_t, int> g_memo;
+struct Recognised {
+    int idx;      // the patcher that recognised the texture, -1 = none
+    uint8_t tag;  // its recognition tag
+};
+// content hash -> what recognised it. GE thread only.
+std::unordered_map<uint32_t, Recognised> g_memo;
 int g_scale = 1;
 
 }  // namespace
@@ -25,29 +29,31 @@ void ge_texpatch_register(const GeTexPatcher& p) {
 bool ge_texpatch_active() { return g_count > 0; }
 
 void ge_texpatch_begin_list() {
-    for (int i = 0; i < g_count; i++) g_latched[i] = g_patchers[i].variant() & 0x0FFFFFFFu;
+    for (int i = 0; i < g_count; i++) g_latched[i] = g_patchers[i].variant() & 0xFFFFFu;
 }
 
 uint32_t ge_texpatch_variant(const uint8_t* rdram, const GeTexDecodeParams& p, uint32_t content_hash) {
-    int idx = -1;
+    Recognised r{-1, 0};
     bool any_candidate = false;
     for (int i = 0; i < g_count; i++) any_candidate |= g_patchers[i].candidate(p);
     if (!any_candidate) return 0;
     auto it = g_memo.find(content_hash);
     if (it != g_memo.end()) {
-        idx = it->second;
+        r = it->second;
     } else {
         std::vector<uint8_t> rgba;
         if (ge_decode_texture(rdram, p, rgba)) {
-            for (int i = 0; i < g_count && idx < 0; i++) {
-                if (g_patchers[i].candidate(p) && g_patchers[i].recognise(p, rgba.data())) idx = i;
+            for (int i = 0; i < g_count && r.idx < 0; i++) {
+                if (!g_patchers[i].candidate(p)) continue;
+                const uint32_t tag = g_patchers[i].recognise(p, rgba.data()) & 0xFFu;
+                if (tag != 0) r = {i, static_cast<uint8_t>(tag)};
             }
         }
         if (g_memo.size() >= kMemoMax) g_memo.clear();
-        g_memo[content_hash] = idx;
+        g_memo[content_hash] = r;
     }
-    if (idx < 0 || g_latched[idx] == 0) return 0;
-    return (static_cast<uint32_t>(idx + 1) << 28) | g_latched[idx];
+    if (r.idx < 0 || g_latched[r.idx] == 0) return 0;
+    return (static_cast<uint32_t>(r.idx + 1) << 28) | (static_cast<uint32_t>(r.tag) << 20) | g_latched[r.idx];
 }
 
 void ge_texpatch_apply(uint32_t variant, const GeTexDecodeParams& p, RgbaImage& img) {
