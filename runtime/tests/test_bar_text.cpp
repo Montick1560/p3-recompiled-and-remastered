@@ -123,6 +123,48 @@ static void blends_over_existing_pixels() {
     CHECK(lo == 100, "\"over\" never lowers the alpha that is there");
 }
 
+// Fitted words are cached (a device switch re-composes the atlas): a word drawn again, after other
+// words and other boxes, is byte-identical to its first drawing.
+static void redraw_is_identical() {
+    const float px = bar_font_px_for_cap(16.0f);
+    RgbaImage a = clear_image(300, 60), b = clear_image(300, 60), junk = clear_image(300, 60);
+    rgba_draw_text(a, 3, 40, 70, px, "Pantalla de título", 0x7F, 200);
+    rgba_draw_text(junk, 3, 40, 300, px, "Pantalla de título", 0x7F, 200);
+    rgba_draw_text(junk, 3, 40, 70, bar_font_px_for_cap(15.0f), "Pantalla de título", 0x7F, 200);
+    rgba_draw_text(junk, 3, 40, 70, px, "Confirmar", 0x7F, 200);
+    rgba_draw_text(b, 3, 40, 70, px, "Pantalla de título", 0x7F, 200);
+    CHECK(a.px == b.px, "same word, box and size -> same pixels");
+    CHECK(a.px != junk.px, "other boxes / sizes / words are other drawings");
+}
+
+static int ink_rows(const RgbaImage& img, int y0, int y1) {  // inked texels' alpha sum in rows [y0, y1]
+    int s = 0;
+    for (int y = std::max(0, y0); y <= std::min(img.h - 1, y1); y++)
+        for (int x = 0; x < img.w; x++) s += img.px[(static_cast<size_t>(y) * img.w + x) * 4 + 3];
+    return s;
+}
+
+// A band that leaves one texel above the caps (Patapon 3's rows): a capital accent that rises higher is
+// folded into that room, not cut off; likewise a descender below the band's last row.
+static void accents_and_descenders_fold_into_the_band() {
+    const float cap = 32.0f, px = bar_font_px_for_cap(cap);
+    const int baseline = 60, cap_top = baseline - 32;
+    RgbaImage free_img = clear_image(200, 100), band = clear_image(200, 100);
+    rgba_draw_text(free_img, 10, baseline, 180, px, "É", 0x7F, 255);
+    rgba_draw_text(band, 10, baseline, 180, px, "É", 0x7F, 255, cap_top - 4, baseline + 7);
+    const int accent = ink_rows(free_img, 0, cap_top - 1), folded = ink_rows(band, cap_top - 4, cap_top - 1);
+    CHECK(ink_rows(free_img, 0, cap_top - 5) > 0, "the font's É accent rises more than 4 px above the caps");
+    CHECK(folded * 2 >= accent, "the accent is folded into the 4 px above the caps (>= half its ink)");
+    CHECK(ink_rows(band, 0, cap_top - 5) == 0, "nothing above the band");
+    CHECK(ink_rows(band, cap_top, baseline - 1) == ink_rows(free_img, cap_top, baseline - 1), "the E itself is unchanged");
+    RgbaImage free_g = clear_image(200, 100), band_g = clear_image(200, 100);
+    rgba_draw_text(free_g, 10, baseline, 180, px, "g", 0x7F, 255);
+    rgba_draw_text(band_g, 10, baseline, 180, px, "g", 0x7F, 255, cap_top - 4, baseline + 3);
+    CHECK(ink_rows(free_g, baseline + 4, 99) > 0, "the descender of g goes deeper than 4 px");
+    CHECK(ink_rows(band_g, baseline, baseline + 3) * 2 >= ink_rows(free_g, baseline, 99), "the descender is folded in");
+    CHECK(ink_rows(band_g, baseline + 4, 99) == 0, "nothing below the band");
+}
+
 static void width_has_no_condensing() {
     const float px = bar_font_px_for_cap(16.0f);
     const float w = bar_text_width("Seleccionar", px);
@@ -139,6 +181,8 @@ int main() {
     alpha_scales_coverage();
     missing_glyph_draws_nothing();
     blends_over_existing_pixels();
+    redraw_is_identical();
+    accents_and_descenders_fold_into_the_band();
     width_has_no_condensing();
     std::printf("%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;

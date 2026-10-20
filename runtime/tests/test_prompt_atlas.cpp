@@ -344,6 +344,47 @@ static void unknown_labels_redraw_separators_only() {
     CHECK(has_new_ink(img, {1, 1, 117, 127}, 1), "the separator is redrawn");
 }
 
+// Words 0..2 texels apart (the game's tight spacing) keep a visible gap: the left word stops short of
+// its box end by a margin (~12 % of the cap height); a word with room after it may fill its box.
+static void close_words_keep_a_gap() {
+    const int k = 4;
+    RgbaImage img;
+    img.w = 256 * k;
+    img.h = 128 * k;
+    img.px.assign(static_cast<size_t>(img.w) * img.h * 4, 0);
+    BarLabels t{"gap", 0, 8, 0xFF, {}};
+    t.rows.push_back({0, 10, 9, {{2, 24, "Menú"}, {26, 44, "Datos"}, {60, 70, "de"}}});
+    bar_text_compose(&t, BarRow{0, -1, 0, {}}, 7, 0x7F, 0xFF, {}, k, k, img);
+    auto last_ink = [&](int x0, int x1) {
+        int last = -1;
+        for (int y = 0; y < 11 * k; y++)
+            for (int x = x0 * k; x < (x1 + 1) * k; x++)
+                if (img.px[(static_cast<size_t>(y) * img.w + x) * 4 + 3] != 0) last = std::max(last, x);
+        return last;
+    };
+    CHECK(last_ink(2, 24) >= 0 && last_ink(2, 24) <= 25 * k - 1 - 3, "a word followed 1 texel later stops >= 3 px short");
+    CHECK(last_ink(26, 44) >= 45 * k - 2, "a condensed word with room after it fills its box");
+
+    // A box already at ~76 % of the word's natural width: the margin shrinks so it is never condensed
+    // below 75 %.
+    const float px = bar_font_px_for_cap(8.0f * k);
+    const int natural = bar_text_ink_width("Lijst", px);
+    const int box_tx = (natural * 76 / 100 + k - 1) / k;  // texels
+    RgbaImage img2 = img;
+    img2.px.assign(img2.px.size(), 0);
+    BarLabels t2{"tight", 0, 8, 0xFF, {}};
+    t2.rows.push_back({0, 10, 9, {{2, 2 + box_tx - 1, "Lijst"}, {2 + box_tx + 1, 2 + box_tx + 30, "wijzigen"}}});
+    bar_text_compose(&t2, BarRow{0, -1, 0, {}}, 7, 0x7F, 0xFF, {}, k, k, img2);
+    int first = -1, last = -1;
+    for (int y = 0; y < 11 * k; y++)
+        for (int x = 2 * k; x < (2 + box_tx) * k; x++)
+            if (img2.px[(static_cast<size_t>(y) * img2.w + x) * 4 + 3] != 0) {
+                if (first < 0 || x < first) first = x;
+                last = std::max(last, x);
+            }
+    CHECK(last - first + 1 >= natural * 3 / 4 - 1, "the margin never condenses a word below 75 %");
+}
+
 static void label_recognition() {
     const RgbaImage base = label_atlas();
     const PromptAtlasSpec spec = label_spec(base);
@@ -373,6 +414,7 @@ int main() {
     icons_on_text_off_keeps_labels();
     unknown_labels_redraw_separators_only();
     label_recognition();
+    close_words_keep_a_gap();
     std::printf("%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }

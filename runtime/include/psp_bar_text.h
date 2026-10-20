@@ -35,6 +35,9 @@ bool bar_font_has(const std::string& utf8);
 float bar_font_px_for_cap(float cap_px);
 // Advance width of `utf8` at `px`, kerning included, not condensed.
 float bar_text_width(const std::string& utf8, float px);
+// Ink width (pixels) of `utf8` at `px`, not condensed: what rgba_draw_text fits into a box. 0 when a
+// code point is missing.
+int bar_text_ink_width(const std::string& utf8, float px);
 
 // Draws `utf8` with its ink's left edge at `x` and its baseline at `baseline` (the first pixel row below
 // the letters), condensed horizontally by min(1, box_w / ink width) and never outside [x, x + box_w).
