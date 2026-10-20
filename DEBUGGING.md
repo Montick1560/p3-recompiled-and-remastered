@@ -270,15 +270,21 @@ the socket for scripted/agent input.
 | `PSPRECOMP_SCREENSHOT=path` | One-shot TGA after first prims + shutdown capture |
 | `PSPRECOMP_CROSS_MID=1` | (recompile-time) cross-function mid-entry emission — must match workflow |
 
-Help-bar prompts (button icons + sharp label text, `psp_prompt_patcher.cpp`): `PSPRECOMP_BAR_TEXT=off`
-keeps the game's labels, `PSPRECOMP_BUTTON_ICONS=off` the PSP icons (both off = the patcher is not
-registered); `PSPRECOMP_PROMPTS_SIG_LOG=1` logs every candidate atlas's signature and label signature
-(`labels=`), and the `[PROMPTS] help-bar atlas recognised ... labels <name>` line says which word table
-is in use ("unknown" = a language or release with no table: its labels stay the game's). A new language
+Prompt atlases (button icons + sharp label text of the help bars and the mission command list,
+`psp_prompt_patcher.cpp`): `PSPRECOMP_BAR_TEXT=off` keeps the game's labels, `PSPRECOMP_BUTTON_ICONS=off`
+the PSP icons (both off = the patcher is not registered); `PSPRECOMP_PROMPTS_SIG_LOG=1` logs every
+candidate atlas's signature and label signature (`labels=`) with the name of the atlas whose size it has,
+and the `[PROMPTS] help-bar atlas recognised ... labels <name>` / `[PROMPTS] command-list atlas
+recognised ... labels <name>` lines say which word table is in use ("unknown" = a language or release
+with no table: its labels stay the game's). A new language
 or release: dump its atlas (`build/tools/p3_lang_boot.py ... DUMP=<atlas addr>`), then
 `build/tools/atlas_words.py <atlas.png> <out_x8.png> --sig --strips` proposes the word runs (x8 sheet,
 x6 strips per band) and prints the label signature; `--emit <texts.txt> <name>` turns the words read off
-the strips into the C++ table for `games/patapon3/runtime/p3_prompt_labels.cpp`.
+the strips into the C++ table for `games/patapon3/runtime/p3_prompt_labels.cpp`. The command list
+(128x64 atlas, word tables in `games/patapon3/runtime/p3_command_labels.cpp`) is only loaded in a
+mission: `build/tools/texture_recon/recon_mission.py OUTDIR [scale]` drives the tour to the training
+mission on port 9998, finds the strip's PRIM, dumps its atlas (`strip_<addr>.png`) and, with
+`SHOTS=keyboard,xbox,ps4,ps5`, shoots the strip per device; then `atlas_words.py ... --layout command`.
 
 ~30 more narrow investigation probes exist (LK_*, GK_*, BND_*, D1_TRACE, CTX_PROBE,
 PUSH_TRACE, FE90_OBJ, ...); they are one-off band-aids/probes from past bugs — since
