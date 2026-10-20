@@ -131,6 +131,7 @@ const PspFact kFacts[] = {
     {"mission.216", 0xEEA2, 1, false, -1, 0, 0, 255},
     {"mission.222", 0xEEA8, 1, false, -1, 0, 0, 255},
     {"mission.242", 0xEEBC, 1, false, -1, 0, 0, 255},
+    {"mission.256", 0xEECA, 1, false, -1, 0, 0, 255},
     {"mission.262", 0xEED0, 1, false, -1, 0, 0, 255},
     {"mission.282", 0xEEE4, 1, false, -1, 0, 0, 255},
     {"mission.28", 0xEDE6, 1, false, -1, 0, 0, 255},

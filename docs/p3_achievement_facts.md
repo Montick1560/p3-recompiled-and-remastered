@@ -284,3 +284,10 @@ conditions inspired by RetroAchievements and the PS trophy "Forge Onward"); `sec
 byte id 15 (`+0xEDD9`) 2 -> 3 and `missions` by 1 (another low id whose Master ID List name, "Estate of Earnlestness",
 is not the mission title). DATA04 = 17. Fact `mission.15`; `boss_gigantus` "Coloso caído" (`>= 1`), in
 `secret_completionist`.
+
+## Gigante King (2026-10-19)
+
+"El gran rey gigante" on the save "MoMo", vanilla EU (snapshots `m_king_antes` / `m_king_despues`) moved only mission
+byte id 256 (`+0xEECA`) 0 -> 1 and `missions` by 1; DATA04 = 3, DATA08 = 0. Not DxD-only (played on vanilla EU).
+Fact `mission.256`; `dxd_gigante_king` "Rey caído" back with its draft id (text without "(DxD)"), in
+`secret_completionist`.
