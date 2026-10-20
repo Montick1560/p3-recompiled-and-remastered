@@ -722,6 +722,16 @@ if(PSPRECOMP_GAME STREQUAL "patapon3")
         PSP_P3_SAVES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../build/save_main")
     target_compile_options(test_p3_achievements PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
     add_test(NAME p3_achievements_tests COMMAND test_p3_achievements)
+
+    # Patapon 3 help-bar word tables: drawable, inside their rows, fitting at >= 75 %.
+    add_executable(test_p3_prompt_labels tests/test_p3_prompt_labels.cpp src/psp_bar_text.cpp
+                   src/stb_truetype_impl.cpp ${CMAKE_CURRENT_BINARY_DIR}/bar_fonts_data.cpp  # embedded below
+                   ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime/p3_prompt_labels.cpp)
+    target_include_directories(test_p3_prompt_labels PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                               ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb
+                               ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime)
+    target_compile_options(test_p3_prompt_labels PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+    add_test(NAME p3_prompt_labels_tests COMMAND test_p3_prompt_labels)
 endif()
 
 # Present rectangle (aspect fit) and window scale parsing.

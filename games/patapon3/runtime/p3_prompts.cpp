@@ -8,10 +8,13 @@
 // game draws some cells rotated by 90 degrees through the UVs (the hideout's "L/R/+" uses the
 // up/down D-pad turned sideways), which the drawn icons tolerate. The pill sprites start at row 101,
 // so the pill cells are the pills' own extent (y 102..113). The atlas is recognised by the
-// coverage of the pills (x 0..78, y 99..115) and the glyph row (x 0..124, y 116..127): identical in
-// the Spanish, English, French, Italian and German atlases (only the labels and the palette's alpha
-// ramp differ, so the signature ignores alpha levels).
+// coverage of the pills (x 0..78, y 99..115) and the glyph row (x 0..124, y 116..127): the same in
+// most languages (only the labels and the palette's alpha ramp differ, so the signature ignores
+// alpha levels); a few lack a faint halo or edge texels (one hash each, below). The labels are
+// redrawn sharp from the word tables of p3_prompt_labels.cpp: their coverage picks the language's
+// table (none for Polish: the bar font lacks its diacritics, so its labels stay the game's).
 #include "p3_prompts.h"
+#include "p3_prompt_labels.h"
 
 #include "psp_ge_constants.h"
 #include "psp_prompt_atlas.h"
@@ -25,7 +28,11 @@ void p3_prompts_register() {
     s.format = GE_TFMT_CLUT4;
     s.sig_rects = {{0, 99, 79, 17}, {0, 116, 125, 12}};
     s.sig_hashes = {
-        0xBDBB50705ED7F138ull,  // DxD 1.1.4: Spanish, English, French, Italian, German
+        0xBDBB50705ED7F138ull,  // es, en (EU and US), it, de; DxD 1.1.4 / 1.1.5b and vanilla EU; pt (vanilla)
+        0xC81C007599244E54ull,  // fr; ru (vanilla): 98 alpha-4 halo texels of the red D-pads are clear
+        0x910C01FEB9FAECBDull,  // pl (vanilla): the same halo + 5 faint texels
+        0x0A7562B382841968ull,  // nl (vanilla): 8 faint texels
+        0x3036744C716933C2ull,  // ja (DxD, at 0x09341480): 8 faint edge texels
     };
     s.gray = 0x7F;
     s.hole = 0x17;
@@ -42,5 +49,9 @@ void p3_prompts_register() {
         {PromptGlyph::Start, 1, 102, 37, 12},
         {PromptGlyph::Select, 41, 102, 37, 12},
     };
+    s.label_sig_rects = p3_label_sig_rects();
+    s.labels = p3_bar_labels();
+    s.separators = p3_bar_separators();
+    s.separator_cap = 7;
     psp_prompts_register_atlas(std::move(s));
 }
