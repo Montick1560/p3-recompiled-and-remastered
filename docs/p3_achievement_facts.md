@@ -268,3 +268,12 @@ Ragewolf's Dark Uberhero mission: not used until seen live.
 `dark_hero_covet_hiss` "Sin codicia" back with its draft meaning and `dark_heroes_all` "Ocaso de los Héroes Oscuros"
 now = all seven first fights (22 Ragewolf, 53 Naughtyfins, 93 Sonarchy, 133 Ravenous, 173 Buzzcrave, 222 Slogturtle,
 262 Covet-Hiss; the draft said "five"). `secret_completionist` gains `mission.262`. DATA04 = 4 (earns both), DATA08 = 0.
+
+## Forge level (2026-10-19)
+
+The u32 at `+0x29728` is the Forge (Fragua) level minus one. Live on the user's save "MoMo" (snapshots
+`smith2_antes` / `smith2_despues`): upgrading the Forge from level 3 to 4 moved it 2 -> 3 (a first try that did not
+upgrade left it at 2). The user's main save and DATA04 = 3 (level 4), the early saves (new Edson, DATA08) = 0. The
+neighbouring words are 0 in every save. Fact `smith.level` (0..15); `smith_2` / `smith_3` / `smith_4` (>= 1 / 2 / 3,
+conditions inspired by RetroAchievements and the PS trophy "Forge Onward"); `secret_completionist` gains
+`smith.level >= 3`. DATA04 earns the three; DATA08 none.

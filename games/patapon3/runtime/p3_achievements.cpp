@@ -53,6 +53,7 @@ const PspFact kFacts[] = {
     {"hero.level", 0xF294, 4, false, -1, 0, 1, 99},
     {"playtime.seconds", 0x14, 4, false, -1, 0, 0, 2147483647},
     {"kaching", 0x20, 4, false, -1, 0, 0, 999999999},
+    {"smith.level", 0x29728, 4, false, -1, 0, 0, 15},
     {"archfiend.valor", 0xEDEA, 1, false, -1, 0, 0, 255},
     {"archfiend.purity", 0xEE12, 1, false, -1, 0, 0, 255},
     {"archfiend.justice", 0xEE3A, 1, false, -1, 0, 0, 255},

@@ -35,14 +35,14 @@ static const std::vector<std::string> kWant04 = {
     "multi_feisu", "multi_forudo", "multi_hyumitto", "multi_inosen", "multi_justi", "multi_libera", "multi_valo",
     "perfect_1000", "perfect_100000", "playtime_1000h", "playtime_100h", "popular_10", "popular_30", "recruit_10",
     "rematch_ragewolf", "rematch_ravenous", "rematch_slogturtle", "rematch_sonarchy", "replay_libera_100",
-    "replay_multi_100", "secret_heroes_1000", "story_all_archfiends", "story_ending", "story_first_archfiend",
-    "story_prologue", "sukopon_boss", "team_points_10000", "ton_15", "ton_25", "ton_32", "uberhero_15",
-    "uberhero_25", "unit_level_30", "unlock_alosson", "unlock_bowmunk", "unlock_buzzcrave", "unlock_cannassault",
-    "unlock_cannogabang", "unlock_charibasa", "unlock_covet_hiss", "unlock_destrobo", "unlock_grenburr",
-    "unlock_guardira", "unlock_jamsch", "unlock_kibadda", "unlock_myamsar", "unlock_naughtyfins", "unlock_oohoroc",
-    "unlock_piekron", "unlock_pingrek", "unlock_pyokorider", "unlock_ragewolf", "unlock_ravenous",
-    "unlock_slogturtle", "unlock_sonarchy", "unlock_taterazay", "unlock_tondenga", "unlock_wondabarappa",
-    "unlock_wooyari", "unlock_yumiyacha", "vs_1", "vs_50"};
+    "replay_multi_100", "secret_heroes_1000", "smith_2", "smith_3", "smith_4", "story_all_archfiends",
+    "story_ending", "story_first_archfiend", "story_prologue", "sukopon_boss", "team_points_10000", "ton_15",
+    "ton_25", "ton_32", "uberhero_15", "uberhero_25", "unit_level_30", "unlock_alosson", "unlock_bowmunk",
+    "unlock_buzzcrave", "unlock_cannassault", "unlock_cannogabang", "unlock_charibasa", "unlock_covet_hiss",
+    "unlock_destrobo", "unlock_grenburr", "unlock_guardira", "unlock_jamsch", "unlock_kibadda", "unlock_myamsar",
+    "unlock_naughtyfins", "unlock_oohoroc", "unlock_piekron", "unlock_pingrek", "unlock_pyokorider",
+    "unlock_ragewolf", "unlock_ravenous", "unlock_slogturtle", "unlock_sonarchy", "unlock_taterazay",
+    "unlock_tondenga", "unlock_wondabarappa", "unlock_wooyari", "unlock_yumiyacha", "vs_1", "vs_50"};
 static const std::vector<std::string> kWant08 = {"missions_1"};
 
 // Puts the save at a heap address and the dxd-1.1.4 chain (from the doc) in front of it.
