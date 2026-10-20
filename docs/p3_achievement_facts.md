@@ -232,8 +232,9 @@ unlock flag (+0x38) to be confirmed live. DATA04 misses `rematch_naughtyfins` (6
 The u32 at `+0x38` of each class record (the four blocks above) is the unlock flag. In both saves it is exactly 1
 where the class is available and 0 elsewhere: DATA04 has the 21 hero classes and the 7 Dark Hero classes set in the
 Uberhero block and each companion's family in its own block; DATA08 has only Yarida (Uberhero) and the base class
-of Ton, Chin and Kan, which is what the Cuartel showed. Classes 0, 1, 6, 7, 8, 10, 11 are 0 in both. Not seen
-flipping live yet (0 → 1 when a class is unlocked): to be confirmed with an antes/después when the user unlocks one.
+of Ton, Chin and Kan, which is what the Cuartel showed. Classes 0, 1, 6, 7, 8, 10, 11 are 0 in both. Live
+(2026-10-19, a new save, snapshots `cls_despues` / `cls_piekron`): unlocking Piekron moved its Uberhero `+0x38` 0 → 1
+(and exp `+0x40` 0 → 5200, level 1 → 5) and no other flag of the four blocks. A mission with no unlock moved no flag.
 
 Facts: `class.<name>.unlocked` (Uberhero block, 4 bytes, 0..255, tested with `!= 0`) for the 21 hero classes and the
 Dark Hero classes 28..34 (ravenous, sonarchy, ragewolf, naughtyfins, slogturtle, covet_hiss, buzzcrave; names from
