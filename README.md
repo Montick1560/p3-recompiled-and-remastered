@@ -188,8 +188,11 @@ How it got here:
 
 **PC button prompts.** The Patapon 3 help bars show the keys or controller buttons the player
 actually uses (keyboard, Xbox / Steam Deck, DualShock 4, DualSense; the last input wins, launcher
-remaps included), in the game's gray or in colour (`PSPRECOMP_BUTTON_ICONS=gray|color|off`). Icons:
-[Kenney Input Prompts](https://kenney.nl/assets/input-prompts) (CC0), credited with thanks.
+remaps included), in the game's gray or in colour (`PSPRECOMP_BUTTON_ICONS=gray|color|off`), and their
+labels are redrawn sharp at any resolution (every language of DxD and vanilla EU except Polish, whose
+letters the font lacks). Icons:
+[Kenney Input Prompts](https://kenney.nl/assets/input-prompts) (CC0); bar font: Zen Maru Gothic by
+Yoshimichi Ohira, SIL Open Font License 1.1 (`runtime/assets/fonts/OFL.txt`); both credited with thanks.
 
 See the [Roadmap](#roadmap) for where this is going next.
 

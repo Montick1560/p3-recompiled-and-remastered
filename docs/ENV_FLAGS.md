@@ -271,6 +271,27 @@ Read by the runtime binary at start-up or during execution.
   window > 1 can draw a stale texture for up to that many lists after the CPU
   rewrites it without a GE transfer.
 
+### `PSPRECOMP_BUTTON_ICONS`
+- **Read in:** `runtime/src/psp_prompt_patcher.cpp` (`psp_prompts_register_atlas`).
+- **Type:** env, `gray` | `color` | `off`.
+- **Default:** `gray`.
+- **Effect:** PC button icons in the game's help bars (last input device), in the atlas gray or in
+  colour; `off` keeps the PSP icons. Set from the launcher's "Iconos de botones" option.
+
+### `PSPRECOMP_BAR_TEXT`
+- **Read in:** `runtime/src/psp_prompt_patcher.cpp`.
+- **Type:** env, `off` (anything else = on).
+- **Default:** on.
+- **Effect:** the help-bar labels are redrawn sharp with the embedded bar font (a word table per
+  language, `games/patapon3/runtime/p3_prompt_labels.cpp`); `off` keeps the game's labels. Emergency
+  switch, not in the launcher. With `PSPRECOMP_BUTTON_ICONS=off` too, nothing is patched.
+
+### `PSPRECOMP_PROMPTS_SIG_LOG`
+- **Read in:** `runtime/src/psp_prompt_patcher.cpp`.
+- **Type:** env, `1`.
+- **Effect:** logs the atlas and label signatures of every candidate help-bar texture (`[PROMPTS]
+  candidate ...`), to add a new language or release.
+
 ### `PSPRECOMP_TEXTURES_BUDGET_MB`
 - **Read in:** `runtime/src/psp_texrep.cpp` (`ge_texrep_init`).
 - **Type:** env (integer, megabytes).
