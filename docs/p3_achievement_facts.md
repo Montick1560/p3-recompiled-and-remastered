@@ -291,3 +291,20 @@ is not the mission title). DATA04 = 17. Fact `mission.15`; `boss_gigantus` "Colo
 byte id 256 (`+0xEECA`) 0 -> 1 and `missions` by 1; DATA04 = 3, DATA08 = 0. Not DxD-only (played on vanilla EU).
 Fact `mission.256`; `dxd_gigante_king` "Rey caído" back with its draft id (text without "(DxD)"), in
 `secret_completionist`.
+
+## Inventory and divine equipment (2026-10-19)
+
+Inventory: one 6-byte record per item id i at `+0x28 + 6*i`: count u16, id u16 (== i once the item is registered,
+0 before), a byte that turns 1 when the item is gained (the "new" mark) and one more flag byte. Ids are the Master
+ID List "Loot" ids. Live: the chest mission raised the count of each looted item (Mudada Bone +1, Wood Branch +5,
+Lightning Blade [Fl], Repel Spear, Sleepy Greatblade +1) and set its mark; equipment counts include equipped pieces
+(the 800-slot equipment table at `+0x1810`, 0x28 bytes per slot, slot u16 + item u16 (0xFFFF empty) + stats, holds
+the same pieces). The debug menu's "all songs" raised the 9 song counts (5..11, 987, 988) by one. (An earlier
+reading put the record 2 bytes off; the notes above replace it.)
+
+Rarity (itemparam, PPEditor's field at entry +0x08: 0 basic, 1 common, 2 enchanted, 3 unique, 4 divine): 34 pieces
+of equipment have rarity 4, one per equipment category (texture `equipNNN_300_10`; uniques are `_202`); the game
+shows their names in green (user: Dolmorn Helm 653; uniques like Fendus are another colour). Facts
+`item.<id>.count` (u16, 0..65535) for the 34; `divine_1` "Toque divino" (any >= 1) and `divine_all` "Arsenal divino"
+(all 34), the 34 leaves also in `secret_completionist`. DATA04 holds 15 of the 34 by count (earns `divine_1`; Krauser 301 has count 1 but no slot in the equipment table, the other 14 match it), the user's
+debug-menu save "MoMo" 34, DATA08 and the new Edson save 0.
