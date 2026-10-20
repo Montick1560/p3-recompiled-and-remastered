@@ -19,6 +19,7 @@ struct PspFact {
     int8_t bit;         // -1 = the whole value; 0..31 = that bit of it (0 or 1)
     uint16_t count;     // 0 = one value; N = how many of N entries (`size` bytes each) are non-zero
     int64_t min, max;   // plausible range; a value outside it means the struct is not valid right now
+    uint16_t stride = 0;  // count only: bytes from one entry to the next (0 = `size`)
 };
 
 // What the game module provides for one release.

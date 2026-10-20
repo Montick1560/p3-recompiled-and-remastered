@@ -41,8 +41,9 @@ bool parse_leaf(const nlohmann::json& j, const PspAchievementSource& src, PspAch
 
 int64_t psp_ach_read(const PspFact& f, const uint8_t* rdram, uint32_t base) {
     if (f.count > 0) {
+        const uint32_t step = f.stride ? f.stride : f.size;
         int64_t n = 0;
-        for (uint32_t i = 0; i < f.count; i++) n += rd(rdram, base + f.offset + i * f.size, f.size) != 0;
+        for (uint32_t i = 0; i < f.count; i++) n += rd(rdram, base + f.offset + i * step, f.size) != 0;
         return n;
     }
     const uint32_t raw = rd(rdram, base + f.offset, f.size);

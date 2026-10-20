@@ -226,3 +226,22 @@ Defense!", 143 "Anything for a Rare Item", 183 "A Horse's Pride", 223 "What He F
 Fever, flags, timers, scores) are not readable from the progress struct and are left out. Class unlocks wait for the
 unlock flag (+0x38) to be confirmed live. DATA04 misses `rematch_naughtyfins` (63 = 0), `rematch_buzzcrave`
 (183 = 0) and `dark_uber_pride` (64 = 0).
+
+## Class unlocks (2026-10-19)
+
+The u32 at `+0x38` of each class record (the four blocks above) is the unlock flag. In both saves it is exactly 1
+where the class is available and 0 elsewhere: DATA04 has the 21 hero classes and the 7 Dark Hero classes set in the
+Uberhero block and each companion's family in its own block; DATA08 has only Yarida (Uberhero) and the base class
+of Ton, Chin and Kan, which is what the Cuartel showed. Classes 0, 1, 6, 7, 8, 10, 11 are 0 in both. Not seen
+flipping live yet (0 → 1 when a class is unlocked): to be confirmed with an antes/después when the user unlocks one.
+
+Facts: `class.<name>.unlocked` (Uberhero block, 4 bytes, 0..255, tested with `!= 0`) for the 21 hero classes and the
+Dark Hero classes 28..34 (ravenous, sonarchy, ragewolf, naughtyfins, slogturtle, covet_hiss, buzzcrave; names from
+the PataponRichPressence class list), and `classes.unlocked` = how many of class ids 0..34 have the flag set
+(`count` 35 with the new `stride` 0x84, 0..35).
+
+Achievements: `unlock_<class>` for the 20 hero classes after Yarida (Yarida is unlocked from the start) and the 7
+Dark Hero classes, `classes_5` / `classes_15` (count), `classes_spear` / `classes_shield` / `classes_bow` (every
+class of that family), `classes_all` (the 21 hero classes), `classes_dark_all` (the 7 Dark Hero classes) and
+`classes_every` (all 28). `secret_completionist` gains the 28 unlock leaves. DATA04 earns all 35 (123 in total, also
+in the game: E2E on 9998 with DATA04 wrote 123 ids); DATA08 still earns `missions_1` only.

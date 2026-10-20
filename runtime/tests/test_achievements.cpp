@@ -31,6 +31,7 @@ static const PspFact kFacts[] = {
     {"flags.ragewolf", 0x30, 4, false, 3, 0, 0, 1},
     {"classes", 0x40, 1, false, -1, 8, 0, 8},
     {"temp", 0x50, 2, true, -1, 0, -1000, 1000},
+    {"unlocked", 0x60, 4, false, -1, 3, 0, 3, 0x10},
 };
 static uint32_t test_base(const uint8_t* ram) { return r32(ram, kPtr); }
 static bool test_sane(const uint8_t* ram, uint32_t base) { return ram[base & 0x07FFFFFFu] == 'E'; }
@@ -88,6 +89,8 @@ static void reads() {
     CHECK(psp_ach_read(kFacts[3], g_ram.data(), kBase) == 3, "count of non-zero entries");
     w16(kBase + 0x50, 0xFFFE);
     CHECK(psp_ach_read(kFacts[4], g_ram.data(), kBase) == -2, "signed 16");
+    w32(kBase + 0x60, 1); w32(kBase + 0x64, 1); w32(kBase + 0x80, 1);
+    CHECK(psp_ach_read(kFacts[5], g_ram.data(), kBase) == 2, "count of non-zero entries `stride` apart");
 }
 
 static void compile_rules() {
