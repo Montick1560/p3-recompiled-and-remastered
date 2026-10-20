@@ -404,6 +404,93 @@ static void label_recognition() {
     CHECK(prompt_atlas_recognise(spec, alien.px.data(), alien.w) == 0, "not the atlas -> 0");
 }
 
+// --- several atlases in one patcher ----------------------------------------------------------------
+// A 128x64 atlas (the command list's shape): a glyph row at y 53..63, one label row.
+static RgbaImage small_atlas() {
+    RgbaImage img;
+    img.w = 128;
+    img.h = 64;
+    img.px.assign(128 * 64 * 4, 0);
+    for (size_t i = 0; i < img.px.size(); i += 4) img.px[i] = img.px[i + 1] = img.px[i + 2] = 0x7F;
+    for (int y = 53; y < 64; y++)
+        for (int x = 0; x < 58; x++) img.px[(y * 128 + x) * 4 + 3] = ((x * 3 + y * 5) % 4) == 0 ? 0xFF : 0;
+    for (int y = 1; y <= 8; y++)
+        for (int x = 2; x <= 30; x++) img.px[(y * 128 + x) * 4 + 3] = (x + y) % 3 ? 0xFF : 0;
+    return img;
+}
+
+static PromptAtlasSpec small_spec(const RgbaImage& img, const char* name) {
+    PromptAtlasSpec s;
+    s.name = name;
+    s.width = 128;
+    s.height = 64;
+    s.format = 4;
+    s.sig_rects = {{0, 53, 58, 11}};
+    s.sig_hashes = {prompt_atlas_signature(img.px.data(), img.w, s.sig_rects)};
+    s.cells = {{PromptGlyph::Square, 14, 53, 10, 10}, {PromptGlyph::Cross, 47, 53, 10, 10}};
+    s.label_sig_rects = {{0, 0, 128, 53}, {58, 53, 70, 11}};
+    BarLabels t{"small", prompt_atlas_signature(img.px.data(), img.w, s.label_sig_rects), 8, 0xFF, {}};
+    t.rows.push_back({0, 10, 9, {{2, 30, "Atacar"}}});
+    s.labels = {t};
+    s.separators = {53, 62, 61, {{0, 1, ":"}}};
+    return s;
+}
+
+static void multi_atlas_tags() {
+    const RgbaImage big = synthetic_atlas(), small = small_atlas();
+    const PromptAtlasSpec a = spec_for(big);
+    PromptAtlasSpec b = small_spec(small, "b");
+    std::vector<PromptAtlasSpec> specs = {a, b};
+    CHECK(specs[0].name != nullptr, "a spec has a log name");
+    CHECK(prompt_atlases_recognise(specs, 256, 128, 4, big.px.data()) == prompt_atlas_recognise(a, big.px.data(), big.w),
+          "atlas 0's packed tag is its own tag (the help bar does not move)");
+    CHECK(prompt_atlases_recognise(specs, 128, 64, 4, small.px.data()) == 1 * kPromptAtlasTagStride + 2,
+          "atlas 1 with its table -> 1 * 32 + 2");
+    RgbaImage wrong = small;
+    wrong.px[(55 * 128 + 10) * 4 + 3] ^= 0xFF;
+    CHECK(prompt_atlases_recognise(specs, 128, 64, 4, wrong.px.data()) == 0, "B's size, wrong coverage -> 0");
+    CHECK(prompt_atlases_recognise(specs, 128, 64, 5, small.px.data()) == 0, "another format -> 0");
+    PromptAtlasSpec c = small_spec(small, "c");  // would accept B's image too
+    c.labels.clear();
+    specs.push_back(c);
+    CHECK(prompt_atlases_recognise(specs, 128, 64, 4, small.px.data()) == kPromptAtlasTagStride + 2,
+          "the first spec that recognises the texture wins");
+}
+
+static void local_tag_saturates() {
+    const RgbaImage small = small_atlas();
+    PromptAtlasSpec s = small_spec(small, "many");
+    const BarLabels match = s.labels[0];
+    s.labels.clear();
+    for (int i = 0; i < 30; i++) {
+        BarLabels t = match;
+        t.sig = 1000 + i;
+        s.labels.push_back(t);
+    }
+    s.labels.push_back(match);  // table 30 -> local tag 32: does not fit in 5 bits
+    CHECK(prompt_atlas_recognise(s, small.px.data(), small.w) == 32, "single-atlas tag 2 + 30");
+    CHECK(prompt_atlases_recognise({s}, 128, 64, 4, small.px.data()) == 1, "saturated to 1 at index 0");
+    const RgbaImage big = synthetic_atlas();
+    CHECK(prompt_atlases_recognise({spec_for(big), s}, 128, 64, 4, small.px.data()) == kPromptAtlasTagStride + 1,
+          "saturated to 1 at index 1: never spills into the next index");
+}
+
+static void multi_atlas_apply_matches_single() {
+    const RgbaImage big = synthetic_atlas(), small = small_atlas();
+    const std::vector<PromptAtlasSpec> specs = {spec_for(big), small_spec(small, "b")};
+    const uint32_t var = prompt_atlas_variant(InputDevice::Xbox, PromptStyle::Color, true, true);
+    for (int k : {1, 3}) {
+        RgbaImage one = upscale(small, k), many = upscale(small, k);
+        prompt_atlas_apply(specs[1], (2u << 20) | var, defaults(), one);
+        prompt_atlases_apply(specs, ((kPromptAtlasTagStride + 2) << 20) | var, defaults(), many);
+        CHECK(one.px == many.px, "packed apply == the single atlas's apply");
+        CHECK(one.px != upscale(small, k).px, "... and it did draw");
+    }
+    RgbaImage img = small;
+    prompt_atlases_apply(specs, ((2 * kPromptAtlasTagStride + 2) << 20) | var, defaults(), img);
+    CHECK(img.px == small.px, "an index past the specs leaves the image alone");
+}
+
 int main() {
     signature_sees_only_its_region();
     compose_changes_only_cells(1);
@@ -415,6 +502,9 @@ int main() {
     unknown_labels_redraw_separators_only();
     label_recognition();
     close_words_keep_a_gap();
+    multi_atlas_tags();
+    local_tag_saturates();
+    multi_atlas_apply_matches_single();
     std::printf("%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }

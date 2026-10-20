@@ -117,3 +117,23 @@ void prompt_atlas_apply(const PromptAtlasSpec& spec, uint32_t v, const ControlMa
     bar_text_compose(t, spec.separators, spec.separator_cap, spec.gray, t != nullptr ? t->alpha : 0xFF,
                      std::move(keep), sx, sy, img);
 }
+
+uint32_t prompt_atlases_recognise(const std::vector<PromptAtlasSpec>& specs, int width, int height, int format,
+                                  const uint8_t* rgba) {
+    for (size_t i = 0; i < specs.size() && i < static_cast<size_t>(kPromptAtlasMax); i++) {
+        const PromptAtlasSpec& s = specs[i];
+        if (s.width != width || s.height != height || s.format != format) continue;
+        uint32_t local = prompt_atlas_recognise(s, rgba, width);
+        if (local == 0) continue;
+        if (local >= kPromptAtlasTagStride) local = 1;
+        return static_cast<uint32_t>(i) * kPromptAtlasTagStride + local;
+    }
+    return 0;
+}
+
+void prompt_atlases_apply(const std::vector<PromptAtlasSpec>& specs, uint32_t v, const ControlMap& map,
+                          RgbaImage& img) {
+    const uint32_t tag = (v >> 20) & 0xFFu, index = tag / kPromptAtlasTagStride;
+    if (index >= specs.size()) return;
+    prompt_atlas_apply(specs[index], ((tag % kPromptAtlasTagStride) << 20) | (v & 0xFFFFFu), map, img);
+}

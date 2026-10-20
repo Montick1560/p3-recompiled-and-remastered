@@ -1,8 +1,9 @@
 #pragma once
-// The button-prompt patcher (psp_ge_texpatch.h): a game module describes its help-bar atlas — size,
+// The button-prompt patcher (psp_ge_texpatch.h): a game module describes its prompt atlases — size,
 // format, a region whose alpha mask identifies it, and the cell of each PSP glyph — and the runtime
 // redraws those cells for the player's input device and the prompt style. It may also describe the
 // atlas's labels per language (word tables, psp_bar_text.h): those are redrawn sharp with the bar font.
+// One patcher holds up to kPromptAtlasMax atlases (e.g. a help bar and a command list).
 // Specs: docs/superpowers/specs/2026-10-19-pc-button-prompts-part1-design.md, part 1.1
 // docs/superpowers/specs/2026-10-20-pc-button-prompts-part1-1-bar-text-design.md.
 #include "psp_bar_text.h"
@@ -24,6 +25,7 @@ struct PromptRect {
 };
 
 struct PromptAtlasSpec {
+    const char* name = "help-bar";            // log name ("[PROMPTS] <name> atlas recognised ...")
     int width = 0, height = 0, format = 0;    // GE texture size and GE_TFMT_*
     std::vector<PromptRect> sig_rects;        // recognition regions (texels)
     std::vector<uint64_t> sig_hashes;         // accepted prompt_atlas_signature() values
@@ -42,7 +44,8 @@ struct PromptAtlasSpec {
 // coverage counts: a palette's alpha ramp may differ per language while every glyph sits in place.
 uint64_t prompt_atlas_signature(const uint8_t* rgba, int w, const std::vector<PromptRect>& rects);
 
-// Registers the patcher for `spec` (one atlas; a later call replaces it). PSPRECOMP_BUTTON_ICONS:
+// Adds `spec` to the prompts patcher (registered once in the seam; a spec with the same `name` replaces
+// the earlier one, more than kPromptAtlasMax are ignored). PSPRECOMP_BUTTON_ICONS:
 // gray (default) / color / "off" (the game's PSP icons); PSPRECOMP_BAR_TEXT=off keeps the game's
 // labels; both off registers nothing. PSPRECOMP_PROMPTS_SIG_LOG=1 logs the signatures of every
 // candidate texture (to collect the hashes of a new language or release).
@@ -56,6 +59,21 @@ uint32_t prompt_atlas_recognise(const PromptAtlasSpec& spec, const uint8_t* rgba
 // then the labels (tag >= 2) and separators when its text flag is on. Icon cells are never touched by
 // the text.
 void prompt_atlas_apply(const PromptAtlasSpec& spec, uint32_t v, const ControlMap& map, RgbaImage& img);
+
+constexpr int kPromptAtlasMax = 4;              // atlases one patcher holds
+constexpr uint32_t kPromptAtlasTagStride = 32;  // packed tag = index * 32 + local tag (1..31)
+
+// The packed tag over several atlases: 0 = none, else index * kPromptAtlasTagStride + local, local =
+// prompt_atlas_recognise() of the first spec (in order) whose size and format match and that recognises
+// the texture, saturated to 1 (icons and separators only) when it exceeds 31 (over 30 label tables).
+// Atlas 0's packed tag is its single-atlas tag.
+uint32_t prompt_atlases_recognise(const std::vector<PromptAtlasSpec>& specs, int width, int height, int format,
+                                  const uint8_t* rgba);
+
+// v = packed tag << 20 | prompt_atlas_variant(): prompt_atlas_apply() of the spec at index tag / 32 with
+// its local tag; nothing when the index is out of range.
+void prompt_atlases_apply(const std::vector<PromptAtlasSpec>& specs, uint32_t v, const ControlMap& map,
+                          RgbaImage& img);
 
 // Redraw every cell whose glyph has an icon for (d, s, map), scaled by img.w / spec.width; cells
 // without an icon keep their pixels, and nothing outside the cells changes.
