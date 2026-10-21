@@ -146,7 +146,10 @@ frames; it also blends each character pose from the two whole frames around the 
 clock, since the GMO evaluator rounds to whole frames and the doubled rate would show each
 pose twice, while its own interpolate flag mixes rounded and interpolated channels into poses
 the game never shows, and blends the bone matrices that part-built units hang their parts on, since baked skeletons
-store one bone matrix per whole frame). Reasoning: cheats patch guest RAM, but recompiled code never reads instruction
+store one bone matrix per whole frame; and it runs each weather object's update (rain drops,
+wind) at most once per two vblanks with the skipped call's frame time handed to the next run,
+`PacedStepTable` in `psp_paced_step.h`, because those updates time their spawns with the frame
+time but move every particle by a fixed step per call). Reasoning: cheats patch guest RAM, but recompiled code never reads instruction
 words, so the patched words have to become code at recompile time; keeping both bodies
 leaves the default build byte-identical.
 

@@ -921,6 +921,11 @@ target_include_directories(test_anim_blend PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/i
 target_compile_options(test_anim_blend PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME anim_blend_tests COMMAND test_anim_blend)
 
+add_executable(test_paced_step tests/test_paced_step.cpp)
+target_include_directories(test_paced_step PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_paced_step PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME paced_step_tests COMMAND test_paced_step)
+
 add_executable(test_cpu_close tests/test_cpu_close.cpp src/psp_cpu.cpp src/psp_perf.cpp)
 target_include_directories(test_cpu_close PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_cpu_close PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
