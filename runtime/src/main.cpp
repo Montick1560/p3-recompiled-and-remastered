@@ -195,6 +195,12 @@ int main(int argc, char* argv[]) {
             psp_input_device_force(d);
             return true;
         };
+        hooks.mark_hitch         = [] {
+            SDL_Event e{};
+            e.type = SDL_KEYDOWN;
+            e.key.keysym.sym = SDLK_F8;
+            SDL_PushEvent(&e);  // thread-safe: the event loop handles it like the key
+        };
         psp_debug_socket_set_hooks(hooks);
     }
 

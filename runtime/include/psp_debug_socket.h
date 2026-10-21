@@ -73,6 +73,8 @@ struct PspDebugHooks {
     /// P command: set the button-prompt input device by name ("keyboard",
     /// "xbox", "ps4", "ps5"). Returns false for an unknown name.
     bool (*input_device)(const char* name) = nullptr;
+    /// M command: press F8 (PSPRECOMP_FRAMELOG: mark a hitch), as the player would.
+    void (*mark_hitch)() = nullptr;
 };
 
 /// Install the providers used by the I and S commands.

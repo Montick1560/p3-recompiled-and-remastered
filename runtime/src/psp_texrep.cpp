@@ -1,4 +1,5 @@
 #include "psp_texrep.h"
+#include "psp_perf.h"
 
 #include "psp_memory.h"
 #include "psp_texrep_png.h"
@@ -33,6 +34,7 @@ size_t g_budget_bytes = 256u << 20;
 std::unique_ptr<TexrepImageQueue> g_images;
 
 bool decode_file(const std::string& rel, int* w, int* h, std::vector<uint8_t>* rgba) {
+    PerfScope decode_scope(g_perf.pack_decode_ns);
     const auto t0 = std::chrono::steady_clock::now();
     std::ifstream f(std::filesystem::u8path(g_dir + "/" + rel), std::ios::binary);
     std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());

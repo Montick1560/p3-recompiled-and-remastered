@@ -369,6 +369,11 @@ PspDebugReply psp_debug_handle_line(const char* line,
         g_hooks.draw_log(std::atoi(line + 2));
         return make_ok_empty();
     }
+    if (line[0] == 'M' && line[1] == '\0') {
+        if (!g_hooks.mark_hitch) return make_err("unsupported");
+        g_hooks.mark_hitch();
+        return make_ok_empty();
+    }
     if (line[0] == 'P' && line[1] == ' ') {
         // P <device>: show the button prompts of that device (it still follows input after).
         if (!g_hooks.input_device) return make_err("unsupported");

@@ -1246,7 +1246,11 @@ static void present_blit(GLuint fbo) {
     if (osk_drew || prompt_drew || toast_drew) {
         gl_state_invalidate();
     }
-    SDL_GL_SwapWindow(window);
+    {
+        PerfScope swap_scope(g_perf.swap_ns);
+        SDL_GL_SwapWindow(window);
+    }
+    perf_frame_end();  // PSPRECOMP_FRAMELOG: this frame's row
     g_present_dirty = false;
     g_last_present = std::chrono::steady_clock::now();
 }

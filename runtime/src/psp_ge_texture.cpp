@@ -443,6 +443,7 @@ GLuint ge_texture_bind(
     // magenta placeholder).
     // A pack file already on the GPU for another slot is shared as is.
     if (perf_enabled()) g_perf.tex_misses.fetch_add(1, std::memory_order_relaxed);
+    PerfScope miss_scope(g_perf.tex_miss_ns);  // decode + upload of this miss
     const bool shared = patch == 0 && try_share(slot, rdram, state, draw_max_v);
     GeTexrepImage rep;
     GeTexrepResult r = GeTexrepResult::None;

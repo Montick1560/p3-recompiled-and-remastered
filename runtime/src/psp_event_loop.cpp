@@ -13,6 +13,7 @@
 #include "psp_menu_prompt.h"
 #include "psp_exit.h"
 #include "psp_perf.h"
+#include "psp_toast.h"
 
 #include <SDL.h>
 #include <glad/glad.h>
@@ -335,6 +336,11 @@ static void note_input_device(const SDL_Event& ev) {
 // Handle one SDL event: window close + keyboard button state + controllers.
 static void handle_sdl_event(const SDL_Event& ev) {
     note_input_device(ev);
+    // F8 (PSPRECOMP_FRAMELOG on): the player marks a hitch; a toast confirms it.
+    if (ev.type == SDL_KEYDOWN && !ev.key.repeat && ev.key.keysym.sym == SDLK_F8) {
+        if (const int n = perf_frame_mark()) psp_toast_post({"Tirón marcado", "F8 #" + std::to_string(n)});
+        return;
+    }
     if (handle_menu_prompt_event(ev)) return;
     if (handle_osk_event(ev)) return;
     if (handle_controller_event(ev)) return;
