@@ -741,8 +741,11 @@ void ge_draw_prim(
     // the GRAPHICS detection can be proven end-to-end without the real asset bug
     // fixed. Proves the detector is not a constant-false oracle. No GL side
     // effects; runs once.
+    // The flag is read once: getenv costs ~1.6 us on Windows, and this runs on every PRIM (thousands per
+    // frame in a battle).
+    static const bool selftest_wanted = std::getenv("PSPRECOMP_GEOM_SELFTEST") != nullptr;
     static bool selftest_done = false;
-    if (!selftest_done && std::getenv("PSPRECOMP_GEOM_SELFTEST")) {
+    if (!selftest_done && selftest_wanted) {
         selftest_done = true;
         g_prim_type_count[GE_PRIM_TRIANGLE_STRIP]++;
         std::fprintf(stderr,
