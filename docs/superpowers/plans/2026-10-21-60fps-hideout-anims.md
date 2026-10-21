@@ -249,8 +249,36 @@ git commit -m "feat(p3): hideout animations move smoothly at 60 fps"
 
 ## Evidence (fill in during execution)
 
-- Task 1: boxes, periods 30 / 60.
-- Task 2: step address, shape, how it was found.
-- Task 3: RED / GREEN periods, Review Focus 1-3, ctest, rt_regress.
-- Task 4: smooth shape, trace counters (draws / half a step ahead per s), periods with smooth on.
-- Task 5: Review Focus 5, variants, deploy hashes.
+- Task 1: obelisk view, render scale 1. STAR_BOX 268 122 308 176, OWL_BOX 226 155 254 186
+  (silhouette, `DARK=50`; the glow behind it pulses every 5.3 s), owl eyes 233 163 247 174
+  (`BRIGHT=170`). Star: 30 fps 4.349 / 4.629 / 4.407 s, 60 fps 2.180 / 2.183 / 2.188 s (2x).
+  Owl: bob 1.001-1.005 s and eyes 1.054-1.061 s at both 30 and 60: **not 2x**, dropped from
+  scope (no other owl event in 40 s timelines at either rate).
+- Task 2: lead 1 alone did not explain the star (freezing the waitFrame counters of the 4
+  contexts seen left it moving). Found by correlation (`build/tools/corr_scan.py`: star world x
+  1181..1223 in RAM) and a live hardware write watch (new debug socket `H <addr>`, 98cb73b):
+  the star's position is a script variable written by cmd add FUN_08837D18 and get-actor-pos
+  FUN_08911444, set into the 3D node by setPos FUN_08911588 -> FUN_0887F1E4 -> matrix builder
+  FUN_0888E7FC (node pos +192/+196/+200 -> matrix +48/+52/+56), all inside the script VM run
+  FUN_0883C0B0 <- FUN_0883C088 <- FUN_08909C7C = script object update (slot +20, a1 = frame
+  ticks, return value unused). Shape **S2**, main image. 4 script objects in the hideout
+  (120 runs/s at 30, 240 at 60).
+- Task 3: FUN_08909C7C and FUN_0888E7FC byte-identical in the three releases. RED (60,
+  `PSPRECOMP_P3_HIDEOUT_30HZ=0`) star 2.180 / 2.211 / 2.200 s; GREEN 4.443 / 4.342 / 4.379 s.
+  Census at 60: script runs 120.0/s, waitFrame 210.9/s (30 fps: 120.0 / 210.9). Focus 1: the
+  Hoshipon's talk bubble and typewriter dialogue show the same text at the same capture times
+  at 30 and 60. Focus 2: Campo de los Gigantes at 60: 3 script objects (90.7 runs/s), rain
+  29.7 steps/s, wind ribbons 29.8, FEVER held. ctest 94/94. rt_regress: PASS against the
+  deployed exe's tour taken the same day (21 gated); against `weather_new` one checkpoint
+  (19_mission_prep, 0.54 %) differs only in the help-bar glyphs (the user's controller was
+  disconnected; the deployed exe shows the same 0.59 %).
+- Task 4: smoothing at the node matrix builder (psp_half_ahead.h): obelisk view 10
+  script-moved nodes, 599.4 matrix builds/s, 30.0/s half a step ahead (the star), largest step
+  1.30 units. Star with smooth on 4.419 / 4.402 / 4.422 s; consecutive shots: one star, no
+  jump. ctest 95/95.
+- Task 5: Focus 5: mission -> cancel -> results -> hideout: the star moves on without a jump
+  and the counters return to 30/s half a step ahead. v115b and vanilla build and boot at 60
+  (MOVIE OK, both hook lines in the log). Deployed to e2e_portable3 and e2e_portable (md5
+  dxd-1.1.4 64dc6d9ed295, dxd-1.1.5b 6f0775217d60, vanilla-eu a7a5d91d902c), backup in
+  build/backup_pre_hideout_2026-10-21. One of five 60 fps boots stopped on the DxD credits'
+  terms dialog (the boot driver's timed keys; the retry landed in 73 s).
