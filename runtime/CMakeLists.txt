@@ -931,6 +931,11 @@ target_include_directories(test_particle_nudge PRIVATE ${CMAKE_CURRENT_SOURCE_DI
 target_compile_options(test_particle_nudge PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME particle_nudge_tests COMMAND test_particle_nudge)
 
+add_executable(test_half_ahead tests/test_half_ahead.cpp)
+target_include_directories(test_half_ahead PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_half_ahead PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME half_ahead_tests COMMAND test_half_ahead)
+
 add_executable(test_cpu_close tests/test_cpu_close.cpp src/psp_cpu.cpp src/psp_perf.cpp)
 target_include_directories(test_cpu_close PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_cpu_close PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)

@@ -153,7 +153,8 @@ time but move every particle by a fixed step per call; so the weather still move
 frame, rain drops are drawn half a step ahead on the frames in between, `psp_particle_nudge.h`,
 and the wind ribbons step every frame with their per-call advance halved; the script
 objects run their script VM the same way, since scripts wait in frames and move props such as
-the hideout's Silver Hoshipon by a fixed step per run). Reasoning: cheats patch guest RAM, but recompiled code never reads instruction
+the hideout's Silver Hoshipon by a fixed step per run, and the 3D nodes a script moved are
+built half a step ahead on the frame in between, `psp_half_ahead.h`). Reasoning: cheats patch guest RAM, but recompiled code never reads instruction
 words, so the patched words have to become code at recompile time; keeping both bodies
 leaves the default build byte-identical.
 

@@ -28,6 +28,7 @@
 #include "psp_achievements_run.h"
 #include "psp_anim_blend.h"
 #include "psp_game_module.h"
+#include "psp_half_ahead.h"
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_intr.h"
 #include "psp_paced_step.h"
@@ -162,13 +163,137 @@ constexpr uint32_t kScriptUpdate = 0x08909C7Cu;
 FuncPtr g_script_update = nullptr;
 PacedStepTable g_script_paced;
 
+// Smooth scripted props (with PSPRECOMP_P3_HIDEOUT_30HZ; PSPRECOMP_P3_HIDEOUT_SMOOTH=0 keeps the
+// plain 30 Hz pacing). A script sets a prop's position in its 3D node (+192/+196/+200, x y z)
+// and the node matrix builder FUN_0888E7FC (a0 = node) copies it into the matrix translation
+// (+48/+52/+56). The builder runs inside the script run (setPos FUN_08911588 -> FUN_0887F1E4)
+// and again every frame from the scene update (FUN_0889D55C -> ... -> FUN_0887AF68). Every node
+// the builder sees during a script run gets its position recorded (psp_half_ahead.h); on the
+// frame after that run (the script's next run is one vblank later) the scene update builds the
+// node's matrix with the position half a step ahead and the position goes back right after:
+// the prop is drawn moving every frame at the 30 fps speed, while the game state is the 30 Hz
+// one. A node not recorded in the script's last run (the script stopped moving it) is left alone.
+constexpr uint32_t kNodeMatrix = 0x0888E7FCu;
+constexpr uint32_t kNodePos[3] = {192, 196, 200};
+// The Silver Hoshipon moves at most ~1.3 units per 30 Hz step (x 1181..1223 over its 4.4 s
+// float); 4x that, so a teleport or a new path start is never slid across the screen.
+constexpr float kScriptNodeMaxJump = 6.0f;
+FuncPtr g_node_matrix = nullptr;
+bool g_script_smooth = false;
+uint32_t g_running_script = 0;  // script object whose VM is running now (0 = none)
+uint32_t g_script_run_seq = 0;  // real script runs so far
+
+struct ScriptNode {
+    uint32_t node = 0;
+    uint32_t run = 0;     // g_script_run_seq of the last record
+    int64_t rec_vb = -1;  // vblank of the last record
+    int64_t prev_vb = -1;
+    HalfAhead pos;
+};
+ScriptNode g_script_nodes[32];
+
+// PSPRECOMP_P3_HIDEOUT_TRACE=1: the first 60 events (script run / skip, matrix builds of
+// recorded nodes) with their vblank, then every ~2 s the scene-path matrix builds per second of
+// recorded nodes, how many were half a step ahead, and the largest step seen.
+bool g_hideout_trace = false;
+int g_hideout_events = 0;
+int g_node_builds = 0, g_node_ahead = 0;
+float g_node_max_step = 0.0f;
+int64_t g_hideout_count_from = -1;
+
+void hideout_event(const char* what, uint32_t obj, int64_t vb) {
+    if (g_hideout_trace && g_hideout_events < 60) {
+        g_hideout_events++;
+        std::fprintf(stderr, "[HIDEOUT] vb=%lld %s 0x%08X\n", static_cast<long long>(vb), what, obj);
+    }
+}
+
+void hideout_count(int builds, int ahead, int64_t vb) {
+    g_node_builds += builds;
+    g_node_ahead += ahead;
+    if (g_hideout_count_from < 0) g_hideout_count_from = vb;
+    if (vb - g_hideout_count_from < 120) return;
+    const double s = static_cast<double>(vb - g_hideout_count_from) / 59.94;
+    std::fprintf(stderr, "[HIDEOUT] per s: scripted node draws %.1f (half a step ahead %.1f), largest step %.2f\n",
+                 g_node_builds / s, g_node_ahead / s, g_node_max_step);
+    g_node_builds = g_node_ahead = 0;
+    g_node_max_step = 0.0f;
+    g_hideout_count_from = vb;
+}
+
+ScriptNode* script_node_find(uint32_t node, bool add) {
+    ScriptNode* lru = &g_script_nodes[0];
+    for (ScriptNode& s : g_script_nodes) {
+        if (s.node == node && s.rec_vb >= 0) return &s;
+        if (s.rec_vb < lru->rec_vb) lru = &s;
+    }
+    if (!add) return nullptr;
+    *lru = ScriptNode{};
+    lru->node = node;
+    return lru;
+}
+
+void node_matrix_smooth(uint8_t* rdram, recomp_context* ctx) {
+    const uint32_t node = static_cast<uint32_t>(ctx->r[4]);
+    const int64_t vb = psp_vblank_index(psp_display_elapsed_us());
+    if (g_running_script) {  // the script moved it: record (once per run; the last build wins)
+        ScriptNode* s = script_node_find(node, true);
+        if (s->run != g_script_run_seq) {
+            s->prev_vb = s->rec_vb;
+            s->rec_vb = vb;
+            s->run = g_script_run_seq;
+            psp_half_ahead_record(&s->pos, rdram, node, kNodePos, 3);
+        } else {
+            s->pos.records--;  // same run: replace cur, keep prev
+            for (int i = 0; i < 3; i++) s->pos.cur[i] = s->pos.prev[i];
+            psp_half_ahead_record(&s->pos, rdram, node, kNodePos, 3);
+        }
+        if (g_hideout_trace) {
+            hideout_event("record", node, vb);
+            for (int i = 0; i < 3 && s->pos.records >= 2; i++) {
+                float a, b;
+                std::memcpy(&a, &s->pos.prev[i], 4);
+                std::memcpy(&b, &s->pos.cur[i], 4);
+                if (std::isfinite(a) && std::isfinite(b) && std::fabs(b - a) > g_node_max_step)
+                    g_node_max_step = std::fabs(b - a);
+            }
+        }
+        g_node_matrix(rdram, ctx);
+        return;
+    }
+    ScriptNode* s = script_node_find(node, false);
+    // In between: one vblank after the run that recorded it, that run two after the one before.
+    if (!s || vb - s->rec_vb != 1 || s->rec_vb - s->prev_vb != 2) {
+        if (s && g_hideout_trace) {
+            hideout_event("build", node, vb);
+            hideout_count(1, 0, vb);
+        }
+        g_node_matrix(rdram, ctx);
+        return;
+    }
+    const int moved = psp_half_ahead_apply(&s->pos, rdram, kScriptNodeMaxJump);
+    if (g_hideout_trace) {
+        hideout_event(moved ? "build-ahead" : "build-still", node, vb);
+        hideout_count(1, moved ? 1 : 0, vb);
+    }
+    g_node_matrix(rdram, ctx);
+    psp_half_ahead_restore(s->pos, rdram);
+}
+
 void script_update_30hz(uint8_t* rdram, recomp_context* ctx) {
     uint32_t dt = static_cast<uint32_t>(ctx->r[5]);
-    if (!g_script_paced.step(static_cast<uint32_t>(ctx->r[4]),
-                             psp_vblank_index(psp_display_elapsed_us()), 2, &dt))
+    const uint32_t obj = static_cast<uint32_t>(ctx->r[4]);
+    const int64_t vb = psp_vblank_index(psp_display_elapsed_us());
+    if (!g_script_paced.step(obj, vb, 2, &dt)) {
+        hideout_event("script-skip", obj, vb);
         return;
+    }
+    hideout_event("script-run", obj, vb);
     ctx->r[5] = static_cast<int32_t>(dt);
+    g_script_run_seq++;
+    g_running_script = obj;
     g_script_update(rdram, ctx);
+    g_running_script = 0;
 }
 
 // Smooth weather (with the 60fps set; PSPRECOMP_P3_WEATHER_SMOOTH=0 keeps the plain 30 Hz
@@ -676,6 +801,15 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
             g_script_update = RECOMP_LOOKUP(kScriptUpdate);
             psp_dispatch_register(kScriptUpdate, script_update_30hz);
             std::fprintf(stderr, "[P3] 60fps: script objects paced to 30 Hz (hideout animations)\n");
+            const char* trace = std::getenv("PSPRECOMP_P3_HIDEOUT_TRACE");
+            g_hideout_trace = trace && trace[0] == '1';
+            const char* smooth_scripts = std::getenv("PSPRECOMP_P3_HIDEOUT_SMOOTH");
+            g_script_smooth = !(smooth_scripts && smooth_scripts[0] == '0');
+            if (g_script_smooth) {
+                g_node_matrix = RECOMP_LOOKUP(kNodeMatrix);
+                psp_dispatch_register(kNodeMatrix, node_matrix_smooth);
+                std::fprintf(stderr, "[P3] 60fps: smooth hideout animations (scripted props drawn every frame)\n");
+            }
         }
     }
     const char* e = std::getenv("PSPRECOMP_P3_GMO_GUARD");

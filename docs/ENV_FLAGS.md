@@ -790,6 +790,30 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   missions). Install prints `[P3] 60fps: script objects paced to 30 Hz (hideout animations)`.
 - **Set it when:** `0` to see the old double-speed scripts at 60 fps (A/B).
 
+### `PSPRECOMP_P3_HIDEOUT_SMOOTH`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`0` off; anything else or unset = on).
+- **Default:** on with `PSPRECOMP_P3_HIDEOUT_30HZ`.
+- **Effect:** Props that scripts move are drawn moving every frame at the 30 fps speed
+  instead of every second frame. The node matrix builder `0x0888E7FC` (a0 = 3D node,
+  position +192/+196/+200) records the position of every node it builds during a script
+  run; on the frame after that run, the scene update builds the node's matrix with the
+  position half a step ahead (`runtime/include/psp_half_ahead.h`; never across a jump of
+  more than 6 units) and the position goes back right after. Install prints
+  `[P3] 60fps: smooth hideout animations (scripted props drawn every frame)`.
+- **Set it when:** `0` to compare against the plain 30 Hz script motion.
+
+### `PSPRECOMP_P3_HIDEOUT_TRACE`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`=1`).
+- **Default:** off.
+- **Effect:** With the 60 fps script pacing installed: logs the first 60 events (script
+  run / skip, matrix builds of script-moved nodes) with their vblank as `[HIDEOUT]` lines,
+  then every ~2 s the matrix builds per second of script-moved nodes, how many were half
+  a step ahead, and the largest per-run step seen.
+- **Set it when:** checking that scripted props move every frame at 60 fps (a screenshot
+  loop is too slow to see 60 Hz motion).
+
 ### `PSPRECOMP_P3_FAST_LOAD`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
 - **Type:** env (`0` off; anything else or unset = on).
