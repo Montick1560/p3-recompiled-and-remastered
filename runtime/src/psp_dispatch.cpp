@@ -337,6 +337,28 @@ static uint32_t g_func_watch[FUNC_WATCH_MAX];
 static std::atomic<int> g_func_watch_hits[FUNC_WATCH_MAX];
 static int g_func_watch_count = 0;
 
+// PSPRECOMP_FUNC_CENSUS=1: count the entries of every guest function in
+// [0x08800000, 0x09000000) (main image + overlay window); the debug socket `C`
+// writes and resets the counts. 8 MB of counters, allocated only when on.
+static constexpr uint32_t kCensusBase = 0x08800000u;
+static constexpr uint32_t kCensusSlots = 0x00800000u >> 2;
+static std::atomic<uint32_t>* g_census = nullptr;
+
+int psp_dispatch_census_dump(const char* path) {
+    if (!g_census) return -1;
+    std::FILE* f = std::fopen(path, "w");
+    if (!f) return -1;
+    int n = 0;
+    for (uint32_t i = 0; i < kCensusSlots; i++) {
+        if (g_census[i].load(std::memory_order_relaxed) == 0) continue;
+        const uint32_t c = g_census[i].exchange(0, std::memory_order_relaxed);
+        std::fprintf(f, "%08X %u\n", kCensusBase + i * 4u, c);
+        n++;
+    }
+    std::fclose(f);
+    return n;
+}
+
 static void func_watch_parse() {
     const char* env = std::getenv("PSPRECOMP_FUNC_WATCH");
     while (env && *env && g_func_watch_count < FUNC_WATCH_MAX) {
@@ -359,6 +381,8 @@ void psp_trace_checkpoint(uint32_t addr) {
         const char* env = std::getenv("PSPRECOMP_PC_TRACE");
         g_pc_trace = (env && env[0] == '1');
         func_watch_parse();
+        const char* census = std::getenv("PSPRECOMP_FUNC_CENSUS");
+        if (census && census[0] == '1') g_census = new std::atomic<uint32_t>[kCensusSlots]();
         g_pc_trace_checked = true;
         if (g_pc_trace) {
             psp_on_exit(psp_dump_pc_trace);
@@ -375,6 +399,10 @@ void psp_trace_checkpoint(uint32_t addr) {
             }
             std::fprintf(stderr, "\n");
         }
+    }
+    if (g_census) {
+        const uint32_t slot = (addr - kCensusBase) >> 2;
+        if (slot < kCensusSlots) g_census[slot].fetch_add(1, std::memory_order_relaxed);
     }
     g_prev_func_addr = g_last_func_addr;
     g_last_func_addr = addr;

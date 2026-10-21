@@ -41,6 +41,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 void psp_print_host_backtrace(const char* tag);  // runtime/src/psp_backtrace.cpp
@@ -434,6 +435,34 @@ void bone_smooth(uint8_t* rdram, recomp_context* ctx) {
     std::memcpy(rdram + (out & 0x07FFFFFFu), m0, sizeof m0);
 }
 
+// PSPRECOMP_P3_WEATHER_TRACE=1 (diagnostic, 60 fps weather work): the mission script's weather
+// commands (setWindDirection / setWindLevel / setRainLevel / ...) store a target in a weather
+// object through eight setters, FUN_088FDD50..FUN_088FDDDC: each ORs one bit into +48 and stores
+// f12 (FUN_088FDDDC: a1) at +0 / +4 / +8 / +12 / +16 / +20 / +24 / +28. FUN_08900678 starts the
+// blend to that target (a0 = weather manager, f12 = blend length). Log who calls them and when (vblank), 400 lines.
+constexpr uint32_t kWeatherTraced[] = {0x088FDD50u, 0x088FDD64u, 0x088FDD78u, 0x088FDD8Cu, 0x088FDDA0u,
+                                       0x088FDDB4u, 0x088FDDC8u, 0x088FDDDCu, 0x08900678u};
+constexpr int kWeatherTracedCount = sizeof(kWeatherTraced) / sizeof(kWeatherTraced[0]);
+FuncPtr g_weather_traced[kWeatherTracedCount] = {};
+std::atomic<int> g_weather_reports{0};
+
+template <int N>
+void weather_trace(uint8_t* rdram, recomp_context* ctx) {
+    if (g_weather_reports.fetch_add(1, std::memory_order_relaxed) < 400) {
+        std::fprintf(stderr, "[WEATHER] vb=%lld set 0x%08X obj=0x%08X f12=%f a1=0x%08X ra=0x%08X\n",
+                     static_cast<long long>(psp_vblank_index(psp_display_elapsed_us())), kWeatherTraced[N],
+                     static_cast<uint32_t>(ctx->r[4]), ctx->f[12], static_cast<uint32_t>(ctx->r[5]),
+                     static_cast<uint32_t>(ctx->r[31]));
+    }
+    g_weather_traced[N](rdram, ctx);
+}
+
+template <int... I>
+void weather_trace_register(std::integer_sequence<int, I...>) {
+    ((g_weather_traced[I] = RECOMP_LOOKUP(kWeatherTraced[I]),
+      psp_dispatch_register(kWeatherTraced[I], weather_trace<I>)), ...);
+}
+
 // Fast loading (on by default, PSPRECOMP_P3_FAST_LOAD=0 turns it off): the tip screen's loader
 // takes one file per two or three frames, so a load whose reads are instant on the host still
 // took 2-3 s at 59.94 Hz. FUN_08A18834 draws the "CARGANDO" icon and runs on every frame of
@@ -490,6 +519,11 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
         g_pose_cache = RECOMP_LOOKUP(kPoseCache);
         psp_dispatch_register(kPoseCache, pose_cache_trace);
         std::fprintf(stderr, "[ANIM] tracing the pose path (FUN_088785A8)\n");
+    }
+    const char* weather_trace_env = std::getenv("PSPRECOMP_P3_WEATHER_TRACE");
+    if (weather_trace_env && weather_trace_env[0] == '1') {
+        weather_trace_register(std::make_integer_sequence<int, kWeatherTracedCount>{});
+        std::fprintf(stderr, "[WEATHER] tracing the weather setters\n");
     }
     if (psp_patch_set_active("60fps")) {
         g_input_update = RECOMP_LOOKUP(kInputUpdate);

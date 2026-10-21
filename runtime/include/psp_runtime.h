@@ -49,6 +49,10 @@ void psp_dispatch_request_backtrace(int tid);
 /// Debug socket `A`: restart the per-function log budgets of
 /// PSPRECOMP_FUNC_WATCH / _FUNC_ARGS / _OVL_ARGS (log the next calls again).
 void psp_dispatch_trace_rearm();
+/// Debug socket `C`: write "<addr> <entries>" per guest function entered since
+/// the last call (PSPRECOMP_FUNC_CENSUS=1) and reset the counts. Returns the
+/// number of lines, or -1 when the census is off or the file cannot be opened.
+int psp_dispatch_census_dump(const char* path);
 
 /// Debug-only GL thread safety check.
 /// In debug builds: aborts if current thread is not the main thread.

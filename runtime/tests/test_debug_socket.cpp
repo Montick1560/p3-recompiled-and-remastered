@@ -205,6 +205,32 @@ static void test_screenshot_hooks(uint8_t* rdram) {
     ASSERT_STR_EQ(r.header, "ERR timeout\n", "S timeout path");
 }
 
+static int fake_census_ok(const char* path) { return path && *path ? 3 : -1; }
+static int fake_census_off(const char*) { return -1; }
+
+static void test_census(uint8_t* rdram) {
+    PspDebugReply r;
+    PspDebugHooks none;
+    psp_debug_socket_set_hooks(none);
+    r = psp_debug_handle_line("C /tmp/census.txt", rdram, TEST_RDRAM_SIZE);
+    ASSERT_STR_EQ(r.header, "ERR unsupported\n", "C without hook");
+
+    PspDebugHooks ok_hooks;
+    ok_hooks.func_census = fake_census_ok;
+    psp_debug_socket_set_hooks(ok_hooks);
+    r = psp_debug_handle_line("C /tmp/census.txt", rdram, TEST_RDRAM_SIZE);
+    ASSERT_STR_EQ(r.header, "OK 0\n", "C writes the census");
+    r = psp_debug_handle_line("C ", rdram, TEST_RDRAM_SIZE);
+    ASSERT_STR_EQ(r.header, "ERR bad-path\n", "C without a path");
+
+    PspDebugHooks off_hooks;
+    off_hooks.func_census = fake_census_off;
+    psp_debug_socket_set_hooks(off_hooks);
+    r = psp_debug_handle_line("C /tmp/census.txt", rdram, TEST_RDRAM_SIZE);
+    ASSERT_STR_EQ(r.header, "ERR census-off\n", "C with PSPRECOMP_FUNC_CENSUS unset");
+    psp_debug_socket_set_hooks(none);
+}
+
 /// Light JSON sanity check (no jq in-process): balanced braces/brackets,
 /// even quote count, expected substrings present.
 static void test_info_json(uint8_t* rdram) {
@@ -416,6 +442,7 @@ int main() {
     test_write_read_roundtrip(rdram.data());
     test_buttons(rdram.data());
     test_screenshot_hooks(rdram.data());
+    test_census(rdram.data());
     test_info_json(rdram.data());
     test_concurrent_clients(rdram.data());
     test_stop_with_idle_client(rdram.data());

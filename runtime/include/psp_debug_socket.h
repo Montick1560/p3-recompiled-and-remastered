@@ -75,6 +75,10 @@ struct PspDebugHooks {
     bool (*input_device)(const char* name) = nullptr;
     /// M command: press F8 (PSPRECOMP_FRAMELOG: mark a hitch), as the player would.
     void (*mark_hitch)() = nullptr;
+    /// C command: write the per-function entry counts since the last C to a
+    /// file and reset them (PSPRECOMP_FUNC_CENSUS=1). Returns the number of
+    /// functions written, or -1 when the census is off or the file fails.
+    int (*func_census)(const char* path) = nullptr;
 };
 
 /// Install the providers used by the I and S commands.

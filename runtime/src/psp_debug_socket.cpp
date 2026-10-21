@@ -369,6 +369,15 @@ PspDebugReply psp_debug_handle_line(const char* line,
         g_hooks.draw_log(std::atoi(line + 2));
         return make_ok_empty();
     }
+    if (line[0] == 'C' && line[1] == ' ') {
+        // C <path>: entry counts per guest function since the last C (find the
+        // code that runs only while something is on screen: diff two windows).
+        if (!g_hooks.func_census) return make_err("unsupported");
+        const char* path = skip_spaces(line + 2);
+        if (*path == '\0') return make_err("bad-path");
+        if (g_hooks.func_census(path) < 0) return make_err("census-off");
+        return make_ok_empty();
+    }
     if (line[0] == 'M' && line[1] == '\0') {
         if (!g_hooks.mark_hitch) return make_err("unsupported");
         g_hooks.mark_hitch();

@@ -184,6 +184,7 @@ int main(int argc, char* argv[]) {
         hooks.thread_list        = psp_scheduler_snapshot;
         hooks.thread_backtrace   = psp_dispatch_request_backtrace;
         hooks.trace_rearm        = psp_dispatch_trace_rearm;
+        hooks.func_census        = psp_dispatch_census_dump;
         hooks.cpu_state          = psp_cpu_describe;
         hooks.capture_screenshot = ge_draw_capture_screenshot;
         hooks.draw_log           = ge_draw_request_log;

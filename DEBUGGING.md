@@ -223,6 +223,7 @@ silently dropped. Full protocol details in the issue #35 section below.
 | `B <hexmask> <decms>` | Inject button mask for duration (UP=10, CROSS=4000, START=8; clamped 60 s) | `OK 0` |
 | `S <path>` | Screenshot: render thread writes a TGA of the FBO (480x272 × `PSPRECOMP_RENDER_SCALE`) to `<path>` | `OK 0` (≤10 s) or `ERR timeout` |
 | `D <lists>` | Draw log: every PRIM of the next `<lists>` display lists prints a `[DL]` line to the log (full draw state, world/view/proj matrices, first two packed vertices) | `OK 0` |
+| `C <path>` | Write `<addr> <entries>` per guest function entered since the last `C` and reset the counts (`PSPRECOMP_FUNC_CENSUS=1`); diff two windows (`build/tools/wcensus.py`) to find the code that runs only while something is on screen | `OK 0` |
 | `A` | Re-arm the per-function log budgets of `PSPRECOMP_FUNC_WATCH` / `_FUNC_ARGS` / `_OVL_ARGS` (send it right before the action you want traced) | `OK 0` |
 | `X <lo> <hi>` | Draw skip: PRIMs whose index inside their display list (`i=` in `[DL]` lines) is in `[lo, hi]` are not drawn (clears still run); bare `X` or `lo > hi` draws everything again. Bisects which draw paints a region | `OK 0` |
 | `P <keyboard\|xbox\|ps4\|ps5>` | Button prompts: show that input device's icons in the help bars now (input still switches it; `PSPRECOMP_INPUT_DEVICE=<name>` forces one for the whole run) | `OK 0` |
@@ -245,6 +246,8 @@ the socket for scripted/agent input.
   (previous checkpoint), first 200 hits each.
 - `PSPRECOMP_FUNC_ARGS=<hex>[,<hex>...]` (max 8): wrap those functions in the dispatch table and log
   a0-a3 and v0 per call (first 400, `PSPRECOMP_FUNC_ARGS_MAX` overrides). Only calls that go through RECOMP_LOOKUP are seen.
+- `PSPRECOMP_FUNC_CENSUS=1`: count every guest function entry in [0x08800000, 0x09000000) (8 MB of
+  counters); the debug socket `C <path>` writes the counts since the last `C` and resets them.
 - `PSPRECOMP_FUNC_ARGS_MAX=<n>`: per-function log budget of `PSPRECOMP_FUNC_ARGS` (default 400).
 - `PSPRECOMP_RENDER_SCALE=<1..8>`: internal resolution (default 1). Oracle comparisons with
   PPSSPP, `tools/gelist.py` diffs and `tools/tgadiff.py` baselines must run at 1. `S`
@@ -602,6 +605,7 @@ what was added, how to use it, how it was verified, and any new failure modes di
 | `D` | `<declists>` | `OK 0`; the next N display lists log one `[DL] i=<index>` line per PRIM (state + matrices + 2 packed vertices) and a `[DL] ---- list end` marker | `unsupported` |
 | `X` | `<lo> <hi>` (decimal; none = off) | `OK 0`; non-clear PRIMs with list index in `[lo, hi]` are skipped until the next `X` | `usage: X <lo> <hi>`, `unsupported` |
 | `K` | `<tid>` | `OK 0`; that PSP thread prints `[BT] thread <tid> at <addr>:` on stderr at its next guest function entry (not in the reply). See [Guest backtraces](#guest-backtraces-watches-and-the-cpu-lock-2026-10) | `unsupported` |
+| `C` | `<path>` | `OK 0` after `<addr> <entries>` lines for every guest function entered since the last `C` are written to `<path>` (counts reset) | `bad-path`, `census-off` (`PSPRECOMP_FUNC_CENSUS` unset or the file cannot be opened), `unsupported` |
 | anything else | | | `unknown-command`, `empty`, `line-too-long` (>4095 chars; connection stays usable) |
 
 ### `I` JSON schema (one line, jq-able)

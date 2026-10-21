@@ -633,6 +633,16 @@ flags toggle individual experimental fixes/band-aids in the Patapon game module.
 - **Set it when:** you need the caller chain into a known guest function
   without a full `PSPRECOMP_PC_TRACE`.
 
+### `PSPRECOMP_FUNC_CENSUS`
+- **Read in:** `runtime/src/psp_dispatch.cpp` (`psp_trace_checkpoint`, `psp_dispatch_census_dump`).
+- **Type:** env (`=1`).
+- **Default:** off (no counters allocated).
+- **Effect:** Counts the entries of every guest function in [0x08800000, 0x09000000) (main image and
+  overlay window, 8 MB of counters). The debug socket `C <path>` writes `<addr> <entries>` for every
+  function entered since the last `C` and resets the counts.
+- **Set it when:** looking for the code behind something on screen: take one window with it and one
+  without and diff them (`build/tools/wcensus.py`), or compare call rates at 30 and 60 fps.
+
 ### `PSPRECOMP_FUNC_ARGS`
 - **Read in:** `runtime/src/psp_dispatch.cpp` (`psp_func_args_install`, called
   from `runtime/src/main.cpp`).
@@ -770,6 +780,15 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   `[ANIM] cache=... model=... vtbl=... +0x38=... motion=... frame=...`.
 - **Set it when:** looking for the pose path of a model that does not animate
   smoothly.
+
+### `PSPRECOMP_P3_WEATHER_TRACE`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`.
+- **Type:** env (`=1`; first character `'1'`). **Game-specific: patapon3.**
+- **Default:** off.
+- **Effect:** Diagnostics only. Wraps the weather object setters `0x088FDD50`..`0x088FDDDC` and the
+  blend start `0x08900678` that the mission script's weather commands use, and logs the first 400
+  calls as `[WEATHER] vb=<vblank> set 0x... obj=... f12=... a1=... ra=...`.
+- **Set it when:** checking when and to what the mission script changes the rain and wind.
 
 ### `PSPRECOMP_P3_ANIM_SMOOTH_DIAG`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
