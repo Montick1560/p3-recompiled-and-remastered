@@ -3,7 +3,7 @@
 // format, a region whose alpha mask identifies it, and the cell of each PSP glyph — and the runtime
 // redraws those cells for the player's input device and the prompt style. It may also describe the
 // atlas's labels per language (word tables, psp_bar_text.h): those are redrawn sharp with the bar font.
-// One patcher holds up to kPromptAtlasMax atlases (e.g. a help bar and a command list).
+// One patcher holds up to kPromptAtlasMax (8) atlases (e.g. a help bar, a command list, drum words).
 // Specs: docs/superpowers/specs/2026-10-19-pc-button-prompts-part1-design.md, part 1.1
 // docs/superpowers/specs/2026-10-20-pc-button-prompts-part1-1-bar-text-design.md.
 #include "psp_bar_text.h"
@@ -32,6 +32,9 @@ struct PromptAtlasSpec {
     std::vector<PromptCell> cells;
     uint8_t gray = 0x7F;  // the atlas's glyph colour: icon tint and the L/R slash
     uint8_t hole = 0x17;  // the dark interior of the atlas's glyphs: fills an icon's cut-out symbol
+    // 0 = a redrawn cell and its bilinear ring are cleared to transparent; else 0xAARRGGBB: they are
+    // filled with it and the icon is composited over it (a drum word's opaque black disc).
+    uint32_t cell_bg = 0;
     // Labels: recognition regions of the language (none of sig_rects), one word table per known
     // label signature, and the language-independent separators (': / &') of the glyph row.
     std::vector<PromptRect> label_sig_rects;
@@ -60,7 +63,7 @@ uint32_t prompt_atlas_recognise(const PromptAtlasSpec& spec, const uint8_t* rgba
 // the text.
 void prompt_atlas_apply(const PromptAtlasSpec& spec, uint32_t v, const ControlMap& map, RgbaImage& img);
 
-constexpr int kPromptAtlasMax = 4;              // atlases one patcher holds
+constexpr int kPromptAtlasMax = 8;              // atlases one patcher holds (7 * 32 + 31 fits the 8-bit tag)
 constexpr uint32_t kPromptAtlasTagStride = 32;  // packed tag = index * 32 + local tag (1..31)
 
 // The packed tag over several atlases: 0 = none, else index * kPromptAtlasTagStride + local, local =

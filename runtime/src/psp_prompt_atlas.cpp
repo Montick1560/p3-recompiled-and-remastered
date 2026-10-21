@@ -66,6 +66,20 @@ void prompt_atlas_compose(const PromptAtlasSpec& spec, InputDevice d, PromptStyl
         for (int y = cy0; y < cy1; y++)
             for (int x = cx0; x < cx1; x++) img.px[(static_cast<size_t>(y) * img.w + x) * 4 + 3] = 0;
         rgba_draw_cell(img, x0, y0, x1 - x0, y1 - y0, icons, slash);
+        if (spec.cell_bg != 0) {
+            // An opaque background (a drum's black disc): the icon goes over it, so the cell has no hole.
+            const float ba = (spec.cell_bg >> 24) / 255.0f;
+            const float bg[3] = {static_cast<float>((spec.cell_bg >> 16) & 0xFF),
+                                 static_cast<float>((spec.cell_bg >> 8) & 0xFF), static_cast<float>(spec.cell_bg & 0xFF)};
+            for (int y = cy0; y < cy1; y++)
+                for (int x = cx0; x < cx1; x++) {
+                    uint8_t* p = &img.px[(static_cast<size_t>(y) * img.w + x) * 4];
+                    const float sa = p[3] / 255.0f, oa = sa + ba * (1 - sa);
+                    for (int c = 0; c < 3; c++) p[c] = static_cast<uint8_t>(std::lround((p[c] * sa + bg[c] * ba * (1 - sa)) / oa));
+                    p[3] = static_cast<uint8_t>(std::lround(oa * 255.0f));
+                }
+            continue;
+        }
         // Fully transparent texels take the atlas gray (as the game's own do): the GE filters the
         // texture unpremultiplied, so black ones would leave a dark rim around the cell.
         for (int y = cy0; y < cy1; y++)

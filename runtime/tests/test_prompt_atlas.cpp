@@ -491,6 +491,108 @@ static void multi_atlas_apply_matches_single() {
     CHECK(img.px == small.px, "an index past the specs leaves the image alone");
 }
 
+// --- eight atlases; an opaque cell background (the drum-hit words) -----------------------------------
+static RgbaImage pattern(int w, int h, int seed) {
+    RgbaImage img;
+    img.w = w;
+    img.h = h;
+    img.px.assign(static_cast<size_t>(w) * h * 4, 0x7F);
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) img.px[(static_cast<size_t>(y) * w + x) * 4 + 3] = ((x * 7 + y * 3 + seed) % 5) == 0 ? 0xFF : 0;
+    return img;
+}
+
+static void eight_atlases() {
+    std::vector<PromptAtlasSpec> specs;
+    std::vector<RgbaImage> imgs;
+    for (int i = 0; i < 9; i++) {
+        imgs.push_back(pattern(16 * (i + 1), 16, i));
+        PromptAtlasSpec s;
+        s.name = "n";
+        s.width = 16 * (i + 1);
+        s.height = 16;
+        s.format = 4;
+        s.sig_rects = {{0, 0, s.width, 16}};
+        s.sig_hashes = {prompt_atlas_signature(imgs[i].px.data(), imgs[i].w, s.sig_rects)};
+        specs.push_back(s);
+    }
+    CHECK(kPromptAtlasMax == 8 && (kPromptAtlasMax - 1) * kPromptAtlasTagStride + 31 <= 0xFF, "8 atlases fit the 8-bit tag");
+    for (int i = 0; i < 8; i++)
+        CHECK(prompt_atlases_recognise(specs, specs[i].width, 16, 4, imgs[i].px.data()) ==
+                  static_cast<uint32_t>(i) * kPromptAtlasTagStride + 1,
+              "atlas i -> i * 32 + 1");
+    CHECK(prompt_atlases_recognise(specs, specs[8].width, 16, 4, imgs[8].px.data()) == 0, "a 9th spec is never consulted");
+}
+
+// A drum word: opaque black disc everywhere, white symbol ink in the cell.
+static constexpr PromptCell kDrumCell{PromptGlyph::Cross, 57, 87, 12, 12};
+static RgbaImage drum_image() {
+    RgbaImage img;
+    img.w = img.h = 128;
+    img.px.assign(128 * 128 * 4, 0);
+    for (size_t i = 3; i < img.px.size(); i += 4) img.px[i] = 0xFF;
+    for (int y = 89; y < 97; y++)
+        for (int x = 59; x < 67; x++)
+            if ((x + y) % 2) std::fill_n(&img.px[(y * 128 + x) * 4], 3, 0xFE);
+    return img;
+}
+static PromptAtlasSpec drum_spec(const RgbaImage& img) {
+    PromptAtlasSpec s;
+    s.name = "drum";
+    s.width = s.height = 128;
+    s.format = 4;
+    s.sig_rects = {{0, 0, 128, 128}};
+    s.sig_hashes = {prompt_atlas_signature(img.px.data(), img.w, s.sig_rects)};
+    s.cells = {kDrumCell};
+    s.gray = 0xFE;
+    s.hole = 0x00;
+    s.cell_bg = 0xFF000000u;
+    return s;
+}
+
+static void cell_bg_fills_opaque(int k) {
+    const RgbaImage base = upscale(drum_image(), k);
+    const PromptAtlasSpec spec = drum_spec(drum_image());
+    RgbaImage img = base;
+    prompt_atlas_compose(spec, InputDevice::Xbox, PromptStyle::Color, defaults(), img);
+    const PromptAtlasSpec& s = spec;
+    bool opaque = true, ink = false, outside_same = true;
+    for (int y = 0; y < img.h; y++)
+        for (int x = 0; x < img.w; x++) {
+            const size_t i = (static_cast<size_t>(y) * img.w + x) * 4;
+            if (in_cells(s, x, y, k)) {
+                opaque &= img.px[i + 3] == 0xFF;
+                ink |= img.px[i] > 0x40 || img.px[i + 1] > 0x40 || img.px[i + 2] > 0x40;
+            } else {
+                outside_same &= std::equal(&img.px[i], &img.px[i] + 4, &base.px[i]);
+            }
+        }
+    CHECK(opaque, "cell_bg: every texel of the cell and its ring is opaque (no hole, no fringe)");
+    CHECK(ink, "cell_bg: the icon is drawn");
+    CHECK(outside_same, "cell_bg: nothing outside the cell and its ring changes");
+}
+
+static void cell_bg_default_unchanged() {
+    const RgbaImage base = synthetic_atlas();
+    PromptAtlasSpec a = spec_for(base), b = a;
+    b.cell_bg = 0;
+    for (int k : {1, 4}) {
+        RgbaImage x = upscale(base, k), y = upscale(base, k);
+        prompt_atlas_compose(a, InputDevice::Xbox, PromptStyle::Color, defaults(), x);
+        prompt_atlas_compose(b, InputDevice::Xbox, PromptStyle::Color, defaults(), y);
+        CHECK(x.px == y.px, "cell_bg 0 is today's transparent clear");
+    }
+}
+
+static void icons_off_no_labels_untouched() {
+    const RgbaImage base = drum_image();
+    const PromptAtlasSpec spec = drum_spec(base);
+    RgbaImage img = base;
+    prompt_atlas_apply(spec, (1u << 20) | prompt_atlas_variant(InputDevice::Keyboard, PromptStyle::Gray, false, true),
+                       defaults(), img);
+    CHECK(img.px == base.px, "text on, icons off, no labels / separators: byte-identical");
+}
+
 int main() {
     signature_sees_only_its_region();
     compose_changes_only_cells(1);
@@ -505,6 +607,11 @@ int main() {
     multi_atlas_tags();
     local_tag_saturates();
     multi_atlas_apply_matches_single();
+    eight_atlases();
+    cell_bg_fills_opaque(1);
+    cell_bg_fills_opaque(4);
+    cell_bg_default_unchanged();
+    icons_off_no_labels_untouched();
     std::printf("%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }
