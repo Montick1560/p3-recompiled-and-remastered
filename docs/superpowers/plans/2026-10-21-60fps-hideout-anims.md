@@ -2,14 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** At 60 fps (`PSPRECOMP_PATCHES=60fps`) the hideout's Silver Hoshipon ("Plata Hoshipon") and the owl on top of the Master Obelisk move at the same real-time speed as at 30 fps, and move every frame (smooth) where the motion allows it.
+**Goal:** At 60 fps (`PSPRECOMP_PATCHES=60fps`) the hideout's Silver Hoshipon ("Plata Hoshipon") and the owl on top of the Master Obelisk move at the same real-time speed as at 30 fps **and move every frame (smooth)**: the speed fix alone is not done.
 
 **Architecture:** Same shape as the weather fix (`2026-10-21-60fps-weather.md`): first measure the 2x and find the per-frame step that drives these two props; then, only with the 60fps set, pace that step to 30 Hz, or halve its per-call advance where the state is a float and the step can run every frame. The game module (`games/patapon3/runtime/hooks_main.cpp`) owns the hooks. Generic helpers already exist: `runtime/include/psp_paced_step.h` (per-object pacing with banked frame time, `PacedStepTable`) and `psp_particle_nudge.h`.
 
 **Tech Stack:** C++20 runtime + game module (`psprecomp/`), ninja + ctest in `build/rtw`, Python 3 tools in `build/tools/` (outside the repo), debug socket on port 9998.
 
-**Spec:** the user's request (2026-10-21), no separate design doc:
+**Spec:** the user's requests (2026-10-21), no separate design doc:
 > "Ahora arreglemos las siguientes animaciones, son del escondite así que deberían ser más rápidas de testear, por ejemplo, plata hoshipon y el búho que está arriba del obelisco, van al doble."
+
+Follow-up, same day (a standing rule for every 60 fps fix):
+> "Y no olvides agregar animaciones smooth, agreguemos esa regla, toda animación que se arregle debe tener su smoothness."
 
 Reading: hideout animations that run 2x at 60 fps. The two named ones are examples ("por ejemplo"): any other hideout prop driven by the same step is in scope and gets fixed by the same hook. Props driven by a different step are listed in the hand-off, not fixed.
 
@@ -30,6 +33,7 @@ Reading: hideout animations that run 2x at 60 fps. The two named ones are exampl
 - The 30 fps game must not change: every new hook is registered only when `psp_patch_set_active("60fps")`, and each has an env to turn it off (`PSPRECOMP_P3_HIDEOUT_30HZ=0`).
 - Never test with `PSPRECOMP_NO_AUDIO=1`. Do not build or run ctest while an instance is booting or measuring: a busy PC breaks the boot's timed key presses (seen 21 Oct).
 - Run test instances from a copy of the exe (`build/rtw/psprecomp_runtime_wx.exe`, `P3DRIVE_EXE`), so `ninja` can relink `psprecomp_runtime.exe` meanwhile; delete the copy at the end.
+- **Smooth rule (user, 21 Oct):** every animation this plan fixes must also move every frame at 60 fps (Task 4). Pacing to 30 Hz alone is not a finished fix. If a motion truly cannot be smoothed, the hand-off says which and why; it never ships silently at 30 Hz.
 - Stuck 45 min or 3 attempts on one step: write it in the hand-off, take the step's fallback, move on.
 - Talk to the user in Spanish; code, commits and docs in English.
 
@@ -80,7 +84,8 @@ Outside the repo, except the diagnostic, which is committed if it is new.
 - Produces, in `build/hideout60/notes.md`:
   - the step function(s) (guest address);
   - what each step advances per call (`waitFrame` counter, float phase, motion rate);
-  - one of the fix shapes **S1 / S2 / S3** below, per prop.
+  - one of the fix shapes **S1 / S2 / S3** below, per prop;
+  - for Task 4: the guest words that hold each prop's drawn state (address or object offset, float or int) and the function that draws it.
 
 Check the leads in this order and stop at the first that explains both props:
 
@@ -143,7 +148,7 @@ A reusable diagnostic written for this (for example a `[HIDEOUT]` trace behind `
 
 - [ ] **Step 4: GREEN.** Build, copy to `psprecomp_runtime_wx.exe`, boot at 60 with `PSPRECOMP_FRAMELOG` on and run `prop_period.py`.
 
-  Expected: both periods within 10 % of 30 fps, three runs each. If the shape is S1 or S2, also check smoothness: four consecutive screenshots of `OWL_BOX` must show no doubled or missing frames. S1/S2 move at 30 Hz like the PSP; S3 moves every frame.
+  Expected: both periods within 10 % of 30 fps, three runs each. S1/S2 now move at the right speed but only every second frame; Task 4 makes them smooth. S3 already moves every frame, so Task 4 only measures it.
 
 - [ ] **Step 5: Review Focus 1 and 2.**
   - Hideout: open the Cuartel menu and close it; talk to the Hoshipon. Both must open and answer as fast as at 30 fps (screenshots 0.5 s apart; same frame count to the open menu ± 1 shot).
@@ -161,7 +166,67 @@ git add games/patapon3/runtime/hooks_main.cpp docs/ENV_FLAGS.md ARCHITECTURE.md 
 git commit -m "fix(p3): hideout animations keep their 30 fps speed at 60 fps"
 ```
 
-### Task 4: Deploy and hand-off
+### Task 4: Smooth (move every frame at the 30 fps speed)
+
+Required by the smooth rule. For S3 this task only adds the measurement. For S1 / S2 the props must also move on the frames where the paced step did not run.
+
+**Files:**
+- Create: `psprecomp/runtime/include/psp_half_ahead.h` (generic, pure; next to `psp_particle_nudge.h`)
+- Create: `psprecomp/runtime/tests/test_half_ahead.cpp`, plus a CMake block next to `test_particle_nudge` in `runtime/CMakeLists.txt`
+- Modify: `psprecomp/games/patapon3/runtime/hooks_main.cpp` (the Task 3 section)
+- Modify: `psprecomp/docs/ENV_FLAGS.md` (`PSPRECOMP_P3_HIDEOUT_SMOOTH`), `psprecomp/ARCHITECTURE.md` (same 60 fps clause)
+
+**Interfaces:**
+- Consumes:
+  - Task 3's hook and its `PacedStepTable`; `skipped(obj)` tells a draw that the object's step did not run this frame;
+  - Task 2's notes: which guest float words hold each prop's drawn state (position, rotation, scale, and the sprite or motion frame if it is a float).
+- Produces:
+  - in `psp_half_ahead.h`: `struct HalfAhead`; `void psp_half_ahead_record(HalfAhead* h, const uint8_t* rdram, uint32_t base, const uint32_t* offs, int n)`; `int psp_half_ahead_apply(HalfAhead* h, uint8_t* rdram, float max_jump)`; `void psp_half_ahead_restore(const HalfAhead& h, uint8_t* rdram)`;
+  - env `PSPRECOMP_P3_HIDEOUT_SMOOTH` (`0` = plain pacing; default on with `PSPRECOMP_P3_HIDEOUT_30HZ`);
+  - the log line `[P3] 60fps: smooth hideout animations`.
+
+`HalfAhead` keeps, per watched word, the values after the last two runs of the step (prev, cur). On a frame whose step was skipped, `apply` writes `cur + (cur - prev) / 2` into guest memory for the draw: half a step ahead, the same idea as the rain. `restore` puts `cur` back bit-exact after the draw. `apply` leaves a word alone if:
+- `|cur - prev| > max_jump` (a teleport, a loop restart or a new state is never slid across the screen);
+- either value is not finite;
+- the word was written by someone else since `record`, i.e. it no longer equals `cur`.
+
+`apply` returns how many words it moved.
+
+- [ ] **Step 1: Write the failing test `test_half_ahead.cpp`** (same `CHECK` style as `test_particle_nudge.cpp`, fake rdram at 0x08000000 + offset):
+  - record 10.0 then 12.0, apply → 13.0; restore → 12.0 bit-exact;
+  - record 10.0 then 8.0 → apply 7.0;
+  - record 0.0 then 300.0 with max_jump 50 → apply leaves 300.0;
+  - record 1.0 then NaN → apply leaves it;
+  - record 5.0 then 7.0, guest writes 9.0, apply → stays 9.0, and restore does not touch it;
+  - one record only (no prev) → apply moves nothing.
+
+- [ ] **Step 2: Run it.** `ninja -C build/rtw test_half_ahead`. Expected: compile FAIL, `psp_half_ahead.h` not found.
+
+- [ ] **Step 3: Implement `psp_half_ahead.h`** with a header comment in the style of `psp_particle_nudge.h`. Up to 16 words per `HalfAhead`; that is enough for a transform.
+
+- [ ] **Step 4: Run it.** Expected: PASS.
+
+- [ ] **Step 5: Wire it into the hooks.**
+  - S1 / S2: after each run of the paced step, `record` the prop's words.
+  - Hook the prop's draw (the function that reads those words to build its display list; find it with `PSPRECOMP_FUNC_WATCH` on the step's object or the draw-log `D`). On frames where `skipped(obj)`: `apply`, call the draw, `restore`.
+  - `max_jump` per word: 4x the largest per-step change measured in Task 2, as a named constant with that origin in a comment.
+  - If the drawn state is not a float (an integer sprite-frame index), it cannot be half-stepped. Stop and record it for the hand-off (smooth rule).
+  - With `PSPRECOMP_P3_HIDEOUT_TRACE=1` (or the weather trace, if Task 2 added none), print every ~2 s the draws per second and how many of them were half a step ahead (pattern: `weather_count`).
+
+- [ ] **Step 6: Measure.**
+  - Speed: `prop_period.py` periods are still within 10 % of 30 fps (smooth on).
+  - Smooth: the trace shows draws ≈ 60/s per prop and half a step ahead ≈ 30/s (S1/S2). For S3: steps ≈ 60/s.
+  - Four consecutive screenshots of each box: no prop jumps back, slides across or doubles.
+  - If speed is off by more than 10 % or a prop slides, set the smooth default to off, ledger it and tell the user. Do not hide it.
+
+- [ ] **Step 7: ctest, docs, commit.** Expected: ctest all pass.
+
+```bash
+git add runtime/include/psp_half_ahead.h runtime/tests/test_half_ahead.cpp runtime/CMakeLists.txt games/patapon3/runtime/hooks_main.cpp docs/ENV_FLAGS.md ARCHITECTURE.md
+git commit -m "feat(p3): hideout animations move smoothly at 60 fps"
+```
+
+### Task 5: Deploy and hand-off
 
 **Files:**
 - Deploy: the three exes into `build/e2e_portable3/game/<release>/` and `build/e2e_portable/game/<release>/`, after a backup into `build/backup_pre_hideout_<date>/<portable>/<release>/` (same as `build/backup_pre_weather_2026-10-21`). Releases `dxd-1.1.4` (build/rtw), `dxd-1.1.5b` (build/v115b/rtw), `vanilla-eu` (build/vanilla/rtw). Rebuild the variants first: `P3_VARIANT=v115b bash games/patapon3/scripts/p3.sh build`, then the same with `vanilla`.
@@ -178,6 +243,7 @@ git commit -m "fix(p3): hideout animations keep their 30 fps speed at 60 fps"
   - what was wrong and what changed;
   - periods at 30 / 60 before / 60 after;
   - how to try it: the launcher at 60 fps, look at the obelisk;
+  - smooth status per prop (moves every frame, or why not);
   - other hideout props seen at 2x and not fixed, if any;
   - "nada subido; va en push-p3-28 con lo del clima tras tu OK".
 
@@ -186,4 +252,5 @@ git commit -m "fix(p3): hideout animations keep their 30 fps speed at 60 fps"
 - Task 1: boxes, periods 30 / 60.
 - Task 2: step address, shape, how it was found.
 - Task 3: RED / GREEN periods, Review Focus 1-3, ctest, rt_regress.
-- Task 4: Review Focus 5, variants, deploy hashes.
+- Task 4: smooth shape, trace counters (draws / half a step ahead per s), periods with smooth on.
+- Task 5: Review Focus 5, variants, deploy hashes.
