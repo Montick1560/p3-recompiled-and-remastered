@@ -224,6 +224,7 @@ silently dropped. Full protocol details in the issue #35 section below.
 | `S <path>` | Screenshot: render thread writes a TGA of the FBO (480x272 × `PSPRECOMP_RENDER_SCALE`) to `<path>` | `OK 0` (≤10 s) or `ERR timeout` |
 | `D <lists>` | Draw log: every PRIM of the next `<lists>` display lists prints a `[DL]` line to the log (full draw state, world/view/proj matrices, first two packed vertices) | `OK 0` |
 | `C <path>` | Write `<addr> <entries>` per guest function entered since the last `C` and reset the counts (`PSPRECOMP_FUNC_CENSUS=1`); diff two windows (`build/tools/wcensus.py`) to find the code that runs only while something is on screen | `OK 0` |
+| `H <hexaddr>` | Hardware write watch (Windows): watch writes to that guest word from now on, live (same output as `PSPRECOMP_HW_WATCH`, which it retargets or starts; budget 400 hits per `H`). For objects found with the game running, whose heap address changes from boot to boot | `OK 0` |
 | `A` | Re-arm the per-function log budgets of `PSPRECOMP_FUNC_WATCH` / `_FUNC_ARGS` / `_OVL_ARGS` (send it right before the action you want traced) | `OK 0` |
 | `X <lo> <hi>` | Draw skip: PRIMs whose index inside their display list (`i=` in `[DL]` lines) is in `[lo, hi]` are not drawn (clears still run); bare `X` or `lo > hi` draws everything again. Bisects which draw paints a region | `OK 0` |
 | `P <keyboard\|xbox\|ps4\|ps5>` | Button prompts: show that input device's icons in the help bars now (input still switches it; `PSPRECOMP_INPUT_DEVICE=<name>` forces one for the whole run) | `OK 0` |
@@ -476,7 +477,9 @@ reads, result pointers), prints `[HW-WATCH] guest 0x... = <new value> rip +<offs
 `[BT] hw-watch:` host backtrace (symbolize with `llvm-nm -C`, image base `0x140000000`). Use it when
 the corrupting value is 0 or too common for `PSPRECOMP_STORE_WATCH`. Byte stores show one line per
 byte. Found the 2026-10-10 hideout-load freeze: the game's decompressor (`FUN_08869d00`, user_main)
-wrote the next archive over a GMO model that was still waiting to be parsed.
+wrote the next archive over a GMO model that was still waiting to be parsed. The debug socket
+`H <hexaddr>` points the watch at another word while the game runs (and starts it when the env is
+unset): find a moving object's word live (`build/tools/corr_scan.py`), then `H` it.
 
 ### `PSPRECOMP_STORE_WATCH` and `PSPRECOMP_STORE_WATCH_RANGE`
 

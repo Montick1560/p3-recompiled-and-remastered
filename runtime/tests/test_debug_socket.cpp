@@ -231,6 +231,32 @@ static void test_census(uint8_t* rdram) {
     psp_debug_socket_set_hooks(none);
 }
 
+static uint32_t g_fake_hw_watch = 0;
+static bool fake_hw_watch(uint32_t addr) { g_fake_hw_watch = addr; return addr != 0; }
+
+static void test_hw_watch(uint8_t* rdram) {
+    PspDebugReply r;
+    PspDebugHooks none;
+    psp_debug_socket_set_hooks(none);
+    r = psp_debug_handle_line("H 09AB7988", rdram, TEST_RDRAM_SIZE);
+    ASSERT_STR_EQ(r.header, "ERR unsupported\n", "H without hook");
+
+    PspDebugHooks hooks;
+    hooks.hw_watch = fake_hw_watch;
+    psp_debug_socket_set_hooks(hooks);
+    r = psp_debug_handle_line("H 09AB7988", rdram, TEST_RDRAM_SIZE);
+    ASSERT_STR_EQ(r.header, "OK 0\n", "H retargets the hardware watch");
+    ASSERT_TRUE(g_fake_hw_watch == 0x09AB7988u, "H passes the guest address");
+    r = psp_debug_handle_line("H 0x08800004", rdram, TEST_RDRAM_SIZE);
+    ASSERT_STR_EQ(r.header, "OK 0\n", "H accepts a 0x prefix");
+    ASSERT_TRUE(g_fake_hw_watch == 0x08800004u, "H 0x prefix address");
+    r = psp_debug_handle_line("H zz", rdram, TEST_RDRAM_SIZE);
+    ASSERT_STR_EQ(r.header, "ERR usage: H <hex guest address>\n", "H with a bad address");
+    r = psp_debug_handle_line("H 0", rdram, TEST_RDRAM_SIZE);
+    ASSERT_STR_EQ(r.header, "ERR hw-watch-failed\n", "H refused by the provider");
+    psp_debug_socket_set_hooks(none);
+}
+
 /// Light JSON sanity check (no jq in-process): balanced braces/brackets,
 /// even quote count, expected substrings present.
 static void test_info_json(uint8_t* rdram) {
@@ -443,6 +469,7 @@ int main() {
     test_buttons(rdram.data());
     test_screenshot_hooks(rdram.data());
     test_census(rdram.data());
+    test_hw_watch(rdram.data());
     test_info_json(rdram.data());
     test_concurrent_clients(rdram.data());
     test_stop_with_idle_client(rdram.data());

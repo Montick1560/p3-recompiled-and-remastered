@@ -79,6 +79,9 @@ struct PspDebugHooks {
     /// file and reset them (PSPRECOMP_FUNC_CENSUS=1). Returns the number of
     /// functions written, or -1 when the census is off or the file fails.
     int (*func_census)(const char* path) = nullptr;
+    /// H command: point the debug-register write watch (PSPRECOMP_HW_WATCH)
+    /// at another guest word, live. Returns false when it cannot be armed.
+    bool (*hw_watch)(uint32_t guest_addr) = nullptr;
 };
 
 /// Install the providers used by the I and S commands.

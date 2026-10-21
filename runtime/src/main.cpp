@@ -109,6 +109,7 @@ extern RECOMP_FUNC void entry(uint8_t* rdram, recomp_context* ctx);
 /// - Event loop runs AFTER module_start returns (module_start spawns threads)
 void psp_func_args_install();  // psp_dispatch.cpp
 void psp_hw_watch_start(uint8_t* rdram);  // psp_backtrace.cpp (PSPRECOMP_HW_WATCH)
+bool psp_hw_watch_retarget(uint32_t guest);  // psp_backtrace.cpp (debug socket H)
 
 int main(int argc, char* argv[]) {
     // settings.ini (docs/contracts/settings-v1.md): before anything reads a PSPRECOMP_* variable.
@@ -185,6 +186,7 @@ int main(int argc, char* argv[]) {
         hooks.thread_backtrace   = psp_dispatch_request_backtrace;
         hooks.trace_rearm        = psp_dispatch_trace_rearm;
         hooks.func_census        = psp_dispatch_census_dump;
+        hooks.hw_watch           = psp_hw_watch_retarget;
         hooks.cpu_state          = psp_cpu_describe;
         hooks.capture_screenshot = ge_draw_capture_screenshot;
         hooks.draw_log           = ge_draw_request_log;

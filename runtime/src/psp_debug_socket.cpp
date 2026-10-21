@@ -378,6 +378,17 @@ PspDebugReply psp_debug_handle_line(const char* line,
         if (g_hooks.func_census(path) < 0) return make_err("census-off");
         return make_ok_empty();
     }
+    if (line[0] == 'H' && line[1] == ' ') {
+        // H <hex>: watch writes to that guest word from now on (an object
+        // found live sits at another address on the next boot).
+        if (!g_hooks.hw_watch) return make_err("unsupported");
+        const char* arg = skip_spaces(line + 2);
+        char* end = nullptr;
+        const unsigned long addr = std::strtoul(arg, &end, 16);
+        if (end == arg || *skip_spaces(end) != '\0') return make_err("usage: H <hex guest address>");
+        if (!g_hooks.hw_watch(static_cast<uint32_t>(addr))) return make_err("hw-watch-failed");
+        return make_ok_empty();
+    }
     if (line[0] == 'M' && line[1] == '\0') {
         if (!g_hooks.mark_hitch) return make_err("unsupported");
         g_hooks.mark_hitch();
