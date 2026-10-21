@@ -928,6 +928,12 @@ add_test(NAME cpu_close_tests COMMAND test_cpu_close)
 add_test(NAME cpu_close_nolock_tests COMMAND test_cpu_close --nolock)
 set_tests_properties(cpu_close_nolock_tests PROPERTIES ENVIRONMENT "PSPRECOMP_NO_CPU_LOCK=1")
 add_test(NAME cpu_close_closer_tests COMMAND test_cpu_close --closer)
+
+# Guest CPU lock under contention: exclusion, progress, priority, reservations, hand-off time.
+add_executable(test_cpu_handoff tests/test_cpu_handoff.cpp src/psp_cpu.cpp src/psp_perf.cpp)
+target_include_directories(test_cpu_handoff PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_cpu_handoff PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME cpu_handoff_tests COMMAND test_cpu_handoff)
 set_tests_properties(cpu_close_closer_tests PROPERTIES
     PASS_REGULAR_EXPRESSION "the closing thread asked for the CPU after close: exiting now")
 

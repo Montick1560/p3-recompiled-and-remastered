@@ -23,7 +23,8 @@ int psp_current_thread_id() { return g_id_of_current(); }
 
 struct Waiter {
     int prio;
-    int order;  // 0 = front (returning from HLE), 1 = back
+    int order;  // -1 = back from a non-blocking HLE call (never lost the CPU), 0 = front (returning
+                // from HLE), 1 = back
     uint64_t ticket;
     int id;  // PSP thread id (diagnostics)
     bool operator<(const Waiter& o) const {
@@ -66,6 +67,40 @@ uint64_t g_grant_count = 0;
 double since_epoch_ms(SlowClock::time_point t) {
     return std::chrono::duration<double, std::milli>(t - g_slow_epoch).count();
 }
+}  // namespace
+
+// PSPRECOMP_CPU_TRACE=<file> (diagnostics): every CPU-lock event as one line "<us> <ev> <id> <prio> [name]"
+// (G grant, L release, LR release keeping a reservation, B blocking wait begins, W waits, HE / HX HLE
+// call enter / exit), buffered (1 MiB) and written under the lock's own order. Off: one branch per event.
+static FILE* trace_file() {
+    static FILE* f = [] {
+        const char* e = std::getenv("PSPRECOMP_CPU_TRACE");
+        FILE* out = e && e[0] ? std::fopen(e, "w") : nullptr;
+        if (out) std::setvbuf(out, nullptr, _IOFBF, 1 << 20);
+        return out;
+    }();
+    return f;
+}
+static std::mutex g_trace_m;
+void psp_cpu_trace(const char* ev, const char* name) {
+    FILE* f = trace_file();
+    if (f == nullptr) return;
+    const long long us = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    std::lock_guard<std::mutex> l(g_trace_m);
+    std::fprintf(f, "%lld %s %d %d%s%s\n", us, ev, psp_current_thread_id(), psp_current_thread_priority(),
+                 name ? " " : "", name ? name : "");
+    static unsigned n = 0;
+    if ((++n & 0x3FFF) == 0) std::fflush(f);  // a killed run keeps all but the last events
+}
+void psp_cpu_trace_flush() {
+    if (FILE* f = trace_file()) {
+        std::lock_guard<std::mutex> l(g_trace_m);
+        std::fflush(f);
+    }
+}
+
+namespace {
 void slow_note_release() {  // the holder, before giving the CPU up
     if (slow_ms() <= 0.0) return;
     const auto now = SlowClock::now();
@@ -96,6 +131,20 @@ bool reserved_against_locked(int prio, const void* me) {
         if (r.owner != me && r.prio <= prio && now - r.since < kReservationTtl) return true;
     }
     return false;
+}
+
+// Drops `me`'s reservation: 0 = none, 1 = one past its TTL (the call counted as blocking), 2 = a live one
+// (the call did not block: on the PSP the caller never lost the CPU).
+int drop_reservation_age_locked(const void* me) {
+    const auto now = std::chrono::steady_clock::now();
+    for (size_t i = 0; i < g_res.size(); i++) {
+        if (g_res[i].owner == me) {
+            const bool live = now - g_res[i].since < kReservationTtl;
+            g_res.erase(g_res.begin() + static_cast<std::ptrdiff_t>(i));
+            return live ? 2 : 1;
+        }
+    }
+    return 0;
 }
 
 bool drop_reservation_locked(const void* me) {
@@ -173,19 +222,25 @@ void psp_cpu_acquire(bool front) {
     if (!enabled() || t_held) return;
     const int prio = psp_current_thread_priority();
     std::unique_lock<std::mutex> lock(g_m);
-    drop_reservation_locked(&t_token);  // our own HLE call is over
-    const Waiter me{prio, front ? 0 : 1, g_next_ticket++, psp_current_thread_id()};
+    // Our own HLE call is over. A live reservation means it did not block: we never lost the CPU, so we
+    // go on ahead of every equal-priority waiter (one may have queued meanwhile, held back by the
+    // reservation: waiting for it to wake up instead cost a timer tick per hand-off).
+    const int dropped = drop_reservation_age_locked(&t_token);
+    const Waiter me{prio, dropped == 2 ? -1 : (front ? 0 : 1), g_next_ticket++, psp_current_thread_id()};
     g_waiters.insert(me);
     publish_best_locked();
     auto ready = [&] {
         return !g_held && g_waiters.begin()->ticket == me.ticket &&
                !reserved_against_locked(prio, &t_token);
     };
+    // A waiter our reservation held back may be able to run now (we wait behind a better one).
+    if (dropped != 0 && !ready()) g_cv.notify_all();
     // Reservations age out without a notification: poll while any exists.
     // A long wait means the owner never reached an HLE call or a loop
     // back-edge: report it once per wait (deadlock diagnostics).
     const auto start = std::chrono::steady_clock::now();
     bool reported = false;
+    bool traced_wait = false;
     // PSPRECOMP_CPU_SLOW: time blocked per (reason, thread), sampled at every wake-up of this wait.
     std::vector<std::tuple<char, int, double>> why;
     auto last_t = start;
@@ -214,6 +269,10 @@ void psp_cpu_acquire(bool front) {
             park_forever();
         }
         if (ready()) break;
+        if (!traced_wait) {
+            traced_wait = true;
+            psp_cpu_trace("W", nullptr);
+        }
         g_cv.wait_for(lock, g_res.empty() ? std::chrono::milliseconds(100)
                                           : std::chrono::milliseconds(1));
         note_why();
@@ -257,6 +316,7 @@ void psp_cpu_acquire(bool front) {
     }
     g_waiters.erase(me);
     publish_best_locked();
+    psp_cpu_trace("G", nullptr);
     g_held = true;
     g_holder = psp_current_thread_id();
     t_held = true;
@@ -265,6 +325,7 @@ void psp_cpu_acquire(bool front) {
 void psp_cpu_release() {
     if (!enabled() || !t_held) return;
     slow_note_release();
+    psp_cpu_trace("L", nullptr);
     {
         std::lock_guard<std::mutex> lock(g_m);
         g_held = false;
@@ -277,6 +338,7 @@ void psp_cpu_release() {
 void psp_cpu_release_reserved() {
     if (!enabled() || !t_held) return;
     slow_note_release();
+    psp_cpu_trace("LR", nullptr);
     {
         std::lock_guard<std::mutex> lock(g_m);
         g_held = false;
@@ -295,7 +357,10 @@ void psp_cpu_block_begin() {
         std::lock_guard<std::mutex> lock(g_m);
         dropped = drop_reservation_locked(&t_token);
     }
-    if (dropped) g_cv.notify_all();
+    if (dropped) {
+        psp_cpu_trace("B", nullptr);
+        g_cv.notify_all();
+    }
 }
 
 bool psp_cpu_held() {
@@ -321,7 +386,7 @@ int psp_cpu_describe(char* buf, int size) {
     int n = std::snprintf(buf, size, "held=%d holder=%d waiters=[", g_held ? 1 : 0, g_holder);
     for (const Waiter& w : g_waiters) {
         if (n >= size) break;
-        n += std::snprintf(buf + n, size - n, "(id %d prio %d %s)", w.id, w.prio, w.order ? "back" : "front");
+        n += std::snprintf(buf + n, size - n, "(id %d prio %d %s)", w.id, w.prio, w.order > 0 ? "back" : (w.order < 0 ? "own" : "front"));
     }
     if (n < size) n += std::snprintf(buf + n, size - n, "] reservations=[");
     for (const Reservation& r : g_res) {

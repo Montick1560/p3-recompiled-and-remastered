@@ -26,6 +26,10 @@ void psp_cpu_release();
 /// in) until this thread blocks (psp_cpu_block_begin) or 2 ms pass.
 void psp_cpu_release_reserved();
 
+/// PSPRECOMP_CPU_TRACE=<file>: append one lock event (see psp_cpu.cpp); flush on demand.
+void psp_cpu_trace(const char* ev, const char* name);
+void psp_cpu_trace_flush();
+
 /// An HLE call is about to block (wait, delay, sleep): drop this thread's
 /// reservation so any ready thread may run, like a PSP thread going to WAIT.
 void psp_cpu_block_begin();

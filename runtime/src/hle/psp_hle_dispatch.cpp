@@ -443,7 +443,9 @@ static const std::chrono::steady_clock::time_point g_hle_slow_epoch = std::chron
 static double hle_slow_ms() {
     static const double ms = [] {
         const char* e = std::getenv("PSPRECOMP_CPU_SLOW");
-        return e && e[0] ? std::atof(e) / 10.0 : 0.0;
+        if (e && e[0]) return std::atof(e) / 10.0;
+        const char* t = std::getenv("PSPRECOMP_CPU_TRACE");  // the timed path also traces HLE calls
+        return t && t[0] ? 1e9 : 0.0;
     }();
     return ms;
 }
@@ -456,7 +458,9 @@ static void hle_cpu_wrapper(uint8_t* rdram, recomp_context* ctx) {
         {
             PspCpuReleaseScope cpu;
             t0 = std::chrono::steady_clock::now();
+            psp_cpu_trace("HE", g_cpu_name[N]);
             g_cpu_real[N](rdram, ctx);
+            psp_cpu_trace("HX", g_cpu_name[N]);
             t1 = std::chrono::steady_clock::now();
         }
         const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
