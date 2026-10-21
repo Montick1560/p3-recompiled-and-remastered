@@ -1,9 +1,9 @@
-# 60 fps Hero Gate sparkles and hideout halo Implementation Plan
+# 60 fps Hero Gate particles and hideout halo Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** At 60 fps (`PSPRECOMP_PATCHES=60fps`), two hideout effects must move at the same real-time speed as at 30 fps **and move every frame (smooth)**:
-- the sparkles of the purple decoration hanging above the Hero Gate ("Heropuerta");
+- the particles of the Hero Gate ("Heropuerta") behind the rock that covers it (inside the dark arch);
 - the circular halo under the selected place on the hideout map.
 
 **Architecture:** Same shape as the weather fix (`2026-10-21-60fps-weather.md`) and the hideout scripts fix (`2026-10-21-60fps-hideout-anims.md`):
@@ -22,10 +22,16 @@ The game module (`games/patapon3/runtime/hooks_main.cpp`) owns the hooks. Generi
 **Spec:** the user's request (2026-10-21), no separate design doc:
 > "Siguiente arreglo de suavidad y que va rápido, en la heropuerta/herogate, sus destellos detras de la roca que los cubren van rápido, podrias agregar la suavidad y ajustar la velcoidad de animacion? así como el destello circular que tiene el escondite cuando te situas en cada uno de los lugares (cuartel, totem, fragua, etc)"
 
-Clarification, same day:
+Clarifications, same day:
 > "los anillos es estatico, o sea lo morado que cuelga de arriba"
 
-Reading: the Hero Gate effect is the purple decoration hanging from the ceiling above the gate (planet, stars, sun, purple glow), behind the rock; its sparkles move too fast. The circular halo is the glow under whichever place is selected (Cuartel, Tótem de equipo, Armería, Heropuerta, Fragua, Obelisco Maestro, ...). Standing rule:
+> "no, me referia q eu debes ignorar eso, la heropuerta tiene sus particulas detras de la piedra que lo cubre"
+
+Reading:
+- **Out of scope:** the purple decoration hanging from the ceiling above the gate (planet, stars, sun, glow). The user says to ignore it.
+- **In scope:** the Hero Gate's own particles, which show behind the dark rock (the arch) that covers the gate. They move too fast.
+
+The circular halo is the glow under whichever place is selected (Cuartel, Tótem de equipo, Armería, Heropuerta, Fragua, Obelisco Maestro, ...). The circular halo is the glow under whichever place is selected (Cuartel, Tótem de equipo, Armería, Heropuerta, Fragua, Obelisco Maestro, ...). Standing rule:
 > "toda animación que se arregle debe tener su smoothness"
 
 ## What is already known (21 Oct recon, `build/gate60/notes.md`)
@@ -44,9 +50,10 @@ Reading: the Hero Gate effect is the purple decoration hanging from the ceiling 
   | Effect | Box | 30 fps | 60 fps, `PSPRECOMP_P3_HIDEOUT_30HZ=0` |
   |---|---|---|---|
   | Halo under the Cuartel | 180 165 215 215 | 1.067 / 1.074 s | 1.067 / 1.076 s |
-  | Hanging decoration (Heropuerta selected) | 160 40 270 120 | 1.070 / 1.064 s | 1.067 / 1.069 s |
+  | Hanging decoration (out of scope) | 160 40 270 120 | 1.070 / 1.064 s | 1.067 / 1.069 s |
+  | Inside the gate's arch (Heropuerta selected) | 205 105 255 175 | 3.059 s (a noisy run gave 2.102) | not measured; current build 3.021 / 3.020 s |
 
-  So the 2x is not in when things appear. It is most likely in how far each sparkle or ring moves, grows or fades per frame. The weather was the same: real-time spawn timers, a fixed step per call. **Measure a speed** (expansion px/s, drift px/s, lifetime s), not a period.
+  The arch box is the first guess for the particles behind the rock. Its cadence also matches, but the hook-off run is missing (Task 1 measures it). So the 2x is probably not in when things appear. It is most likely in how far each sparkle or ring moves, grows or fades per frame. The weather was the same: real-time spawn timers, a fixed step per call. **Measure a speed** (expansion px/s, drift px/s, lifetime s), not a period.
 - **Size:** the sparkles are 1-3 px at render scale 1. Use render scale 3 (`weather_drive.py OUTDIR 3`); boxes stay in 480x272 units.
 - **Owner:** all hideout objects update off-screen, so a census view diff cannot isolate them. What works:
   1. find a word that follows the effect (`corr_scan.py`);
@@ -96,7 +103,7 @@ Outside the repo, no commit. Evidence goes in `build/gate60/notes.md`.
 **Interfaces:**
 - Produces, used by Tasks 2-4:
   - `HALO_CENTER` (cx, cy, r_max) for the Cuartel, Tótem and Fragua;
-  - `GATE_BOX`, the sparkle box above the Hero Gate;
+  - `GATE_BOX`, the box of the gate particles behind its rock (inside the arch);
   - the 30 / 60-hook-off / 60-current speeds of each effect.
 
 - [ ] **Step 1: Write `ring_speed.py`**
@@ -121,8 +128,8 @@ Outside the repo, no commit. Evidence goes in `build/gate60/notes.md`.
   The second boot adds `PSPRECOMP_PATCHES=60fps PSPRECOMP_P3_HIDEOUT_30HZ=0`; the third adds `PSPRECOMP_PATCHES=60fps`.
 
   In each boot:
-  1. Take a full screenshot (`wshot.py`) and choose the halo centre and the sparkle box from it. The sparkle box must avoid the planet, the sun and the halo.
-  2. Run each tool 3 times, 12 s each: the halo at the Cuartel, Tótem and Fragua, and the sparkles with the Heropuerta selected.
+  1. Take a full screenshot (`wshot.py`) and choose the halo centre and the gate box from it. The gate box covers the particles behind the gate's rock (start from 205 105 255 175 and fit it to where they show). It must avoid the halo rings around the selected gate and the hanging decoration above (out of scope).
+  2. Run each tool 3 times, 12 s each: the halo at the Cuartel, Tótem and Fragua, and the gate particles with the Heropuerta selected.
   3. Save a 16-frame sheet (`prop_sheet.py ... 0.05`) of each, for the hand-off.
 
   Expected: three runs within 10 %, and at least one quantity about 2x at 60-hook-off against 30. If the current build already matches 30 (the scripts fix covered it), only the smooth task remains for that effect: say so in the notes.
@@ -143,7 +150,7 @@ Outside the repo, except a new diagnostic, which gets its own commit.
 
 - [ ] **Step 1: Find a word that follows the effect.** Use `corr_scan.py` (60 fps, hooks off, scale 1, 6-10 dumps of `09800000-09D00000`). Its centroid is "pixels with mean > 200". For a dimmer effect, copy it to `corr_scan2.py` with a brightness threshold argument; do not change the old tool.
   - For the halo, correlate with the ring brightness or radius series from `ring_speed.py`. A small change: also write the series to a CSV and pass it in.
-  - For the sparkles, one sparkle's centroid is too short-lived. Correlate with the box's total sparkle brightness instead, or look for words that step by a constant every frame (2 dumps one frame apart are not possible; use 20 dumps and keep words whose per-dump change is about constant × elapsed frames).
+  - For the gate particles, one particle's centroid is too short-lived. Correlate with the gate box's total particle brightness instead, or look for words that step by a constant every frame (2 dumps one frame apart are not possible; use 20 dumps and keep words whose per-dump change is about constant × elapsed frames).
 
   Expected: a float word whose value follows the effect, with |corr| > 0.9.
 
@@ -179,7 +186,7 @@ Outside the repo, except a new diagnostic, which gets its own commit.
 - Produces:
   - the hook(s);
   - env `PSPRECOMP_P3_HIDEOUT_FX_30HZ` (`0` = off; default on with the 60fps set);
-  - the log line `[P3] 60fps: hideout effects paced to 30 Hz (Hero Gate sparkles, place halo)`;
+  - the log line `[P3] 60fps: hideout effects paced to 30 Hz (Hero Gate particles, place halo)`;
   - for S2: `PacedStepTable g_fx_paced[...]` (Task 4 reads `skipped(obj)`).
 
 - [ ] **Step 1: Same code in the three releases.** Diff each hooked function's body in the three outputs (the `awk '/\* 0xADDR \*/'..'^}'` + `md5sum` recipe in the hideout plan's evidence). Expected: identical. If one differs, register only where it matches and ledger a ruling.
@@ -193,7 +200,7 @@ Outside the repo, except a new diagnostic, which gets its own commit.
 
 - [ ] **Step 4: GREEN.**
   1. Build, copy to `psprecomp_runtime_wx.exe`, boot at 60 (scale 3).
-  2. Rerun the tools: halo at the Cuartel, Tótem and Fragua (Review Focus 1); sparkles at the Heropuerta.
+  2. Rerun the tools: halo at the Cuartel, Tótem and Fragua (Review Focus 1); gate particles at the Heropuerta.
 
   Expected: every speed within 10 % of 30 fps, three runs each.
 
@@ -214,7 +221,7 @@ Outside the repo, except a new diagnostic, which gets its own commit.
 
 ```bash
 git add games/patapon3/runtime/hooks_main.cpp docs/ENV_FLAGS.md ARCHITECTURE.md docs/superpowers/plans/2026-10-15-60fps.md
-git commit -m "fix(p3): Hero Gate sparkles and place halo keep their 30 fps speed at 60 fps"
+git commit -m "fix(p3): Hero Gate particles and place halo keep their 30 fps speed at 60 fps"
 ```
 
 ### Task 4: Smooth (move every frame at the 30 fps speed)
@@ -234,7 +241,7 @@ Required by the smooth rule. For S3 this task only measures. For S1 / S2, the ef
 - Produces:
   - env `PSPRECOMP_P3_HIDEOUT_FX_SMOOTH` (`0` = plain pacing; default on);
   - env `PSPRECOMP_P3_HIDEOUT_FX_TRACE=1`: every ~2 s, the draws per second and how many were half a step ahead, per effect (pattern `hideout_count`);
-  - the log line `[P3] 60fps: smooth hideout effects (Hero Gate sparkles, place halo)`.
+  - the log line `[P3] 60fps: smooth hideout effects (Hero Gate particles, place halo)`.
 
 - [ ] **Step 1: Choose the helper per effect.**
   - Particles with a velocity: `psp_particle_nudge`, k = 0.5.
@@ -265,7 +272,7 @@ Required by the smooth rule. For S3 this task only measures. For S1 / S2, the ef
 
 ```bash
 git add games/patapon3/runtime/hooks_main.cpp docs/ENV_FLAGS.md ARCHITECTURE.md runtime/include runtime/tests runtime/CMakeLists.txt
-git commit -m "feat(p3): Hero Gate sparkles and place halo move smoothly at 60 fps"
+git commit -m "feat(p3): Hero Gate particles and place halo move smoothly at 60 fps"
 ```
 
 ### Task 5: Variants, deploy, hand-off
