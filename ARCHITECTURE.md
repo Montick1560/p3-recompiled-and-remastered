@@ -200,12 +200,20 @@ thread that holds it runs guest code. `PSPRECOMP_NO_CPU_LOCK=1` disables the
 lock (free-threaded, for A/B comparison).
 
 Waiters are ordered by PSP priority (lowest number first), then by order
-(0 = front, used by a thread returning from an HLE call; 1 = back), then by
-ticket. A non-blocking HLE call gives the token back but leaves a reservation
-with a 2 ms TTL (`psp_cpu_release_reserved`): only a thread of strictly better
-priority may take the CPU until this thread blocks for real or the reservation
-ages out, so a lower-priority thread cannot slip in during the call.
-`psp_cpu_block_begin` drops the reservation at a real wait.
+(-1 = back from a non-blocking HLE call, 0 = front, used by a thread returning
+from an HLE call; 1 = back), then by ticket. A non-blocking HLE call gives the
+token back but leaves a reservation with a 2 ms TTL
+(`psp_cpu_release_reserved`): only a thread of strictly better priority may take
+the CPU until this thread blocks for real or the reservation ages out, so a
+lower-priority thread cannot slip in during the call. `psp_cpu_block_begin`
+drops the reservation at a real wait. A caller that comes back while its
+reservation is still live never lost the CPU on the PSP, so it re-acquires at
+order -1, ahead of every equal-priority waiter: an equal-priority thread that
+queued during the call (held back by the reservation) would otherwise be the
+head, asleep, and the caller would wait for it to wake up — a timer tick per
+hand-off, which stalled the main thread behind Patapon 3's two audio threads
+(60 fps hitches, 2026-10-21). Diagnostics: `PSPRECOMP_CPU_SLOW`,
+`PSPRECOMP_CPU_TRACE` (DEBUGGING.md).
 
 `psp_cpu_yield_if_contended` is the preemption point. Generated loop back-edges
 call `sched_preempt` (`runtime/src/psp_scheduler.cpp`), which calls it
