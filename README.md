@@ -253,7 +253,8 @@ than the cap keeps its live textures instead of flickering).
 Patapon 3 has `60fps`: Madwig's "60 FPS Patch v3" cheat (one vblank per frame, unit
 march halved) plus input read at 30 Hz so key repeat and menu scrolling keep their speed, and
 character animations sampled between frames so they move at 60 too
-(`PSPRECOMP_P3_ANIM_SMOOTH=0` turns that part off).
+(`PSPRECOMP_P3_ANIM_SMOOTH=0` turns that part off), and rain and wind kept at their 30 fps
+speed while moving every frame (`PSPRECOMP_P3_WEATHER_30HZ`, `PSPRECOMP_P3_WEATHER_SMOOTH`).
 
 Input: keyboard (arrows = D-pad, X/Enter = CROSS, Z = CIRCLE, A = SQUARE, S = TRIANGLE,
 Q/W = L/R, Space = START, V or Tab = SELECT; mouse wheel = D-pad up/down, one press per notch) and any SDL game controller (XInput-style layout,

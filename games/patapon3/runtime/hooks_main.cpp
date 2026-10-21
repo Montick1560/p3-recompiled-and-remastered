@@ -31,6 +31,7 @@
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_intr.h"
 #include "psp_paced_step.h"
+#include "psp_particle_nudge.h"
 #include "psp_patch_sets.h"
 #include "psp_vblank_clock.h"
 #include "psp_vblank_pacer.h"
@@ -120,7 +121,7 @@ void input_update_30hz(uint8_t* rdram, recomp_context* ctx) {
 // the rain fell and the wind blew twice as fast:
 //   FUN_089010DC  rain drops (two objects): particle list at +480, each particle's data
 //                 pos +24/+28, previous pos +32/+36, velocity +40/+44;
-//   FUN_08902EE0  one object, list at +472, particles stepped by FUN_088FE738;
+//   FUN_08902EE0  wind ribbons (one object): list at +472, each ribbon stepped by FUN_088FE738;
 //   FUN_08903F40  three objects, list at +376.
 // Each object's update runs at most once per two vblanks, and a skipped call's frame time
 // goes to its next run (psp_paced_step.h): the particles step at the 30 fps rate and the
@@ -140,10 +141,74 @@ void weather_step_30hz(uint8_t* rdram, recomp_context* ctx) {
     g_weather_steps[N](rdram, ctx);
 }
 
-template <int... I>
-void weather_steps_register(std::integer_sequence<int, I...>) {
-    ((g_weather_steps[I] = RECOMP_LOOKUP(kWeatherSteps[I]),
-      psp_dispatch_register(kWeatherSteps[I], weather_step_30hz<I>)), ...);
+template <int N>
+void weather_step_register() {
+    g_weather_steps[N] = RECOMP_LOOKUP(kWeatherSteps[N]);
+    psp_dispatch_register(kWeatherSteps[N], weather_step_30hz<N>);
+}
+
+// Smooth weather (with the 60fps set; PSPRECOMP_P3_WEATHER_SMOOTH=0 keeps the plain 30 Hz
+// pacing above):
+// - rain drops (FUN_089010DC, still paced): on a frame whose update was skipped, the draw
+//   FUN_089016D8 shows every drop half a step ahead (pos += velocity / 2,
+//   psp_particle_nudge.h) and the positions go back right after it. The draw reads only pos
+//   +24/+28 and the direction of the velocity +40/+44 (a 35-unit streak behind the drop), so
+//   the drops move every frame at the 30 fps speed. A drop whose next run re-rolls its
+//   velocity or respawns it is a few units off for that one frame.
+// - wind ribbons (FUN_08902EE0, not paced): its particle step FUN_088FE738 (a0 = the
+//   particle) moves the ribbon's head along a curve by +40 per call (+44 += +40) and
+//   evaluates the 14 ribbon points on the curve back from +44; its timers use a1. It runs
+//   every frame with +40 halved for the call, so the ribbon moves every frame at the 30 fps
+//   speed with the same shape.
+constexpr uint32_t kRainDraw = 0x089016D8u;
+constexpr uint32_t kRibbonStep = 0x088FE738u;
+FuncPtr g_rain_draw = nullptr;
+FuncPtr g_ribbon_step = nullptr;
+ParticleNudge g_rain_nudge;
+
+// With PSPRECOMP_P3_WEATHER_TRACE=1, every ~2 s: rain draws per second, how many of them showed
+// the drops half a step ahead, and ribbon steps per second (evidence that the in-between frames
+// are drawn; a screenshot loop is too slow to see 60 Hz motion).
+bool g_weather_count = false;
+int g_rain_draws = 0, g_rain_ahead = 0, g_ribbon_steps = 0;
+int64_t g_weather_count_from = -1;
+
+void weather_count(int draws, int ahead, int ribbons) {
+    g_rain_draws += draws;
+    g_rain_ahead += ahead;
+    g_ribbon_steps += ribbons;
+    const int64_t vb = psp_vblank_index(psp_display_elapsed_us());
+    if (g_weather_count_from < 0) g_weather_count_from = vb;
+    if (vb - g_weather_count_from < 120) return;
+    const double s = static_cast<double>(vb - g_weather_count_from) / 59.94;
+    std::fprintf(stderr, "[WEATHER] per s: rain draws %.1f (half a step ahead %.1f), ribbon steps %.1f\n",
+                 g_rain_draws / s, g_rain_ahead / s, g_ribbon_steps / s);
+    g_rain_draws = g_rain_ahead = g_ribbon_steps = 0;
+    g_weather_count_from = vb;
+}
+
+void rain_draw_smooth(uint8_t* rdram, recomp_context* ctx) {
+    const uint32_t obj = static_cast<uint32_t>(ctx->r[4]);
+    const bool ahead = g_weather_paced[0].skipped(obj);
+    if (g_weather_count) weather_count(1, ahead ? 1 : 0, 0);
+    if (!ahead) {
+        g_rain_draw(rdram, ctx);
+        return;
+    }
+    psp_particle_nudge(rdram, obj + 480, 24, 40, 0.5f, 4096, &g_rain_nudge);
+    g_rain_draw(rdram, ctx);
+    psp_particle_restore(rdram, g_rain_nudge);
+}
+
+void ribbon_step_smooth(uint8_t* rdram, recomp_context* ctx) {
+    if (g_weather_count) weather_count(0, 0, 1);
+    uint8_t* speed = rdram + ((static_cast<uint32_t>(ctx->r[4]) + 40) & 0x07FFFFFFu);
+    float full, half;
+    std::memcpy(&full, speed, 4);
+    half = full * 0.5f;
+    std::memcpy(speed, &half, 4);
+    g_ribbon_step(rdram, ctx);
+    if (std::memcmp(speed, &half, 4) == 0) std::memcpy(speed, &full, 4);  // unless the step set a new one
 }
 
 // PSPRECOMP_P3_ANIM_TRACE=1 (diagnostic): FUN_088785A8 (a0 = pose cache, a1 = motion id,
@@ -558,6 +623,7 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
     }
     const char* weather_trace_env = std::getenv("PSPRECOMP_P3_WEATHER_TRACE");
     if (weather_trace_env && weather_trace_env[0] == '1') {
+        g_weather_count = true;
         weather_trace_register(std::make_integer_sequence<int, kWeatherTracedCount>{});
         std::fprintf(stderr, "[WEATHER] tracing the weather setters\n");
     }
@@ -567,8 +633,19 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
         std::fprintf(stderr, "[P3] 60fps: input update paced to 30 Hz\n");
         const char* weather = std::getenv("PSPRECOMP_P3_WEATHER_30HZ");
         if (!(weather && weather[0] == '0')) {
-            weather_steps_register(std::make_integer_sequence<int, kWeatherStepCount>{});
+            const char* smooth_weather = std::getenv("PSPRECOMP_P3_WEATHER_SMOOTH");
+            const bool smooth_on = !(smooth_weather && smooth_weather[0] == '0');
+            weather_step_register<0>();
+            if (!smooth_on) weather_step_register<1>();
+            weather_step_register<2>();
             std::fprintf(stderr, "[P3] 60fps: weather paced to 30 Hz\n");
+            if (smooth_on) {
+                g_rain_draw = RECOMP_LOOKUP(kRainDraw);
+                psp_dispatch_register(kRainDraw, rain_draw_smooth);
+                g_ribbon_step = RECOMP_LOOKUP(kRibbonStep);
+                psp_dispatch_register(kRibbonStep, ribbon_step_smooth);
+                std::fprintf(stderr, "[P3] 60fps: smooth rain and wind (drawn every frame at the 30 fps speed)\n");
+            }
         }
     }
     const char* e = std::getenv("PSPRECOMP_P3_GMO_GUARD");

@@ -188,7 +188,8 @@ Read by the runtime binary at start-up or during execution.
   `[RT] Patch set '<name>' enabled (<n> entries)`; an unknown name logs a
   warning with the available sets. A game module can pair a set with host-side
   help (`psp_patch_set_active`); Patapon 3's `60fps` set paces the input update
-  to 30 Hz and turns on smooth animation (`PSPRECOMP_P3_ANIM_SMOOTH`).
+  to 30 Hz, turns on smooth animation (`PSPRECOMP_P3_ANIM_SMOOTH`) and paces the
+  weather (`PSPRECOMP_P3_WEATHER_30HZ`, `PSPRECOMP_P3_WEATHER_SMOOTH`).
 - **Set it when:** playing with an opt-in game patch, e.g. Patapon 3
   `PSPRECOMP_PATCHES=60fps` (60 fps; see `games/patapon3/game.toml`).
 
@@ -746,6 +747,33 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   `[P3] smooth animation: poses blended from two whole frames`.
 - **Set it when:** `0` to compare against the stepped animation at 60 fps; `1`
   to try it at 30 fps.
+
+### `PSPRECOMP_P3_WEATHER_30HZ`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`0` off; anything else or unset = on).
+- **Default:** on when `PSPRECOMP_PATCHES` enables `60fps`; never installed otherwise.
+- **Effect:** The weather objects' updates (rain drops `0x089010DC`, wind ribbons
+  `0x08902EE0`, `0x08903F40`; a0 = object, a1 = frame time in ticks, 4800/s) move
+  every particle by a fixed step per call, so at 60 fps the rain fell and the wind
+  blew twice as fast. Each object's update runs at most once per two vblanks and a
+  skipped call's frame time goes to its next run (`runtime/include/psp_paced_step.h`).
+  Install prints `[P3] 60fps: weather paced to 30 Hz`.
+- **Set it when:** `0` to see the old double-speed weather at 60 fps (A/B).
+
+### `PSPRECOMP_P3_WEATHER_SMOOTH`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`0` off; anything else or unset = on).
+- **Default:** on with `PSPRECOMP_P3_WEATHER_30HZ`.
+- **Effect:** The weather moves every frame at the 30 fps speed instead of every
+  second frame. Rain: on a frame whose update was skipped, the draw `0x089016D8`
+  shows every drop half a step ahead (pos += velocity / 2,
+  `runtime/include/psp_particle_nudge.h`) and the positions go back after it. Wind
+  ribbons: `0x08902EE0` is not paced; its ribbon step `0x088FE738` runs every frame
+  with the per-call advance along the curve (+40) halved for the call. Install prints
+  `[P3] 60fps: smooth rain and wind (drawn every frame at the 30 fps speed)`; with
+  `PSPRECOMP_P3_WEATHER_TRACE=1` it also logs rain draws, draws half a step ahead and
+  ribbon steps per second.
+- **Set it when:** `0` to compare against the plain 30 Hz weather.
 
 ### `PSPRECOMP_P3_FAST_LOAD`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
