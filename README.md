@@ -186,8 +186,8 @@ How it got here:
 
 **Launcher (in progress).** A community launcher for the Patapon 3 port (main menu, options, launch and "back to the menu") is being built in a separate project. The game side reads a versioned `settings.ini` (`--settings`, `--log`; contract in [docs/contracts/settings-v1.md](docs/contracts/settings-v1.md)), and F1 or Select+Start held 1 s asks "Back to the menu?" and quits with exit code 10. Design: [docs/superpowers/specs/2026-10-17-launcher-part1-design.md](docs/superpowers/specs/2026-10-17-launcher-part1-design.md).
 
-**PC button prompts.** The Patapon 3 help bars and the mission command list show the keys or
-controller buttons the player actually uses (keyboard, Xbox / Steam Deck, DualShock 4, DualSense; the
+**PC button prompts.** The Patapon 3 help bars, the mission command list and the drum-hit words
+(PATA / PON / CHAKA / DON) show the keys or controller buttons the player actually uses (keyboard, Xbox / Steam Deck, DualShock 4, DualSense; the
 last input wins, launcher remaps included), in the game's gray or in colour
 (`PSPRECOMP_BUTTON_ICONS=gray|color|off`), and their labels are redrawn sharp at any resolution
 (every language of DxD and vanilla EU except Polish, whose letters the font lacks). Icons:

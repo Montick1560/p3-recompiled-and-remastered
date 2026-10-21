@@ -285,6 +285,13 @@ the strips into the C++ table for `games/patapon3/runtime/p3_prompt_labels.cpp`.
 mission: `build/tools/texture_recon/recon_mission.py OUTDIR [scale]` drives the tour to the training
 mission on port 9998, finds the strip's PRIM, dumps its atlas (`strip_<addr>.png`) and, with
 `SHOTS=keyboard,xbox,ps4,ps5`, shoots the strip per device; then `atlas_words.py ... --layout command`.
+The drum-hit words (PATA / PON / CHAKA / DON, one 128x128 CLUT4 VRAM texture each, shown 0.2-0.4 s after
+the press) log `[PROMPTS] drum-pata atlas recognised` (drum-pon, drum-chaka, drum-don) the first time
+each is drawn. Recon: `build/tools/texture_recon/to_march.py OUTDIR 2` (training mission on 9998, then
+commands from `OUTDIR/cmd.txt`), `hitshots.py OUTDIR [device]` (burst shots of the four words; a D log
+in between stalls the game and hides the word), `hitlog.py` + `hit_textures.py` (textures only in the
+lists logged after a hit), `drum_cells.py` / `drum_cells2.py` (coverage hash, symbol box and disc of a
+dump, and the cell that also covers the HD pack's symbol); dumps and notes in `build/prompts_ref/p3drums`.
 
 ~30 more narrow investigation probes exist (LK_*, GK_*, BND_*, D1_TRACE, CTX_PROBE,
 PUSH_TRACE, FE90_OBJ, ...); they are one-off band-aids/probes from past bugs — since
