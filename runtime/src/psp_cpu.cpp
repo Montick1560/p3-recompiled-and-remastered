@@ -10,6 +10,7 @@
 #include <mutex>
 #include <set>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -42,6 +43,38 @@ std::atomic<int> g_parked{0};
 std::atomic<const void*> g_closer{nullptr};
 thread_local bool t_held = false;
 thread_local char t_token;  // its address identifies this host thread
+
+// PSPRECOMP_CPU_SLOW=<ms> (diagnostics): log every CPU hold and every wait for the CPU longer than
+// that, with the threads that held it during the wait ([CPU-SLOW] lines; t = ms since the first
+// acquire). Off: one predictable branch per acquire / release.
+double slow_ms() {
+    static const double ms = [] {
+        const char* e = std::getenv("PSPRECOMP_CPU_SLOW");
+        return e && e[0] ? std::atof(e) : 0.0;
+    }();
+    return ms;
+}
+using SlowClock = std::chrono::steady_clock;
+const SlowClock::time_point g_slow_epoch = SlowClock::now();
+thread_local SlowClock::time_point t_acquired;
+struct Grant {
+    int id, prio;
+    SlowClock::time_point at;
+};
+Grant g_grants[64];  // ring of the last CPU grants (under g_m)
+uint64_t g_grant_count = 0;
+double since_epoch_ms(SlowClock::time_point t) {
+    return std::chrono::duration<double, std::milli>(t - g_slow_epoch).count();
+}
+void slow_note_release() {  // the holder, before giving the CPU up
+    if (slow_ms() <= 0.0) return;
+    const auto now = SlowClock::now();
+    const double held = std::chrono::duration<double, std::milli>(now - t_acquired).count();
+    if (held > slow_ms()) {
+        std::fprintf(stderr, "[CPU-SLOW] t=%.1f hold id=%d prio=%d %.2f ms\n", since_epoch_ms(now),
+                     psp_current_thread_id(), psp_current_thread_priority(), held);
+    }
+}
 
 // A thread inside a non-blocking HLE call keeps its place: on the PSP a
 // syscall that does not block never lets a lower-priority thread run. The
@@ -111,6 +144,27 @@ void psp_cpu_set_thread_info(int (*priority)(), int (*id)()) {
     g_id_of_current = id;
 }
 
+// Why a waiter cannot take the CPU now (under g_m): 'H' held by g_holder, 'Q' a better waiter queued
+// ahead, 'R' a reservation; the thread id responsible. ('-', -9) = nothing (about to run).
+static std::pair<char, int> blocker_locked(int prio, uint64_t ticket, const void* me) {
+    if (g_held) return {'H', g_holder};
+    if (!g_waiters.empty() && g_waiters.begin()->ticket != ticket) {
+        // The head is ahead of us: 'r' = it is itself held back by a reservation, 'Q' = it could run
+        // (waking up).
+        const Waiter& h = *g_waiters.begin();
+        const auto t = std::chrono::steady_clock::now();
+        for (const Reservation& r : g_res) {
+            if (r.prio <= h.prio && t - r.since < kReservationTtl) return {'r', r.id};
+        }
+        return {'Q', h.id};
+    }
+    const auto now = std::chrono::steady_clock::now();
+    for (const Reservation& r : g_res) {
+        if (r.owner != me && r.prio <= prio && now - r.since < kReservationTtl) return {'R', r.id};
+    }
+    return {'-', -9};
+}
+
 void psp_cpu_acquire(bool front) {
     if (g_closed.load(std::memory_order_acquire)) {
         psp_cpu_release();
@@ -132,6 +186,26 @@ void psp_cpu_acquire(bool front) {
     // back-edge: report it once per wait (deadlock diagnostics).
     const auto start = std::chrono::steady_clock::now();
     bool reported = false;
+    // PSPRECOMP_CPU_SLOW: time blocked per (reason, thread), sampled at every wake-up of this wait.
+    std::vector<std::tuple<char, int, double>> why;
+    auto last_t = start;
+    std::pair<char, int> last_why = slow_ms() > 0.0 ? blocker_locked(prio, me.ticket, &t_token)
+                                                     : std::pair<char, int>{'-', -9};
+    auto note_why = [&] {
+        if (slow_ms() <= 0.0) return;
+        const auto now = std::chrono::steady_clock::now();
+        const double ms = std::chrono::duration<double, std::milli>(now - last_t).count();
+        bool found = false;
+        for (auto& w : why) {
+            if (std::get<0>(w) == last_why.first && std::get<1>(w) == last_why.second) {
+                std::get<2>(w) += ms;
+                found = true;
+            }
+        }
+        if (!found) why.emplace_back(last_why.first, last_why.second, ms);
+        last_t = now;
+        last_why = blocker_locked(prio, me.ticket, &t_token);
+    };
     for (;;) {
         if (g_closed.load(std::memory_order_acquire)) {
             g_waiters.erase(me);
@@ -142,11 +216,38 @@ void psp_cpu_acquire(bool front) {
         if (ready()) break;
         g_cv.wait_for(lock, g_res.empty() ? std::chrono::milliseconds(100)
                                           : std::chrono::milliseconds(1));
+        note_why();
         if (!reported && std::chrono::steady_clock::now() - start > std::chrono::seconds(5)) {
             reported = true;
             std::fprintf(stderr, "[CPU] thread %d (prio %d) waited 5 s for the CPU held by thread %d\n",
                          psp_current_thread_id(), prio, g_holder);
         }
+    }
+    if (slow_ms() > 0.0) {
+        const auto now = SlowClock::now();
+        const double waited = std::chrono::duration<double, std::milli>(now - start).count();
+        if (waited > slow_ms()) {
+            char who[512];
+            int n = 0;
+            for (uint64_t i = g_grant_count > 64 ? g_grant_count - 64 : 0; i < g_grant_count && n < 480; i++) {
+                const Grant& g = g_grants[i % 64];
+                if (g.at >= start) n += std::snprintf(who + n, sizeof(who) - n, " %d/p%d@%.1f", g.id, g.prio, since_epoch_ms(g.at));
+            }
+            who[n] = '\0';
+            char br[256];
+            int b = 0;
+            for (const auto& w : why) {
+                if (std::get<2>(w) >= 0.05 && b < 230) {
+                    b += std::snprintf(br + b, sizeof(br) - b, " %c%d:%.1f", std::get<0>(w), std::get<1>(w), std::get<2>(w));
+                }
+            }
+            br[b] = '\0';
+            std::fprintf(stderr, "[CPU-WHY] id=%d prio=%d %.2f ms:%s\n", psp_current_thread_id(), prio, waited, br);
+            std::fprintf(stderr, "[CPU-SLOW] t=%.1f wait id=%d prio=%d %s %.2f ms; granted meanwhile:%s\n",
+                         since_epoch_ms(now), psp_current_thread_id(), prio, front ? "front" : "back", waited, who);
+        }
+        t_acquired = now;
+        g_grants[g_grant_count++ % 64] = {psp_current_thread_id(), prio, now};
     }
     if (perf_enabled()) {
         g_perf.cpu_wait_ns.fetch_add(
@@ -163,6 +264,7 @@ void psp_cpu_acquire(bool front) {
 
 void psp_cpu_release() {
     if (!enabled() || !t_held) return;
+    slow_note_release();
     {
         std::lock_guard<std::mutex> lock(g_m);
         g_held = false;
@@ -174,6 +276,7 @@ void psp_cpu_release() {
 
 void psp_cpu_release_reserved() {
     if (!enabled() || !t_held) return;
+    slow_note_release();
     {
         std::lock_guard<std::mutex> lock(g_m);
         g_held = false;

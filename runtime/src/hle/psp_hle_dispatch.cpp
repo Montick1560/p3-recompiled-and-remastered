@@ -434,10 +434,42 @@ static void check_strict_mode() {
 // exactly as a PSP thread blocked in a syscall lets the next one run.
 static constexpr int HLE_CPU_MAX_SLOTS = 512;
 static HleFunc g_cpu_real[HLE_CPU_MAX_SLOTS];
+static const char* g_cpu_name[HLE_CPU_MAX_SLOTS];
 static int g_cpu_slot_count = 0;
+
+// PSPRECOMP_CPU_SLOW=<ms>: also log HLE calls that kept the caller away from the guest CPU for more
+// than a tenth of that ([HLE-SLOW] name, ms): a non-blocking call holds a reservation meanwhile.
+static const std::chrono::steady_clock::time_point g_hle_slow_epoch = std::chrono::steady_clock::now();
+static double hle_slow_ms() {
+    static const double ms = [] {
+        const char* e = std::getenv("PSPRECOMP_CPU_SLOW");
+        return e && e[0] ? std::atof(e) / 10.0 : 0.0;
+    }();
+    return ms;
+}
 
 template <int N>
 static void hle_cpu_wrapper(uint8_t* rdram, recomp_context* ctx) {
+    if (hle_slow_ms() > 0.0) {
+        std::chrono::steady_clock::time_point t0, t1;
+        const auto w0 = std::chrono::steady_clock::now();
+        {
+            PspCpuReleaseScope cpu;
+            t0 = std::chrono::steady_clock::now();
+            g_cpu_real[N](rdram, ctx);
+            t1 = std::chrono::steady_clock::now();
+        }
+        const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        const double back = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
+        (void)w0;
+        if (ms > hle_slow_ms() || back > hle_slow_ms()) {
+            const PspThread* th = psp_get_current_thread();
+            std::fprintf(stderr, "[HLE-SLOW] t=%.1f %s call %.2f ms, back %.2f ms thread %s/p%d\n",
+                         std::chrono::duration<double, std::milli>(t1 - g_hle_slow_epoch).count(), g_cpu_name[N], ms, back,
+                         th ? th->name : "?", th ? th->priority : -1);
+        }
+        return;
+    }
     PspCpuReleaseScope cpu;
     g_cpu_real[N](rdram, ctx);
 }
@@ -448,7 +480,7 @@ static constexpr std::array<HleFunc, sizeof...(I)> make_cpu_wrappers(
     return {{ &hle_cpu_wrapper<I>... }};
 }
 
-static HleFunc alloc_cpu_wrapper(HleFunc fn) {
+static HleFunc alloc_cpu_wrapper(HleFunc fn, const char* name) {
     static const auto wrappers =
         make_cpu_wrappers(std::make_integer_sequence<int, HLE_CPU_MAX_SLOTS>{});
     if (g_cpu_slot_count >= HLE_CPU_MAX_SLOTS) {
@@ -457,6 +489,7 @@ static HleFunc alloc_cpu_wrapper(HleFunc fn) {
     }
     const int slot = g_cpu_slot_count++;
     g_cpu_real[slot] = fn;
+    g_cpu_name[slot] = name;
     return wrappers[static_cast<size_t>(slot)];
 }
 
@@ -510,7 +543,7 @@ void psp_hle_init() {
             if (g_hle_trace_enabled) {
                 fn = alloc_trace_wrapper(fn, it->second.name);
             }
-            fn = alloc_cpu_wrapper(fn);
+            fn = alloc_cpu_wrapper(fn, it->second.name);
             // Register the (possibly wrapped) HLE function
             psp_dispatch_register(stub.stub_addr, fn);
             implemented++;

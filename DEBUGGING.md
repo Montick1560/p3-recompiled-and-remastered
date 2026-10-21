@@ -265,6 +265,8 @@ the socket for scripted/agent input.
 | `PSPRECOMP_PC_TRACE=1` | Per-function frequency counters + atexit top-20 |
 | `PSPRECOMP_GE_TRACE=1` | GE command-stream logging |
 | `PSPRECOMP_PERF=1` | Every 2 s one `[PERF]` line: fps, GE list ms/frame, lists/prims/draws/texture binds per frame, texture misses/s, texture bytes hashed per frame (MB), guest CPU-lock wait ms/s |
+| `PSPRECOMP_FRAMELOG=<file>` | One CSV row per presented frame (dt, GE / texture-miss / HD-pack decode / swap / CPU-lock wait ms, draws, misses, hashed MB); F8 or a pad's R2 marks a felt hitch (debug socket `M`). Summary: `build/tools/framelog.py <file>` (percentiles, worst frames, the 5 s around each mark) |
+| `PSPRECOMP_CPU_SLOW=<ms>` | Guest CPU-lock diagnostics: `[CPU-SLOW]` holds / waits longer than that (with the threads granted meanwhile), `[CPU-WHY]` per wait the time blocked by reason and thread (H = held by, Q = a better waiter queued ahead and free to run, r = that waiter held back by a reservation, R = a reservation), `[HLE-SLOW]` HLE calls whose body or CPU re-acquire took over a tenth of it. `build/tools/handoff_stats.py`, `why_stats.py` summarise a log |
 | `PSPRECOMP_SEMA_TRACE=1` | Per-call sema logging (off by default — floods ~1 GB/min) |
 | `PSPRECOMP_OVERLAY_TRACE=1` | Logs the first 64 overlay-window lookups with their bank-resolution status (0 NotInWindow, 1 NoBank, 2 HashMismatch, 3 NotFound, 4 Found) |
 | `PSPRECOMP_SCREENSHOT=path` | One-shot TGA after first prims + shutdown capture |
