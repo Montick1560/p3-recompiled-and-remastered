@@ -309,3 +309,32 @@ git commit -m "feat(p3): Hero Gate particles and place halo move smoothly at 60 
 - Task 3: RED / GREEN speeds (3 places + gate), Review Focus 2, ctest, rt_regress.
 - Task 4: helper per effect, trace counters, speeds with smooth on, Review Focus 3-4.
 - Task 5: variants, deploy hashes.
+
+## Outcome (2026-10-21)
+
+- **Task 1:** no 2x speed. Gate sparkles = gate GMO nodes (tex 0x0010F380, live node matrix 0x09CFA540,
+  scale 0.76 -> 1.98): cycle 1.00 s at 30, 60 without the hideout fixes and 60 current. Halo = in-place pulse,
+  rise ~0.3 s, 11 pulses / 12 s at 30 and 60. A period census of every per-frame word agreed. Plan stop
+  condition hit; the user then said the request was only smoothness ("era solo agregar las animaciones smooth").
+- **Scope change (user):** Tasks 2-3 dropped; Task 4 only.
+- **Cause of the stepping:** both motions are keyed at 15 frames/s. The pose blend (`pose_eval_blend`) blended
+  bone translation/rotation/scale but kept bone +0x4C, where FUN_089DDD88 packs channel 0x9C (alpha) as
+  trunc(a * 255) << 24 | 0xFFFFFF, and +0xC0/+0xC4 (channel 0x9B, texture offset). Draw logs showed the halo's
+  material alpha moving in 0x10 steps per whole frame while its scale moved every frame. (Material channels
+  through FUN_089DDB6C are never called in the hideout: census over 4 s.)
+- **Fix (30e9ecd):** blend kinds kBlendAlphaByte / kBlendUv in `psp_anim_blend.h` (tests in
+  test_anim_blend.cpp, RED -> GREEN), used for bone words 0x4C/4 and 0xC0/4, 0xC4/4;
+  `PSPRECOMP_P3_ANIM_SMOOTH_FADE=0` for A/B.
+- **Smooth check** (build/tools/step_hist.py, rough = mean |2nd diff| / mean |1st diff| of the box brightness,
+  ~30 captures/s, 60 fps): Cuartel halo 1.57/1.52 -> 0.48/0.49/0.46; Totem 1.50/1.51 -> 0.51/0.57; gate
+  sparkles 1.31/1.21/1.24 -> 0.59/0.65/0.64; Fragua (on only) 0.57/0.81.
+- **Speed with the fix:** gate cycle 1.003/1.001 s; Totem 9 pulses / 10 s, rise 0.307 s (30: 0.33/0.36); Fragua
+  rise 0.23/0.27 (low swing, noisy; 30: 0.28/0.30).
+- **Review Focus 3:** 8 shots 0.1 s apart after moving Totem -> Armeria: map scrolls, new halo fades in, no flash.
+- **Review Focus 2:** weather mission at 60: rain 29.7/29.7/29.7, wind 29.8 steps/s, FEVER held.
+- **Review Focus 5:** no new hook address (only blend kinds); v115b / vanilla built rc 0, movie_check MOVIE OK
+  with both smooth lines.
+- ctest 95/95; RT_REGRESS PASS (21 gated checkpoints) vs the deployed exe.
+- Deployed to e2e_portable3 / e2e_portable (md5 1.1.4 40d24697, 1.1.5b 48ad40d5, vanilla e12d4488); backup
+  build/backup_pre_herogate_2026-10-21.
+- Final review: self-review (user asked for native execution, no helper agents).
