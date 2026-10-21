@@ -89,6 +89,8 @@ std::string perf_frame_row(const PerfSnapshot& a, const PerfSnapshot& b, double 
 
 static std::atomic<int> g_marks{0}, g_marks_written{0};
 
+bool perf_frame_log_enabled() { return frame_log_path() != nullptr; }
+
 int perf_frame_mark() {
     if (frame_log_path() == nullptr) return 0;
     const int n = g_marks.fetch_add(1, std::memory_order_relaxed) + 1;

@@ -81,6 +81,11 @@ static void publish_pads() {
 }
 
 // Returns true when the event was a controller event.
+// PSPRECOMP_FRAMELOG: the player marks a hitch (F8 or R2); a toast confirms it.
+static void mark_hitch() {
+    if (const int n = perf_frame_mark()) psp_toast_post({"Tirón marcado", "#" + std::to_string(n)});
+}
+
 static bool handle_controller_event(const SDL_Event& ev) {
     switch (ev.type) {
     case SDL_CONTROLLERDEVICEADDED: {
@@ -125,8 +130,17 @@ static bool handle_controller_event(const SDL_Event& ev) {
         const SDL_JoystickID id = ev.caxis.which;
         const int v = ev.caxis.value;
         switch (ev.caxis.axis) {
-        case SDL_CONTROLLER_AXIS_TRIGGERLEFT:
         case SDL_CONTROLLER_AXIS_TRIGGERRIGHT:
+            if (perf_frame_log_enabled()) {
+                // Frame log on: R2 marks a hitch like F8 (RB stays the PSP's R).
+                static std::map<SDL_JoystickID, bool> held;
+                const bool down = pad_trigger_pressed(v);
+                if (down && !held[id]) mark_hitch();
+                held[id] = down;
+                return true;
+            }
+            [[fallthrough]];
+        case SDL_CONTROLLER_AXIS_TRIGGERLEFT:
             g_pads.set_trigger(id, ev.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT,
                                pad_trigger_pressed(v));
             break;
@@ -338,7 +352,7 @@ static void handle_sdl_event(const SDL_Event& ev) {
     note_input_device(ev);
     // F8 (PSPRECOMP_FRAMELOG on): the player marks a hitch; a toast confirms it.
     if (ev.type == SDL_KEYDOWN && !ev.key.repeat && ev.key.keysym.sym == SDLK_F8) {
-        if (const int n = perf_frame_mark()) psp_toast_post({"Tirón marcado", "F8 #" + std::to_string(n)});
+        mark_hitch();
         return;
     }
     if (handle_menu_prompt_event(ev)) return;

@@ -37,8 +37,9 @@ constexpr const char* kPerfFrameHeader =
 std::string perf_frame_row(const PerfSnapshot& a, const PerfSnapshot& b, double t_ms, double dt_ms, bool mark);
 // After each present: appends the frame's row when PSPRECOMP_FRAMELOG is set.
 void perf_frame_end();
-// F8: marks the next row; returns the mark's number (0 when the frame log is off).
+// F8 (or R2 on a pad): marks the next row; returns the mark's number (0 when the frame log is off).
 int perf_frame_mark();
+bool perf_frame_log_enabled();  // PSPRECOMP_FRAMELOG is set
 
 // Adds the scope's wall time to a counter (only when PSPRECOMP_PERF is on).
 class PerfScope {
