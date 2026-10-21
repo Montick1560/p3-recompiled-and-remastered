@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -103,7 +104,13 @@ int main() {
         std::printf("%d failure(s)\n", failures);
         return 1;
     }
-    const std::filesystem::path dir = PSP_P3_DRUMS_DIR;
+    // PSP_P3_DRUMS_DIR (env) overrides the recon dumps' folder (build/prompts_ref/p3drums).
+    const char* env_dir = std::getenv("PSP_P3_DRUMS_DIR");
+    const std::filesystem::path dir = env_dir != nullptr ? env_dir : PSP_P3_DRUMS_DIR;
+    if (!std::filesystem::is_directory(dir / "en")) {
+        std::printf("test_p3_drum_prompts: recon dumps not on this PC (%s), dump checks skipped\n", dir.string().c_str());
+        return 0;
+    }
     const std::map<std::string, std::string> pack = {{"pata", "00000000926ff6d0d54d2415.png"},
                                                      {"pon", "00000000790fa5b59568b857.png"},
                                                      {"don", "00000000871b192d7e73949f.png"},
