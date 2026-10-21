@@ -538,9 +538,16 @@ void pose_eval_interp(uint8_t* rdram, recomp_context* ctx) {
 
 // Per-word blend kinds of one 0x100-byte GMO bone block (FUN_089DB1E0 outputs), from
 // anim_probe.py over six barracks models incl. the Hero (hero-ground plan, Evidence): +0x50
-// translation, +0x60 rotation quaternion, +0x70 scale (vec4 each) are blended; +0x4C (not a
-// float) and the rest are kept.
-constexpr uint8_t kBoneKinds[64] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+// translation, +0x60 rotation quaternion, +0x70 scale (vec4 each) are blended; the rest are kept.
+// Two keyed channels that are not transforms are blended too (the hideout's place halo and the
+// Hero Gate's sparkles fade with them, 15 keys/s, and stepped every fourth vblank at 60 fps):
+// channel 0x9C, the bone alpha, which FUN_089DDD88 packs as trunc(alpha * 255) << 24 | 0xFFFFFF
+// into +0x4C, and channel 0x9B, the texture offset u/v at +0xC0/+0xC4 (FUN_089DB1E0 resets them
+// to 0, 0 and the scale +0xC8/+0xCC to 1, 1 before the channels run).
+constexpr uint8_t kBoneKinds[64] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 1, 1, 1, 1, 2, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+// PSPRECOMP_P3_ANIM_SMOOTH_FADE=0 keeps alpha and texture offset on whole frames (A/B).
+uint8_t g_bone_kinds[64] = {};
+constexpr int kBoneAlphaWord = 0x4C / 4, kBoneUvWord = 0xC0 / 4;
 
 // The shipped smooth mode for one GMO evaluation in a player tick/draw scope.
 void pose_eval_blend(uint8_t* rdram, recomp_context* ctx, uint32_t model, uint16_t count, float alpha) {
@@ -594,7 +601,7 @@ void pose_eval_blend(uint8_t* rdram, recomp_context* ctx, uint32_t model, uint16
     eval_at(rdram, ctx, args, [](int i) { return g_scope_motions.whole[i]; }, false);
     std::memcpy(sample_a.data(), rdram + (bones & 0x07FFFFFFu), words * 4);
     for (uint32_t bone = 0; bone < count; bone++) {
-        psp_blend_pose(sample_a.data() + bone * 64, sample_b.data() + bone * 64, kBoneKinds, 64, alpha);
+        psp_blend_pose(sample_a.data() + bone * 64, sample_b.data() + bone * 64, g_bone_kinds, 64, alpha);
     }
     std::memcpy(rdram + (bones & 0x07FFFFFFu), sample_a.data(), words * 4);
 }
@@ -763,6 +770,13 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
         if (g_diag_interp) std::fprintf(stderr, "[P3] smooth animation diag: interpolate-flag path\n");
         if (const char* p = std::getenv("PSPRECOMP_P3_ANIM_PROBE")) g_probe_dir = p;
         std::fprintf(stderr, "[P3] smooth animation: poses blended from two whole frames\n");
+        std::memcpy(g_bone_kinds, kBoneKinds, sizeof g_bone_kinds);
+        const char* fade = std::getenv("PSPRECOMP_P3_ANIM_SMOOTH_FADE");
+        if (fade && fade[0] == '0') {
+            g_bone_kinds[kBoneAlphaWord] = g_bone_kinds[kBoneUvWord] = g_bone_kinds[kBoneUvWord + 1] = kBlendKeep;
+        } else {
+            std::fprintf(stderr, "[P3] smooth animation: alpha and texture offset blended too (halo, Hero Gate sparkles)\n");
+        }
     }
     const char* trace = std::getenv("PSPRECOMP_P3_ANIM_TRACE");
     if (trace && trace[0] == '1') {

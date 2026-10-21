@@ -5,16 +5,30 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
-enum : uint8_t { kBlendKeep = 0, kBlendLerp = 1, kBlendQuat = 2 };
+enum : uint8_t { kBlendKeep = 0, kBlendLerp = 1, kBlendQuat = 2, kBlendAlphaByte = 3, kBlendUv = 4 };
 
 // In place into a: kBlendLerp words become a + (b - a) * t; a kBlendQuat word starts a 4-float
 // quaternion blended by normalized lerp along the short arc (b's sign flipped when a.b < 0);
+// a kBlendAlphaByte word is a packed colour (not a float) whose top byte (alpha) is lerped and
+// rounded, the low 24 bits kept from a; a kBlendUv word is a texture offset, lerped unless it
+// jumps by more than half a texture (a scroll wrapping round), then kept;
 // kBlendKeep words (and the 3 words after a quaternion start) are left as a.
 inline void psp_blend_pose(float* a, const float* b, const uint8_t* kinds, size_t n, float t) {
     for (size_t i = 0; i < n; i++) {
         if (kinds[i] == kBlendLerp) {
             a[i] += (b[i] - a[i]) * t;
+        } else if (kinds[i] == kBlendAlphaByte) {
+            uint32_t wa, wb;
+            std::memcpy(&wa, &a[i], 4);
+            std::memcpy(&wb, &b[i], 4);
+            const float aa = static_cast<float>(wa >> 24), ab = static_cast<float>(wb >> 24);
+            const uint32_t alpha = static_cast<uint32_t>(aa + (ab - aa) * t + 0.5f) & 0xFFu;
+            wa = (wa & 0x00FFFFFFu) | (alpha << 24);
+            std::memcpy(&a[i], &wa, 4);
+        } else if (kinds[i] == kBlendUv) {
+            if (std::fabs(b[i] - a[i]) <= 0.5f) a[i] += (b[i] - a[i]) * t;
         } else if (kinds[i] == kBlendQuat && i + 3 < n) {
             const float dot = a[i] * b[i] + a[i + 1] * b[i + 1] + a[i + 2] * b[i + 2] + a[i + 3] * b[i + 3];
             const float sign = dot < 0.0f ? -1.0f : 1.0f;

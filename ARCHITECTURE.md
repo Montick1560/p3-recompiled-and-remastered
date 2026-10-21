@@ -145,7 +145,8 @@ update to 30 Hz with `VblankPacer`, because the game counts key repeat and held 
 frames; it also blends each character pose from the two whole frames around the motion
 clock, since the GMO evaluator rounds to whole frames and the doubled rate would show each
 pose twice, while its own interpolate flag mixes rounded and interpolated channels into poses
-the game never shows, and blends the bone matrices that part-built units hang their parts on, since baked skeletons
+the game never shows (the blend covers the keyed bone alpha and texture offset too, which fade
+the hideout's place halo and the Hero Gate's sparkles), and blends the bone matrices that part-built units hang their parts on, since baked skeletons
 store one bone matrix per whole frame; and it runs each weather object's update (rain drops,
 wind) at most once per two vblanks with the skipped call's frame time handed to the next run,
 `PacedStepTable` in `psp_paced_step.h`, because those updates time their spawns with the frame

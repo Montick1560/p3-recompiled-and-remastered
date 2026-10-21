@@ -2,6 +2,7 @@
 #include "psp_anim_blend.h"
 
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 
 static int failures = 0;
@@ -43,6 +44,31 @@ int main() {
         const uint8_t k[4] = {kBlendQuat, kBlendKeep, kBlendKeep, kBlendKeep};
         psp_blend_pose(a, b, k, 4, 0.5f);
         CHECK(near(a[0], 0.1f) && near(a[3], 0.9273618f), "short arc across a sign flip");
+    }
+    {   // alpha byte: top byte of a packed word lerped (rounded), low 24 bits kept from a
+        auto word = [](uint32_t u) { float f; std::memcpy(&f, &u, 4); return f; };
+        auto bits = [](float f) { uint32_t u; std::memcpy(&u, &f, 4); return u; };
+        float a[1] = {word(0xAFFFFFFFu)};
+        const float b[1] = {word(0x9F123456u)};
+        const uint8_t k[1] = {kBlendAlphaByte};
+        psp_blend_pose(a, b, k, 1, 0.5f);
+        CHECK(bits(a[0]) == 0xA7FFFFFFu, "alpha 0xAF -> 0x9F halfway is 0xA7, low bits from a");
+        float c[1] = {word(0x00FFFFFFu)};
+        const float d[1] = {word(0xFFFFFFFFu)};
+        psp_blend_pose(c, d, k, 1, 0.25f);
+        CHECK(bits(c[0]) == 0x40FFFFFFu, "alpha 0 -> 255 at a quarter rounds to 0x40");
+        float e[1] = {word(0x80FFFFFFu)};
+        const float f[1] = {word(0x80FFFFFFu)};
+        psp_blend_pose(e, f, k, 1, 0.7f);
+        CHECK(bits(e[0]) == 0x80FFFFFFu, "equal alpha stays bit-exact");
+    }
+    {   // UV offset: lerp, but a wrap (jump of more than half a texture) holds a
+        float a[2] = {0.2f, 0.9f};
+        const float b[2] = {0.3f, 0.05f};
+        const uint8_t k[2] = {kBlendUv, kBlendUv};
+        psp_blend_pose(a, b, k, 2, 0.5f);
+        CHECK(near(a[0], 0.25f), "uv offset lerps");
+        CHECK(near(a[1], 0.9f), "uv offset wrap holds a");
     }
     // next frame selection
     CHECK(psp_anim_next_frame(3, 0.0f, 10.0f, false) == 4, "inside: whole + 1");
