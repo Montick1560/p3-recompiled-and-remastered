@@ -189,7 +189,8 @@ Read by the runtime binary at start-up or during execution.
   warning with the available sets. A game module can pair a set with host-side
   help (`psp_patch_set_active`); Patapon 3's `60fps` set paces the input update
   to 30 Hz, turns on smooth animation (`PSPRECOMP_P3_ANIM_SMOOTH`) and paces the
-  weather (`PSPRECOMP_P3_WEATHER_30HZ`, `PSPRECOMP_P3_WEATHER_SMOOTH`).
+  weather (`PSPRECOMP_P3_WEATHER_30HZ`, `PSPRECOMP_P3_WEATHER_SMOOTH`) and the
+  script objects (`PSPRECOMP_P3_HIDEOUT_30HZ`).
 - **Set it when:** playing with an opt-in game patch, e.g. Patapon 3
   `PSPRECOMP_PATCHES=60fps` (60 fps; see `games/patapon3/game.toml`).
 
@@ -774,6 +775,20 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   `PSPRECOMP_P3_WEATHER_TRACE=1` it also logs rain draws, draws half a step ahead and
   ribbon steps per second.
 - **Set it when:** `0` to compare against the plain 30 Hz weather.
+
+### `PSPRECOMP_P3_HIDEOUT_30HZ`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`0` off; anything else or unset = on).
+- **Default:** on when `PSPRECOMP_PATCHES` enables `60fps`; never installed otherwise.
+- **Effect:** The script objects' update `0x08909C7C` (a0 = script object, a1 = frame
+  time in ticks) runs the game's script VM. Scripts count frames (`cmd_waitFrame`
+  `0x08838434` takes one off per run) and move props by a fixed step per run (the
+  hideout's Silver Hoshipon: read the actor position, add a step, set it), so at 60 fps
+  they ran twice as fast. Each script object runs at most once per two vblanks and a
+  skipped call's frame time goes to its next run (`runtime/include/psp_paced_step.h`),
+  so `cmd_waitTime` still counts real time. Covers every script object (hideout and
+  missions). Install prints `[P3] 60fps: script objects paced to 30 Hz (hideout animations)`.
+- **Set it when:** `0` to see the old double-speed scripts at 60 fps (A/B).
 
 ### `PSPRECOMP_P3_FAST_LOAD`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**

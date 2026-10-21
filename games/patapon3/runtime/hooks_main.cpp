@@ -147,6 +147,30 @@ void weather_step_register() {
     psp_dispatch_register(kWeatherSteps[N], weather_step_30hz<N>);
 }
 
+// 60 fps scripts (with the 60fps set; PSPRECOMP_P3_HIDEOUT_30HZ=0 turns it off for A/B). The
+// game's script objects (hideout props such as the Silver Hoshipon floating by the Master
+// Obelisk; vtable 0x08A84BE4) are updated by FUN_08909C7C (slot +20; a0 = the script object,
+// a1 = the frame time in ticks), which runs the script VM (FUN_0883C088 stores a1 in the
+// running frame +148 for cmd_waitTime, then FUN_0883C0B0 runs commands until the script
+// yields). Scripts written for 30 fps count frames: cmd_waitFrame (0x08838434) takes one off
+// per run, and a prop's motion is "read the actor position (FUN_08911444), add a fixed step
+// (cmd add FUN_08837D18), set it (FUN_08911588)" once per run, so at 60 the star floated twice
+// as fast. Each script object runs at most once per two vblanks and a skipped call's frame
+// time goes to its next run (psp_paced_step.h): frame waits and per-run steps keep the 30 fps
+// rate, time waits still count real time. The return value is not used (FUN_0889459c).
+constexpr uint32_t kScriptUpdate = 0x08909C7Cu;
+FuncPtr g_script_update = nullptr;
+PacedStepTable g_script_paced;
+
+void script_update_30hz(uint8_t* rdram, recomp_context* ctx) {
+    uint32_t dt = static_cast<uint32_t>(ctx->r[5]);
+    if (!g_script_paced.step(static_cast<uint32_t>(ctx->r[4]),
+                             psp_vblank_index(psp_display_elapsed_us()), 2, &dt))
+        return;
+    ctx->r[5] = static_cast<int32_t>(dt);
+    g_script_update(rdram, ctx);
+}
+
 // Smooth weather (with the 60fps set; PSPRECOMP_P3_WEATHER_SMOOTH=0 keeps the plain 30 Hz
 // pacing above):
 // - rain drops (FUN_089010DC, still paced): on a frame whose update was skipped, the draw
@@ -646,6 +670,12 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
                 psp_dispatch_register(kRibbonStep, ribbon_step_smooth);
                 std::fprintf(stderr, "[P3] 60fps: smooth rain and wind (drawn every frame at the 30 fps speed)\n");
             }
+        }
+        const char* scripts = std::getenv("PSPRECOMP_P3_HIDEOUT_30HZ");
+        if (!(scripts && scripts[0] == '0')) {
+            g_script_update = RECOMP_LOOKUP(kScriptUpdate);
+            psp_dispatch_register(kScriptUpdate, script_update_30hz);
+            std::fprintf(stderr, "[P3] 60fps: script objects paced to 30 Hz (hideout animations)\n");
         }
     }
     const char* e = std::getenv("PSPRECOMP_P3_GMO_GUARD");
