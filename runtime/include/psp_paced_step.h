@@ -20,6 +20,9 @@ struct PacedStepTable {
     // one 60 fps frame, so anything above two 30 fps frames (4800 ticks/s in
     // Patapon 3) means the object stopped being run and the bank is stale.
     static constexpr uint32_t kMaxBanked = 320;
+    // An object not run for longer than this (paused game, mission over, a new
+    // object at a freed one's address) starts fresh: no banked time, not skipped.
+    static constexpr int64_t kStaleVblanks = 30;
 
     struct Slot {
         uint32_t obj = 0;
@@ -39,10 +42,12 @@ struct PacedStepTable {
             if (c.used >= 0 && c.obj == obj) { s = &c; break; }
             if (c.used < lru->used) lru = &c;
         }
-        if (!s) {  // new object (or a recycled address): fresh slot
+        if (!s) {  // new object: fresh slot
             s = lru;
             *s = Slot{};
             s->obj = obj;
+        } else if (vcount - s->used > kStaleVblanks) {
+            s->banked = 0;
         }
         s->used = vcount;
         s->skipped = !s->pacer.due(vcount, period);

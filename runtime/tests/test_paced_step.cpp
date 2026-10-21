@@ -63,14 +63,25 @@ int main() {
         dt = 80;
         CHECK(t.step(0x200, 2, 2, &dt) && dt == 160, "the other objects keep their slots");
     }
-    {   // the update stops being called (pause, mission over) and comes back much later
+    {   // the update stops being called (pause, mission over: a new object can reuse the
+        // address) and comes back much later: it runs at once and starts fresh
         PacedStepTable t;
         uint32_t dt = 80;
         t.step(0x3000, 0, 2, &dt);
         dt = 80;
-        t.step(0x3000, 1, 2, &dt);  // banks 80
+        t.step(0x3000, 1, 2, &dt);  // banks 80, skipped
+        CHECK(t.skipped(0x3000), "skipped before the gap");
         dt = 80;
-        CHECK(t.step(0x3000, 500, 2, &dt) && dt == 160, "runs at once on return with the banked time");
+        CHECK(t.step(0x3000, 1 + PacedStepTable::kStaleVblanks + 1, 2, &dt) && dt == 80,
+              "after a long gap: runs at once without the old banked time");
+        CHECK(!t.skipped(0x3000), "and is not marked skipped");
+        dt = 80;
+        t.step(0x3100, 0, 2, &dt);
+        dt = 80;
+        t.step(0x3100, 1, 2, &dt);  // banks 80
+        dt = 80;
+        CHECK(t.step(0x3100, 1 + PacedStepTable::kStaleVblanks, 2, &dt) && dt == 160,
+              "a gap up to the limit keeps the banked time");
     }
     {   // the banked time never runs away (a stuck skip): it is capped
         PacedStepTable t;
