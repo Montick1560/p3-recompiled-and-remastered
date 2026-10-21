@@ -76,7 +76,7 @@ static FILE* trace_file() {
     static FILE* f = [] {
         const char* e = std::getenv("PSPRECOMP_CPU_TRACE");
         FILE* out = e && e[0] ? std::fopen(e, "w") : nullptr;
-        if (out) std::setvbuf(out, nullptr, _IOFBF, 1 << 20);
+        if (out) std::setvbuf(out, nullptr, _IOFBF, 8 << 20);
         return out;
     }();
     return f;
@@ -90,8 +90,13 @@ void psp_cpu_trace(const char* ev, const char* name) {
     std::lock_guard<std::mutex> l(g_trace_m);
     std::fprintf(f, "%lld %s %d %d%s%s\n", us, ev, psp_current_thread_id(), psp_current_thread_priority(),
                  name ? " " : "", name ? name : "");
+    // Flush only from an HLE enter / exit event (never under the CPU lock's mutex, where a disk write
+    // would stall every thread): a killed run keeps all but the last events.
     static unsigned n = 0;
-    if ((++n & 0x3FFF) == 0) std::fflush(f);  // a killed run keeps all but the last events
+    if (++n >= 0x4000 && name != nullptr) {
+        n = 0;
+        std::fflush(f);
+    }
 }
 void psp_cpu_trace_flush() {
     if (FILE* f = trace_file()) {
