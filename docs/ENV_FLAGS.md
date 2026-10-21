@@ -815,7 +815,9 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
 - **Default:** off.
 - **Effect:** Diagnostics only. Wraps the weather object setters `0x088FDD50`..`0x088FDDDC` and the
   blend start `0x08900678` that the mission script's weather commands use, and logs the first 400
-  calls as `[WEATHER] vb=<vblank> set 0x... obj=... f12=... a1=... ra=...`.
+  calls as `[WEATHER] vb=<vblank> set 0x... obj=... f12=... a1=... ra=...`. With
+  `PSPRECOMP_P3_WEATHER_SMOOTH` installed it also prints, every ~2 s,
+  `[WEATHER] per s: rain draws ... (half a step ahead ...), ribbon steps ...`.
 - **Set it when:** checking when and to what the mission script changes the rain and wind.
 
 ### `PSPRECOMP_P3_ANIM_SMOOTH_DIAG`
