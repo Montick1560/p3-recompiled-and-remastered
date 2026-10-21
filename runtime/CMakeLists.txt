@@ -858,6 +858,22 @@ target_include_directories(test_prompt_atlas PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 target_compile_options(test_prompt_atlas PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME prompt_atlas_tests COMMAND test_prompt_atlas)
 
+if(PSPRECOMP_GAME STREQUAL "patapon3")
+    # Patapon 3 drum-hit words: the drum specs on the recon dumps (build/prompts_ref/p3drums).
+    add_executable(test_p3_drum_prompts tests/test_p3_drum_prompts.cpp src/psp_prompt_atlas.cpp
+        src/psp_prompt_raster.cpp src/psp_prompts.cpp src/psp_controls.cpp src/psp_input_device.cpp
+        src/psp_texrep_png.cpp ${PSP_PROMPT_ICONS_CPP} src/psp_bar_text.cpp src/stb_truetype_impl.cpp
+        ${PSP_BAR_FONTS_CPP} ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime/p3_prompts.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime/p3_prompt_labels.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime/p3_command_labels.cpp)
+    target_include_directories(test_p3_drum_prompts PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime)
+    target_compile_definitions(test_p3_drum_prompts PRIVATE
+        PSP_P3_DRUMS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../build/prompts_ref/p3drums")
+    target_compile_options(test_p3_drum_prompts PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+    add_test(NAME p3_drum_prompts_tests COMMAND test_p3_drum_prompts)
+endif()
+
 add_executable(test_perf tests/test_perf.cpp src/psp_perf.cpp)
 target_include_directories(test_perf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_perf PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)

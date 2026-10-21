@@ -25,6 +25,15 @@
 // Russian differ in a few faint texels: one hash each);
 // its names are redrawn from the word tables of p3_command_labels.cpp. Registered after the help bar, so
 // the help bar keeps atlas index 0 (its tags and cache keys do not move).
+//
+// The drum-hit words (PATA / PON / CHAKA / DON flying out next to the hero on every drum hit) are one
+// texture each: 128x128 CLUT4, swizzled, in VRAM (DxD 1.1.4 es and EU en, recon 2026-10-20 with
+// build/tools/texture_recon/to_march.py + hitshots.py: PATA 0x041302C0, PON 0x041324C0, DON 0x041346C0,
+// CHAKA 0x041368C0, 0x2200 apart, CLUT = texture + 0x2040). Each holds the word art, three faint rings and
+// the drum's white PSP symbol in an opaque black disc (radius ~12 texels around (63, 93)). They are
+// recognised by their whole coverage (the same in es and en). A cell covers both the game's symbol and the
+// HD pack's (ui/quest/, 1024x1024, a symbol ~1.5 texels larger) and is filled with the disc's black before
+// the icon is drawn (cell_bg), so the redrawn symbol leaves no hole. Registered after the command list.
 #include "p3_prompts.h"
 #include "p3_command_labels.h"
 #include "p3_prompt_labels.h"
@@ -92,4 +101,30 @@ void p3_prompts_register() {
     c.separators = p3_command_separators();
     c.separator_cap = 7;
     psp_prompts_register_atlas(std::move(c));
+
+    struct Drum {
+        const char* name;
+        uint64_t sig;
+        PromptCell cell;
+    };
+    static const Drum kDrums[] = {
+        {"drum-pata", 0x80A7B80AFBB1DF46ull, {PromptGlyph::Square, 56, 85, 15, 15}},
+        {"drum-pon", 0xFB077A3947637FF9ull, {PromptGlyph::Circle, 55, 86, 15, 15}},
+        {"drum-chaka", 0x1447FFDE5936A2ABull, {PromptGlyph::Triangle, 55, 85, 17, 15}},
+        {"drum-don", 0x05B24690279EFF6Full, {PromptGlyph::Cross, 56, 86, 15, 15}},
+    };
+    for (const Drum& d : kDrums) {
+        PromptAtlasSpec w;
+        w.name = d.name;
+        w.width = 128;
+        w.height = 128;
+        w.format = GE_TFMT_CLUT4;
+        w.sig_rects = {{0, 0, 128, 128}};
+        w.sig_hashes = {d.sig};  // es, en (DxD 1.1.4)
+        w.cells = {d.cell};
+        w.gray = 0xFE;  // the symbol is white
+        w.hole = 0x00;  // an icon's cut-out shows the disc's black
+        w.cell_bg = 0xFF000000u;
+        psp_prompts_register_atlas(std::move(w));
+    }
 }
