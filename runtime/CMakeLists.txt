@@ -196,6 +196,7 @@ set(RUNTIME_SOURCES
     src/net/relay_conn.cpp
     src/net/infra_protocol.cpp
     src/net/infra_client.cpp
+    src/net/np2_structs.cpp
     src/net/pro_client.cpp
     src/net/adhocctl.cpp
     src/net/guest_callbacks.cpp
@@ -1043,6 +1044,13 @@ target_include_directories(test_infra_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 target_compile_options(test_infra_client PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(test_infra_client PRIVATE pthread ${PSP_SOCKET_LIBS} ${PSP_WINHTTP_LIBS})
 add_test(NAME infra_client_tests COMMAND test_infra_client)
+
+# sceNpMatching2 response structs written into guest memory.
+add_executable(test_np2_structs tests/test_np2_structs.cpp src/net/np2_structs.cpp src/net/infra_protocol.cpp)
+target_include_directories(test_np2_structs PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                           ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
+target_compile_options(test_np2_structs PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME np2_structs_tests COMMAND test_np2_structs)
 
 add_executable(test_pro_protocol tests/test_pro_protocol.cpp src/net/pro_protocol.cpp)
 target_include_directories(test_pro_protocol PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
