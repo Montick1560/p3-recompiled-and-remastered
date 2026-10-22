@@ -4,7 +4,7 @@
 
 **Goal:** The game's own infrastructure mode works in the port against our server: open a hideout, find it in the game's room list, join it, play together, signal meter under each hero.
 
-**Architecture:** The runtime answers the PSN/NP imports itself (sign-in, dummy ticket) and implements `sceNpMatching2` over a TCP client to `tools/infra_server.py`, which keeps the rooms and pushes room/signaling events. Response structs are the PS3 Matching2 structs, little-endian, written into guest memory by pure writers and handed to the game's callbacks through `guest_callbacks`. The game's own UDP socket (`sceNetInet`) runs on a virtual network: every client gets a virtual IP from the server, which forwards datagrams.
+**Architecture:** The runtime answers the PSN/NP imports itself (sign-in, dummy ticket) and implements `sceNpMatching2` over a client of `tools/infra_server.py` (raw TCP for LAN/tests, WebSocket through WinHTTP for the public server behind a Cloudflare Tunnel at `wss://online.montick.app/infra`), which keeps the rooms and pushes room/signaling events. Response structs are the PS3 Matching2 structs, little-endian, written into guest memory by pure writers and handed to the game's callbacks through `guest_callbacks`. The game's own UDP socket (`sceNetInet`) runs on a virtual network: every client gets a virtual IP from the server, which forwards datagrams.
 
 **Tech Stack:** C++20 runtime (`psprecomp/runtime`), nlohmann/json (vendored), ninja + ctest in `build/rtw`, Python 3 stdlib server in `psprecomp/tools/`, e2e drivers in `build/infra/` (outside the repo), debug ports 9997/9998.
 
@@ -13,7 +13,9 @@
 ## Global Constraints
 
 - Branch `infra-mode` in `psprecomp/`, created from `infra-recon` (keeps df1d73f; Task 9 removes the recon-only parts). Commits authored as configured ("Patapon Community"), **no Claude co-author trailer**, message ends with `Verified: ...`. Nothing is pushed without the user's OK (next push branch `push-p3-32`, via the push-p3 worktree as usual).
-- Infrastructure is enabled only by `PSPRECOMP_INFRA_SERVER=host[:port]` (default port 27320). Without it the netconf dialog aborts infrastructure actions exactly as before, and nothing in the ad hoc path changes: 30 fps `rt_regress.py` PASS and ctest green at the end of every task that touches the runtime.
+- Server address: `PSPRECOMP_INFRA_SERVER` = `host[:port]` / `tcp://host[:port]` (raw TCP, default port 27320) or `ws://host[:port]/path` / `wss://host/path` (WebSocket, WinHTTP on Windows). Default `wss://online.montick.app/infra`; `off` makes the netconf dialog abort infrastructure actions exactly as before. Infrastructure code runs only after the player picks "Modo Infraestructura"; nothing in the ad hoc or offline path changes: 30 fps `rt_regress.py` PASS and ctest green at the end of every task that touches the runtime.
+- The server faces the internet (home PC i7-3770, 40 Mb/s upload, behind `cloudflared`): the limits from the spec are part of Task 1, never optional.
+- Execution: native (the user's choice, 2026-10-22): one session implements every task inline with TDD, one whole-branch review at the end.
 - Never touch the user's game on port 9999; test instances on 9997/9998, killed by path (`*\build\rtw\*`), never by image name. Save copies only (never `DECO/savedata*` or `build/save_main/`).
 - Struct offsets and event numbers come from the spec (PS3 layout, PSP differences listed there). An event number that is not in the spec is confirmed against the game's handler before it is used.
 - The guest CPU is never held while waiting on the network: blocking work runs on client threads, results reach the game through `guest_callbacks_post` or polled queues (same rule as `runtime/src/net/adhocctl.cpp`).
@@ -25,7 +27,9 @@
 2. **Room full / room gone**: a 5th joiner gets ROOM_FULL, joining a room that was just closed gets NO_SUCH_ROOM, and the game shows a message and returns to the list. Test in Task 1 (server) and Task 5.
 3. **Purpose and level filters**: a room opened "para enfrentamientos" must not appear in a "charlar" search, and level ranges are applied with the game's operators. Test in Task 1.
 4. **Host leaves / client crashes**: the server removes the member and tells the others (0x1102, or 0x1104 when the owner leaves); no ghost rooms in later searches. Test in Task 1 and Task 5.
-5. **Ad hoc and offline play unchanged** when `PSPRECOMP_INFRA_SERVER` is unset, including the 8-argument guest callbacks: ctest (`hle_net`, `guest_callback_queue`) and 30 fps `rt_regress` in Task 5 and Task 9.
+5. **Ad hoc and offline play unchanged** (infrastructure code only runs after the player picks it; `off` restores today's abort), including the 8-argument guest callbacks: ctest (`hle_net`, `guest_callback_queue`) and 30 fps `rt_regress` in Task 5 and Task 9.
+
+6. **Both transports behave the same**: a TCP client and a WebSocket client in the same room see each other (Task 5 runs A over `tcp://` and B over `ws://`).
 
 ---
 
@@ -56,8 +60,11 @@
   - Datagram A → B's vip/port arrives at B with source A's vip and A's bound port.
   - Three more joins: the 4th member succeeds, the 5th gets `0x80550D19`; join of an unknown id → `0x80550D13`.
   - B disconnects → A gets `member_left` (0x11); A leaves → room gone from the next search; a joined C gets `room_destroyed`.
+  - Same session over WebSocket: HTTP upgrade on `--ws-port`, path `/infra` (RFC 6455 handshake, masked client frames, one frame per binary message) logs in, searches like the TCP client and sees the TCP client's room.
+  - Limits: a 70 KiB frame closes the connection; online id `a b` → login error; a 5th connection from one address (or one `CF-Connecting-IP`) is refused; a second `create` by the same session → error; 500 datagrams in one second → at most 400 forwarded; no frame for the idle time (selftest uses `--idle 1`) → session closed and its member removed from the room.
+  - Traffic summary line `traffic: <sessions> sessions, up <kB/s>, down <kB/s>` with `--stats-every 1`.
 - [ ] **Step 2: Run it, expect failure** — `python -I tools/infra_server.py --selftest` → fails (file missing).
-- [ ] **Step 3: Implement** with `selectors` like `tools/adhoc_server.py` (same logging style, `--host`, `--port 27320`, `--delay-ms N` adds latency to datagram forwarding for the signal-meter test in Task 8). Filter operators: EQ 1, NE 2, LT 3, LE 4, GT 5, GE 6 on the room's searchable int attrs; `range.start` is 1-based.
+- [ ] **Step 3: Implement** with `selectors` like `tools/adhoc_server.py` (same logging style, `--host`, `--port 27320`, `--ws-port 27321`, `--max-rooms 64`, `--idle 30`, `--stats-every 60`, `--delay-ms N` adds latency to datagram forwarding for the signal-meter test in Task 8). Stdlib only (`hashlib`/`base64` for the WS handshake). Filter operators: EQ 1, NE 2, LT 3, LE 4, GT 5, GE 6 on the room's searchable int attrs; `range.start` is 1-based.
 - [ ] **Step 4: Run it** — `python -I tools/infra_server.py --selftest` → `selftest OK`.
 - [ ] **Step 5: Commit** — `git add tools/infra_server.py && git commit` ("feat(net): infrastructure-mode room server ...", `Verified: infra_server --selftest`).
 
@@ -91,7 +98,9 @@
 **Interfaces:**
 - Consumes: Task 2 codec.
 - Produces (namespace `infra`):
-  - `Client& client();` (process singleton) ; `bool Client::configured() const;` (`PSPRECOMP_INFRA_SERVER` set)
+  - `struct Address { enum Kind { Off, Tcp, Ws, Wss } kind; std::string host; uint16_t port; std::string path; }; Address parse_address(const char* env);` (pure: unset → `wss://online.montick.app/infra`; `off` → Off; bare host → Tcp 27320; ws default port 80, wss 443, path default `/infra`)
+  - `Client& client();` (process singleton) ; `bool Client::configured() const;` (address not Off)
+  - Transport behind `class Transport { virtual bool open(const Address&, int timeout_ms); virtual bool send_frame(const std::vector<uint8_t>&); virtual bool recv(std::vector<uint8_t>* bytes, int timeout_ms); virtual void close(); }`: `TcpTransport` (all platforms) and `WinHttpWsTransport` (Windows: `WinHttpOpen/Connect/OpenRequest` + `WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET`, `WinHttpWebSocketCompleteUpgrade/Send/Receive`, binary messages; link `winhttp`). Non-Windows `ws`/`wss` → `open` fails with a log line.
   - `bool Client::connect(const std::string& online_id, int timeout_ms);` (TCP + login; stores `vip()`, `session()`)
   - `void Client::request(nlohmann::json req, std::function<void(const nlohmann::json& answer)> done, int timeout_ms);` — `done` runs on the client thread exactly once: the server's answer, or `{"ok":false,"error":0x80550C3C}` on timeout / disconnect.
   - `void Client::on_event(std::function<void(const nlohmann::json&)> fn);`
@@ -100,9 +109,9 @@
   - `int Client::rtt_ms() const;` (median of the last 5 pings, one every 2 s; -1 before the first answer)
   - `uint32_t Client::vip() const;`
 
-- [ ] **Step 1: Failing tests**: `login_sets_vip`, `request_answer_matched_by_id` (two requests answered out of order), `request_times_out` (fake server never answers → `error == 0x80550C3C` within timeout + 200 ms), `disconnect_fails_pending` (fake server closes → pending `done` gets the error, `on_event` receives `{"ev":"room_destroyed"}` synthesised for a joined room), `datagram_queue_per_port`, `rtt_from_ping`.
+- [ ] **Step 1: Failing tests**: `parse_address_forms` (unset, `off`, `1.2.3.4`, `host:9`, `tcp://h`, `ws://127.0.0.1:27321/infra`, `wss://online.montick.app/infra`), `login_sets_vip`, `request_answer_matched_by_id` (two requests answered out of order), `request_times_out` (fake server never answers → `error == 0x80550C3C` within timeout + 200 ms), `disconnect_fails_pending` (fake server closes → pending `done` gets the error, `on_event` receives `{"ev":"room_destroyed"}` synthesised for a joined room), `datagram_queue_per_port`, `rtt_from_ping`.
 - [ ] **Step 2:** `ninja test_infra_client && ctest -R infra_client` → fails.
-- [ ] **Step 3: Implement** (one reader thread, a mutex for the pending map; sockets like `relay_conn.cpp`).
+- [ ] **Step 3: Implement** (one reader thread, a mutex for the pending map; TCP sockets like `relay_conn.cpp`; the WS transport is exercised end to end in Task 5).
 - [ ] **Step 4:** PASS; full ctest green.
 - [ ] **Step 5: Commit.**
 
@@ -133,8 +142,8 @@
 
 **Files:**
 - Modify: `runtime/src/hle/psp_hle_np_matching2.cpp` (rewrite on Tasks 3–4), `runtime/src/hle/psp_hle_np.cpp` (online id = `PSPRECOMP_ADHOC_NICK` or "Patapon"; `sceNetApctlGetInfo(8)` returns the vip as dotted text), `runtime/src/hle/psp_hle_utility.cpp` + `runtime/src/net/netconf_adhoc.cpp` (`in.infra_ok = infra::client().configured()`), `runtime/include/net/netconf_adhoc.h`
-- Create (outside the repo): `build/infra/two.py` (two instances A = 9997 host, B = 9998 visitor, each with `PSPRECOMP_INFRA_SERVER=127.0.0.1`, own save copy of `build/save_weather`, nick P3A/P3B; starts `tools/infra_server.py`; `cmd.txt` lines `<A|B|*> P <key> [wait]`, `<A|B|*> S <name>`, `W <s>`, `K` kills the server, `Q` quits; never port 9999)
-- Test: `runtime/tests/test_netconf_adhoc.cpp` (existing test of the pure `netconf::step`; add `infra_action_ok_when_infra_ok` (action 0, `infra_ok = true` → finished, result 0) and `infra_action_aborts_without_infra` (→ result 2))
+- Create (outside the repo): `build/infra/two.py` (two instances A = 9997 host with `PSPRECOMP_INFRA_SERVER=tcp://127.0.0.1`, B = 9998 visitor with `ws://127.0.0.1:27321/infra`, own save copy of `build/save_weather`, nick P3A/P3B; starts `tools/infra_server.py`; `cmd.txt` lines `<A|B|*> P <key> [wait]`, `<A|B|*> S <name>`, `W <s>`, `K` kills the server, `Q` quits; never port 9999)
+- Test: `runtime/tests/test_netconf_adhoc.cpp` (existing test of the pure `netconf::step`; add `infra_action_ok_when_infra_ok` (action 0, `infra_ok = true` → finished, result 0) and `infra_action_aborts_without_infra` (→ result 2)); `infra_ok` = `infra::client().configured()`
 
 **Interfaces:**
 - Consumes: Task 3 `infra::client()`, Task 4 writers, `guest_callbacks_post` (8 args).
@@ -173,7 +182,8 @@
 
 - [ ] **Step 1: e2e:** A and B together (Task 6), A starts a multiplayer mission, both play 60 s with scripted drums on both, then A quits to the hideout. Expected: both load the same mission, both see the other's units, the mission ends or quits for both, no desync message. Record the session (`build/rec60/rec.py` per instance) for the user.
 - [ ] **Step 2:** If the game uses TCP (Task 6 recon log) or another unimplemented import blocks the mission: write the failing test for the missing behaviour, implement it in the matching file (`psp_hle_inet.cpp` for sockets), re-run Step 1.
-- [ ] **Step 3: Commit** with the recording path.
+- [ ] **Step 3: Traffic:** from the server's `traffic:` lines during Step 1, write in the spec the upload per player in a 2-player mission (and the estimate for 4) and how many full rooms 40 Mb/s carries with 30 % headroom.
+- [ ] **Step 4: Commit** with the recording path.
 
 ### Task 8: Signal meter from the real connection
 
@@ -200,4 +210,6 @@
 - [ ] **Step 1:** `grep -rn INFRA_RECON runtime/` → nothing.
 - [ ] **Step 2:** `ninja && ctest` green; 30 fps `rt_regress.py` PASS; ad hoc two-instance smoke (`build/tools/two_lobby.py`) still finds the room.
 - [ ] **Step 3:** Deploy to `build/e2e_portable` / `build/e2e_portable3` (backup first in `build/backup_pre_infra_<date>/`), `cmp` against the builds; hand-off note `build/autopilot/EN_QUE_NOS_QUEDAMOS_<date>.md` in Spanish with how to run the server and test with a friend.
-- [ ] **Step 4: Commit.** Then ask the user before any push.
+- [ ] **Step 4: Hosting:** `tools/run_infra_server.bat` (starts the server with the public defaults, both listeners on 127.0.0.1) and a Spanish guide for the user, `build/autopilot/SERVIDOR_ONLINE.md`: install and run `cloudflared` (the user installs it; the agent installs nothing), create the tunnel `online.montick.app → http://localhost:27321`, start the server with the .bat, what friends need (nothing: the default address), how to move it to a cloud machine later (move the tunnel), how to read the traffic lines.
+- [ ] **Step 5 (with the user):** after the user brings the tunnel up, an instance with the default address (no `PSPRECOMP_INFRA_SERVER`) lists a room opened by another instance through `wss://online.montick.app/infra`; record the RTT the meter shows.
+- [ ] **Step 6: Commit.** Then ask the user before any push.

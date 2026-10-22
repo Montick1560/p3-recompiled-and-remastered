@@ -69,22 +69,38 @@ filters (operators EQ 1, NE 2, LT 3, LE 4, GT 5, GE 6): 4C == 0, 4D == 0x30005, 
 ## Design
 
 ### Server: `tools/infra_server.py`
-Python 3 stdlib, one process, TCP (default port 27320). Clients log in with their online id and get a session id
-and a **virtual IP** (10.80.0.1, 10.80.0.2, ...). The server keeps rooms (id, owner, max slots, int/bin attrs,
-members with member ids from 0x10 up, their bound game port) and implements: login, ping, search (filters + range),
-room details, create, join (ROOM_FULL / NO_SUCH_ROOM), leave (owner leaving destroys the room), kickout,
-set room data internal, and pushes room events and signaling events to the members. It forwards game datagrams
-between virtual IPs. A client that disconnects leaves its room. `--selftest` covers it without the game.
+Python 3 stdlib, one process. Two listeners speaking the same frames: raw TCP (default 27320, LAN and tests) and
+WebSocket (default 27321, path `/infra`, one frame per binary WS message) for the public deployment behind a
+**Cloudflare Tunnel**: `cloudflared` on the host maps `https://online.montick.app` to `http://localhost:27321`, so
+the home PC opens no port and its IP stays hidden (the Cloudflare proxy does not carry raw TCP on the free plan).
+Moving to a cloud machine later = moving the tunnel; the address the players use does not change.
+Clients log in with their online id and get a session id and a **virtual IP** (10.80.0.1, 10.80.0.2, ...). The
+server keeps rooms (id, owner, max slots, int/bin attrs, members with member ids from 0x10 up, their bound game port)
+and implements: login, ping, search (filters + range), room details, create, join (ROOM_FULL / NO_SUCH_ROOM), leave
+(owner leaving destroys the room), kickout, set room data internal, and pushes room events and signaling events to
+the members. It forwards game datagrams between virtual IPs. A client that disconnects leaves its room.
+`--selftest` covers it without the game.
+
+Exposed to the internet, so it is defensive: frames over 64 KiB close the connection; online ids are 3-16 chars
+`[A-Za-z0-9_-]`; at most 4 connections per client address (the `CF-Connecting-IP` header behind the tunnel), one
+room per session, 16 slots max, 64 rooms in total by default (`--max-rooms`); datagrams over 400/s per session are
+dropped; 30 s without any frame closes the session. It never executes or stores anything from clients on disk.
+It counts bytes per session and prints a traffic summary every 60 s (to size the 40 Mb/s home upload).
 
 ### Wire format
-Frames `u32 length (LE, of kind + body) | u8 kind | body`. Kind 1: UTF-8 JSON object (requests carry `"id"`,
-answers echo it; events have `"ev"`); binary attribute data is hex. Kind 2: datagram
-`u32 vip | u16 dst_port | u16 src_port | payload` (to the server: destination vip; from the server: source vip).
+Frames `u32 length (LE, of kind + body) | u8 kind | body`; over WebSocket each binary message carries exactly one
+frame. Kind 1: UTF-8 JSON object (requests carry `"id"`, answers echo it; events have `"ev"`); binary attribute
+data is hex. Kind 2: datagram `u32 vip | u16 dst_port | u16 src_port | payload` (to the server: destination vip;
+from the server: source vip).
 
 ### Runtime
 - `net/infra_protocol` (pure): frame codec, JSON helpers.
-- `net/infra_client`: one connection to `PSPRECOMP_INFRA_SERVER` (host[:port]), request/answer with timeout, event
-  queue, datagram queues per local port, RTT from pings. Everything off the guest CPU (like the ad hoc layer).
+- `net/infra_client`: one connection to `PSPRECOMP_INFRA_SERVER`, request/answer with timeout, event queue,
+  datagram queues per local port, RTT from pings. Everything off the guest CPU (like the ad hoc layer). Address
+  forms: `host[:port]` or `tcp://host[:port]` (raw TCP, all platforms), `ws://host[:port]/path` and
+  `wss://host/path` (WebSocket through WinHTTP on Windows: TLS and the WS handshake come from the OS, no new
+  library; on other platforms `wss://` is reported as unsupported). Default `wss://online.montick.app/infra`;
+  `PSPRECOMP_INFRA_SERVER=off` disables infrastructure mode.
 - `net/np2_structs` (pure): writes the Matching2 response structs into guest memory at a given base (offsets above).
 - `hle/psp_hle_np.cpp` (sceNp/Auth/Service/Apctl) and `hle/psp_hle_np_matching2.cpp` (Matching2 over the client,
   callbacks through `guest_callbacks`, now 8 arguments).
@@ -92,10 +108,11 @@ answers echo it; events have `"ev"`); binary attribute data is hex. Kind 2: data
   (accepted), `Bind` (port reported to the server), `Sendto`, `Recvfrom` (nonblocking: -1 and errno EAGAIN 11,
   `GetPspError` 0x8001000B), `Close`, `SocketAbort`. `sceNetApctlGetInfo(IP)` returns the virtual IP.
 - Signal meter: `sceNetApctlGetInfo(5 = STRENGTH)` returns a percentage from the measured RTT.
-- Infrastructure is on only when `PSPRECOMP_INFRA_SERVER` is set; without it the netconf dialog aborts as today
-  (no behaviour change for players who never configure it). The recon flag `PSPRECOMP_INFRA_RECON` goes away.
+- Infrastructure mode is reached only when the player picks "Modo Infraestructura" in the game; the runtime then
+  connects to the configured server (default above). With `PSPRECOMP_INFRA_SERVER=off` the netconf dialog aborts
+  as today. Nothing changes for ad hoc or offline play. The recon flag `PSPRECOMP_INFRA_RECON` goes away.
 
 ## Out of scope (later)
-Launcher setting for the server address, hosting next to patapon.net, TCP sockets (`sceNetInetConnect/Listen`)
+Launcher setting for the server address (env only for now), hosting next to patapon.net, TCP sockets (`sceNetInetConnect/Listen`)
 unless the game turns out to use them in a session (checked in the plan), chat via `sceNpMatching2SendRoomChatMessage`
 (not imported), ID-online search by friend id beyond what the game sends.
