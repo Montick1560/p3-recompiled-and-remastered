@@ -27,17 +27,22 @@ std::vector<uint8_t> encode_json(const nlohmann::json& j) {
     return v;
 }
 
-std::vector<uint8_t> encode_datagram(uint32_t vip, uint16_t dst_port, uint16_t src_port, const uint8_t* data,
-                                     size_t len) {
+std::vector<uint8_t> encode_segment(uint8_t kind, uint32_t vip, uint16_t dst_port, uint16_t src_port,
+                                    const uint8_t* data, size_t len) {
     std::vector<uint8_t> v;
     v.reserve(13 + len);
     put_u32(v, static_cast<uint32_t>(1 + 8 + len));
-    v.push_back(kKindDatagram);
+    v.push_back(kind);
     put_u32(v, vip);
     put_u16(v, dst_port);
     put_u16(v, src_port);
     if (len) v.insert(v.end(), data, data + len);
     return v;
+}
+
+std::vector<uint8_t> encode_datagram(uint32_t vip, uint16_t dst_port, uint16_t src_port, const uint8_t* data,
+                                     size_t len) {
+    return encode_segment(kKindDatagram, vip, dst_port, src_port, data, len);
 }
 
 void FrameReader::feed(const uint8_t* data, size_t len) {
@@ -71,7 +76,7 @@ bool FrameReader::next(Frame* out) {
                 bad_++;
                 continue;
             }
-        } else if (kind == kKindDatagram && blen >= 8) {
+        } else if ((kind == kKindDatagram || kind == kKindStream) && blen >= 8) {
             f.vip = get_u32(body);
             f.dst_port = get_u16(body + 4);
             f.src_port = get_u16(body + 6);

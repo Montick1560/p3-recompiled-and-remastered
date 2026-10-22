@@ -64,11 +64,13 @@ public:
     struct Datagram {
         uint32_t vip = 0;
         uint16_t src_port = 0;
+        uint16_t dst_port = 0;
         std::vector<uint8_t> payload;
     };
     using Done = std::function<void(const nlohmann::json& answer)>;
     using EventFn = std::function<void(const nlohmann::json& event)>;
     static constexpr size_t kQueueCap = 256;
+    static constexpr size_t kStreamQueueCap = 16384;  // stream segments must not be lost: far above any burst
 
     explicit Client(Address addr) : Client(std::move(addr), Options()) {}
     Client(Address addr, Options opt);
@@ -91,6 +93,9 @@ public:
     void send_datagram(uint32_t vip, uint16_t dst_port, uint16_t src_port, const uint8_t* data, size_t len);
     bool pop_datagram(uint16_t local_port, Datagram* out);
     bool has_datagram(uint16_t local_port);
+    // Stream socket segments (kind 3), one queue for every port, in arrival order.
+    void send_stream(uint32_t vip, uint16_t dst_port, uint16_t src_port, const uint8_t* data, size_t len);
+    bool pop_stream(Datagram* out);
 
     int rtt_ms() const;  // median of the last 5 pings, -1 before the first answer
     uint32_t vip() const { return vip_; }
@@ -125,6 +130,7 @@ private:
     std::map<uint32_t, Pending> pending_;
     EventFn on_event_;
     std::map<uint16_t, std::deque<Datagram>> queues_;
+    std::deque<Datagram> streams_;
     std::deque<int> rtts_;
     std::string session_, online_id_;
     int64_t room_id_ = 0;  // joined room, for the room_destroyed synthesised on loss

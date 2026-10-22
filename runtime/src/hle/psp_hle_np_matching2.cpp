@@ -13,6 +13,7 @@
 // written into a response arena and posted through guest_callbacks.
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_np.h"
+#include "hle/psp_hle_inet.h"
 #include "psp_memory.h"
 #include "recomp.h"
 #include "net/guest_callbacks.h"
@@ -21,6 +22,7 @@
 #include "net/np2_structs.h"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -336,7 +338,7 @@ void post_room_event(uint16_t event, uint32_t data) {
     guest_callbacks_post(g_rdram, std::move(c));
 }
 
-void on_event(const nlohmann::json& e) {
+void handle_event(const nlohmann::json& e) {
     State& s = st();
     const std::string ev = e.value("ev", "");
     {
@@ -394,6 +396,21 @@ void on_event(const nlohmann::json& e) {
         c.a[7] = arg;
         guest_callbacks_post(g_rdram, std::move(c));
     }
+}
+
+// Server events go through the worker in arrival order. A member leaving or
+// the room going away waits (up to 1.5 s) until the game has read the stream
+// data that came before it, as with a real host whose last TCP bytes arrive
+// before the matching server notices it left.
+void on_event(const nlohmann::json& e) {
+    worker().post([e] {
+        const std::string ev = e.value("ev", "");
+        const bool leave = ev == "member_left" || ev == "kicked" || ev == "room_destroyed" ||
+                           (ev == "signaling" && e.value("event", 0) == 0x5101);
+        for (int i = 0; leave && i < 75 && !psp_inet_streams_idle(); i++)
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        handle_event(e);
+    });
 }
 
 // ---- lifecycle ----

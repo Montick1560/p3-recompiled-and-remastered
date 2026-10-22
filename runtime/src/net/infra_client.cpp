@@ -312,6 +312,7 @@ void Client::lost(const char* why) {
         room_id_ = 0;
         fn = on_event_;
         queues_.clear();
+        streams_.clear();
     }
     cv_.notify_all();
     if (transport_) transport_->close();
@@ -367,6 +368,18 @@ bool Client::pop_datagram(uint16_t local_port, Datagram* out) {
     if (it == queues_.end() || it->second.empty()) return false;
     *out = std::move(it->second.front());
     it->second.pop_front();
+    return true;
+}
+
+void Client::send_stream(uint32_t vip, uint16_t dst_port, uint16_t src_port, const uint8_t* data, size_t len) {
+    if (connected_) send(encode_segment(kKindStream, vip, dst_port, src_port, data, len));
+}
+
+bool Client::pop_stream(Datagram* out) {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (streams_.empty()) return false;
+    *out = std::move(streams_.front());
+    streams_.pop_front();
     return true;
 }
 
@@ -446,8 +459,16 @@ void Client::reader() {
                 continue;
             }
             std::lock_guard<std::mutex> lock(mu_);
+            if (f.kind == kKindStream) {
+                streams_.push_back(Datagram{f.vip, f.src_port, f.dst_port, std::move(f.payload)});
+                if (streams_.size() > kStreamQueueCap) {
+                    streams_.pop_front();
+                    std::fprintf(stderr, "[INFRA] stream queue full: a game stream lost data\n");
+                }
+                continue;
+            }
             auto& q = queues_[f.dst_port];
-            q.push_back(Datagram{f.vip, f.src_port, std::move(f.payload)});
+            q.push_back(Datagram{f.vip, f.src_port, f.dst_port, std::move(f.payload)});
             if (q.size() > kQueueCap) q.pop_front();
         }
         if (r.broken()) {

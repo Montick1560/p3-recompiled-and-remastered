@@ -36,6 +36,7 @@ MAX_TX = 1024 * 1024         # a client that does not read its queued output is 
 MAX_HEADER = 8 * 1024        # HTTP upgrade request
 MAX_DGRAM = 4096             # game datagram payload (the game sends up to 0x574)
 DGRAM_PER_S = 400
+STREAM_BYTES_PER_S = 2 * 1024 * 1024  # game stream sockets (kind 3): over this the session is closed
 WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 ONLINE_ID = re.compile(r"[A-Za-z0-9_-]{3,16}")
 VIP_BASE = 0x0A500000        # 10.80.0.0
@@ -198,6 +199,8 @@ class Conn:
         self.dgram_window = 0.0
         self.dgram_count = 0
         self.dgram_dropped = 0
+        self.stream_window = 0.0
+        self.stream_bytes = 0
 
     def label(self):
         vip = socket.inet_ntoa(struct.pack(">I", self.vip)) if self.vip else "-"
@@ -460,6 +463,8 @@ class Server:
         kind, body = body[0], body[1:]
         if kind == 2:
             return self.on_datagram(conn, body)
+        if kind == 3:
+            return self.on_stream(conn, body)
         if kind != 1:
             return self.drop(conn, "unknown frame kind %d" % kind)
         try:
@@ -512,6 +517,27 @@ class Server:
             conn.dgram_dropped += 1
             return
         out = frame(2, struct.pack("<IHH", conn.vip, dst_port, src_port) + body[8:])
+        if self.delay:
+            self.later(dst, out)
+        else:
+            self.send_frame(dst, out)
+
+    def on_stream(self, conn, body):
+        """A segment of a game stream socket: forwarded in order like a datagram, never dropped (the
+        game's TCP stream would break); a flood closes the session instead."""
+        if conn.session is None or len(body) < 9:
+            return self.drop(conn, "bad stream segment")
+        now = time.monotonic()
+        if now - conn.stream_window >= 1.0:
+            conn.stream_window, conn.stream_bytes = now, 0
+        conn.stream_bytes += len(body)
+        if conn.stream_bytes > STREAM_BYTES_PER_S:
+            return self.drop(conn, "stream flood")
+        vip, dst_port, src_port = struct.unpack_from("<IHH", body)
+        dst = self.by_vip.get(vip)
+        if dst is None or conn.room is None or dst.room is not conn.room or dst is conn:
+            return
+        out = frame(3, struct.pack("<IHH", conn.vip, dst_port, src_port) + body[8:])
         if self.delay:
             self.later(dst, out)
         else:
@@ -748,7 +774,7 @@ class TestClient:
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.ws = ws
         self.rx = b""
-        self.events, self.dgrams, self.answers = [], [], {}
+        self.events, self.dgrams, self.streams, self.answers = [], [], [], {}
         self.next_id = 0
         if ws:
             key = base64.b64encode(secrets.token_bytes(16))
@@ -771,8 +797,8 @@ class TestClient:
     def send(self, obj):
         self.send_raw_frame(json_frame(obj))
 
-    def dgram(self, vip, dst_port, src_port, payload):
-        self.send_raw_frame(frame(2, struct.pack("<IHH", vip, dst_port, src_port) + payload))
+    def dgram(self, vip, dst_port, src_port, payload, kind=2):
+        self.send_raw_frame(frame(kind, struct.pack("<IHH", vip, dst_port, src_port) + payload))
 
     def _read(self, n):
         while len(self.rx) < n:
@@ -807,9 +833,9 @@ class TestClient:
             return False
         finally:
             self.sock.settimeout(3)
-        if kind == 2:
+        if kind in (2, 3):
             vip, dst, src = struct.unpack_from("<IHH", body)
-            self.dgrams.append((vip, dst, src, body[8:]))
+            (self.dgrams if kind == 2 else self.streams).append((vip, dst, src, body[8:]))
         else:
             msg = json.loads(body)
             if "ev" in msg:
@@ -932,6 +958,15 @@ def selftest():
     assert b.dgrams.pop() == (0x0A500001, 3659, 3658, payload)
     a.dgram(0x0A500003, 1, 1, b"not in my room")  # W is not in the room: dropped
     assert not w.pump(0.3) and not w.dgrams
+    # Stream socket segments (kind 3): forwarded in order, never rate limited like datagrams.
+    for i in range(600):
+        a.dgram(0x0A500002, 7000, 50000, bytes([3]) + struct.pack("<H", i), kind=3)
+    deadline = time.monotonic() + 3
+    while len(b.streams) < 600:
+        assert time.monotonic() < deadline, "stream segments: %d of 600" % len(b.streams)
+        b.pump(0.1)
+    assert all(seg == (0x0A500001, 7000, 50000, bytes([3]) + struct.pack("<H", i)) for i, seg in enumerate(b.streams))
+    assert not b.dgrams, "segments stay kind 3"
 
     c, dd, e = TestClient(srv.port), TestClient(srv.port), TestClient(srv.port)
     for i, cl in enumerate((c, dd, e)):
@@ -1046,6 +1081,10 @@ def selftest():
     assert dead_p["event"] == SIG_DEAD and dead_p["member_id"] == 0x11, dead_p
     p.ok("bound", port=5000)
     assert not any(x["ev"] == "signaling" for x in q.events) and not q.pump(0.3), "no late ESTABLISHED"
+    big = bytes([3]) + b"z" * 60000  # 40 x 60 kB in one second is over the 2 MiB/s stream cap
+    for _ in range(40):
+        q.dgram(0x0A500001, 7000, 50000, big, kind=3)
+    assert q.is_closed(), "stream flood closes the session"
     p.close()
     q.close()
     srv.running = False

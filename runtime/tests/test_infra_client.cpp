@@ -276,6 +276,39 @@ static void datagram_queue_per_port() {
     CHECK(seen, "send_datagram reaches the server");
 }
 
+static void stream_segments_in_order() {
+    FakeInfraServer s;
+    s.start();
+    infra::Client c(s.address(), fast());
+    CHECK(c.connect("P3A", 2000), "connect");
+    for (int i = 0; i < 600; i++) {
+        const uint8_t b[3] = {3, static_cast<uint8_t>(i), static_cast<uint8_t>(i >> 8)};
+        s.send_raw(infra::encode_segment(infra::kKindStream, 0x0A500002, static_cast<uint16_t>(i % 2 ? 7000 : 7001), 9,
+                                         b, 3));
+    }
+    sleep_ms(400);
+    infra::Client::Datagram g;
+    int n = 0;
+    bool ordered = true;
+    while (c.pop_stream(&g)) {
+        ordered &= (g.payload[1] | (g.payload[2] << 8)) == n && g.vip == 0x0A500002 && g.src_port == 9 &&
+                   g.dst_port == (n % 2 ? 7000 : 7001);
+        n++;
+    }
+    CHECK(n == 600 && ordered, "every stream segment, in order, any port (no 256 cap)");
+    CHECK(!c.pop_datagram(7000, &g), "segments are not datagrams");
+
+    const uint8_t out[2] = {1, 0};
+    c.send_stream(0x0A500002, 7000, 50000, out, 2);
+    sleep_ms(200);
+    std::lock_guard<std::mutex> lock(s.mu);
+    bool seen = false;
+    for (const auto& f : s.got)
+        seen |= f.kind == infra::kKindStream && f.vip == 0x0A500002 && f.dst_port == 7000 && f.src_port == 50000 &&
+                f.payload.size() == 2;
+    CHECK(seen, "send_stream reaches the server as kind 3");
+}
+
 static void rtt_from_ping() {
     FakeInfraServer s;
     s.ping_delay_ms = 40;
@@ -334,6 +367,7 @@ int main() {
     request_times_out();
     disconnect_fails_pending();
     datagram_queue_per_port();
+    stream_segments_in_order();
     rtt_from_ping();
     silent_server_is_dead();
     ws_against_real_server();

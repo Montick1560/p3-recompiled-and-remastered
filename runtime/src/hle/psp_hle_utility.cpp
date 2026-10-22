@@ -899,22 +899,6 @@ static void hle_sceUmdUnRegisterUMDCallBack(
     (void)rdram;
 }
 
-// ---- Networking (all init/term no-ops) ----
-
-static void hle_sceNetInetInit(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    ctx->r[2] = SCE_OK;
-    (void)rdram;
-}
-
-static void hle_sceNetInetTerm(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    ctx->r[2] = SCE_OK;
-    (void)rdram;
-}
-
 static void hle_sceNetApctlInit(
     uint8_t* rdram, recomp_context* ctx
 ) {
@@ -2079,8 +2063,6 @@ void psp_hle_register_utility() {
                       hle_sceUmdUnRegisterUMDCallBack);
 
     // Networking
-    psp_hle_register("sceNetInetInit", hle_sceNetInetInit);
-    psp_hle_register("sceNetInetTerm", hle_sceNetInetTerm);
     psp_hle_register("sceNetApctlInit", hle_sceNetApctlInit);
     psp_hle_register("sceNetApctlTerm", hle_sceNetApctlTerm);
     psp_hle_register("sceNetResolverInit",

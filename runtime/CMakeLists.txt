@@ -197,6 +197,7 @@ set(RUNTIME_SOURCES
     src/net/infra_protocol.cpp
     src/net/infra_client.cpp
     src/net/np2_structs.cpp
+    src/net/p2p_stream.cpp
     src/net/pro_client.cpp
     src/net/adhocctl.cpp
     src/net/guest_callbacks.cpp
@@ -224,6 +225,7 @@ set(RUNTIME_SOURCES
     src/hle/psp_hle_net_matching.cpp
     src/hle/psp_hle_np.cpp
     src/hle/psp_hle_np_matching2.cpp
+    src/hle/psp_hle_inet.cpp
     src/hle/psp_hle_ctrl.cpp
     src/hle/psp_hle_utility.cpp
     src/hle/psp_system_param.cpp
@@ -1051,6 +1053,18 @@ target_include_directories(test_np2_structs PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/
                            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
 target_compile_options(test_np2_structs PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME np2_structs_tests COMMAND test_np2_structs)
+
+# sceNetInet errno -> sceNetInetGetPspError (pure).
+add_executable(test_inet_errno tests/test_inet_errno.cpp)
+target_include_directories(test_inet_errno PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_inet_errno PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME inet_errno_tests COMMAND test_inet_errno)
+
+# The game's TCP P2P sockets as relayed segments (pure).
+add_executable(test_p2p_stream tests/test_p2p_stream.cpp src/net/p2p_stream.cpp)
+target_include_directories(test_p2p_stream PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_p2p_stream PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME p2p_stream_tests COMMAND test_p2p_stream)
 
 add_executable(test_pro_protocol tests/test_pro_protocol.cpp src/net/pro_protocol.cpp)
 target_include_directories(test_pro_protocol PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

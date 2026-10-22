@@ -83,6 +83,18 @@ static void oversized_frame_poisons() {
     CHECK(!r.next(&f) && r.broken(), "a frame over 64 KiB breaks the stream");
 }
 
+static void stream_roundtrip() {
+    const uint8_t seg[4] = {3, 'a', 'b', 'c'};  // type DATA + bytes
+    const auto wire = infra::encode_segment(infra::kKindStream, 0x0A500001, 50000, 3659, seg, 4);
+    CHECK(wire.size() == 5 + 8 + 4 && wire[4] == infra::kKindStream, "stream segment = kind 3, datagram layout");
+    infra::FrameReader r;
+    r.feed(wire.data(), wire.size());
+    infra::Frame f;
+    CHECK(r.next(&f) && f.kind == infra::kKindStream && f.vip == 0x0A500001 && f.dst_port == 50000 &&
+              f.src_port == 3659 && f.payload == std::vector<uint8_t>(seg, seg + 4), "stream segment back");
+    CHECK(r.bad_frames() == 0, "kind 3 is not a bad frame");
+}
+
 static void hex_roundtrip() {
     const uint8_t b[3] = {0x00, 0xff, 0x10};
     CHECK(infra::to_hex(b, 3) == "00ff10", "to_hex");
@@ -97,6 +109,7 @@ int main() {
     two_frames_one_feed();
     bad_json_skipped();
     oversized_frame_poisons();
+    stream_roundtrip();
     hex_roundtrip();
     if (failures) {
         std::printf("%d failure(s)\n", failures);

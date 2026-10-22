@@ -1,6 +1,7 @@
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_net.h"
 #include "hle/psp_hle_np.h"
+#include "hle/psp_hle_inet.h"
 #include "hle/psp_hle_imports.h"
 #include "psp_cpu.h"
 #include "psp_scheduler.h"
@@ -656,6 +657,7 @@ void psp_hle_register_all_modules() {
     psp_hle_register_net();
     psp_hle_register_np();
     psp_hle_register_np_matching2();
+    psp_hle_register_inet();
 
     // SAS voice state machine (issue #29)
     psp_hle_register_sas();
