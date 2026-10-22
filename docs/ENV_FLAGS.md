@@ -794,6 +794,20 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   `[P3] smooth animation: FEVER worm motion blended too`.
 - **Set it when:** `0` to compare against the stepped worm (A/B).
 
+### `PSPRECOMP_P3_ANIM_SMOOTH_REWARD`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`0` off; anything else or unset = on).
+- **Default:** on with `PSPRECOMP_P3_ANIM_SMOOTH`.
+- **Effect:** The reward that comes out of a chest in the chest room and its glowing halo
+  are drawn by the mission overlay's `0x08B4CB28` (overlay id 3, all three variants),
+  outside any smooth scope, so the halo (a 30-frame baked loop whose clock moves 0.25
+  frame per vblank at 60 fps) showed each frame for 4 vblanks. The hook opens a scope
+  there (same per-call overlay check as the worm) whose own clock is a whole frame, and
+  gives the object's two motion-player blocks their clocks (item `+0x78`, halo `+0xF8`);
+  the baked list blend then mixes the drawn frame and the next one of the same motion.
+  The clocks are only read, so the speed does not change. Install prints `[P3] smooth animation: reward halo blended too`.
+- **Set it when:** `0` to compare against the stepped halo (A/B).
+
 ### `PSPRECOMP_P3_WEATHER_30HZ`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
 - **Type:** env (`0` off; anything else or unset = on).

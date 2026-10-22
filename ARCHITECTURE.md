@@ -150,7 +150,9 @@ the hideout's place halo and the Hero Gate's sparkles), and blends the bone matr
 store one bone matrix per whole frame, and the GE lists those models record per frame for their
 own parts (a blended copy in a guest-memory ring is called instead, `psp_ge_list_blend.h`), also for the
 FEVER worm, whose motion player lives in a code overlay (the hook on that overlay address resolves the
-loaded bank's function per call and checks its code, since other overlays share the window); and it runs each weather object's update (rain drops,
+loaded bank's function per call and checks its code, `psp_code_match.h`, since other overlays share the
+window), and for the chest room's reward halo, drawn by another function of that overlay at its own
+clock (each scope kind lists which model words take which clock word); and it runs each weather object's update (rain drops,
 wind) at most once per two vblanks with the skipped call's frame time handed to the next run,
 `PacedStepTable` in `psp_paced_step.h`, because those updates time their spawns with the frame
 time but move every particle by a fixed step per call; so the weather still moves every

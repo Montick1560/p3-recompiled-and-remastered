@@ -106,3 +106,39 @@ Message body: who drew the halo outside the scope, its clock, the fix, before/af
 - [ ] **Step 2: Deploy with backup** to `build/e2e_portable` and `build/e2e_portable3` (`game/dxd-1.1.4` <- `rtw`, `game/dxd-1.1.5b` <- `v115b/rtw`, `game/vanilla-eu` <- `vanilla/rtw`), backup first to `build/backup_pre_reward_2026-10-22/<portable>/<variant>/`. If an exe is in use the user is playing: skip that copy and say so. `cmp` each deployed exe with its build.
 - [ ] **Step 3: Hand-off** in Spanish: qué pasaba, qué cambió, tabla antes/después, cómo probarlo (Campos de prueba, primera misión, CHAKA CHAKA, abrir el cofre), flag A/B, desplegado + backup, "nada subido; va en push-p3-31 tras tu OK".
 - [ ] **Step 4: Memory.** Update `p3-60fps.md` and its `MEMORY.md` line (local commit hash, not pushed, next push branch `push-p3-31`).
+
+---
+
+## Evidence (22 Oct 2026, executed)
+
+- **Task 1 (branch B).** The `[HT]` baked-draw trace was inconclusive (its 128-model table filled during the tour,
+  before the chest room). Found instead: the main list CALLs consecutive frame lists of one baked motion (0x140
+  apart), so socket `H` on that CALL word + the host backtrace gave the chain `FUN_0883DC8C <- FUN_0887A814 <-
+  ovTitle FUN_08B4D1A8 <- ovTitle FUN_08B4CB28 <- FUN_08B4A3F0 <- FUN_08B47320 ...` (mission overlay id 3, bank
+  ovTitle; same first code words in DxD 1.1.4, 1.1.5b and vanilla). `FUN_08B4CB28(object, matrix)` draws two
+  motion-player blocks of the reward object, +0x10 (item: model +0x70, clock +0x78) and +0x90 (halo: model +0xF0,
+  clock +0xF8, motion 2, 31 frame lists, end 30, loop), at `(int)clock` through `FUN_08B4D1A8` -> model vtable
+  +0x3C. `object+0x68` is not a clock. Halo clock: +0.25/vblank at 60 fps, +0.5/frame at 30, loop 2.0 s both,
+  pulse 0.666 s (60) / 0.668 s (30): speed already right. Notes: build/chest60/notes.md.
+- **Task 2.** `reward_scope` on the overlay address (resolve per call + code-word check, factored into
+  `runtime/include/psp_code_match.h` with `code_match_tests`); the scope's own clock is 0.0 (a whole frame, so nothing
+  else in it blends) and `scope_clock` now reads a per-kind table (`ScopeKind`: model word -> clock word) shared
+  with the worm; `baked_bone_smooth` stays worm-only. A loop-wrap draft was dropped: frame + 1 always exists.
+- Halo core box, 6 s full-res captures at ~58/s, 60 fps + smooth:
+
+  | run | changes/s | held pairs >= 17 ms apart | step_hist rough / held | pulse |
+  |---|---|---|---|---|
+  | before (6e3f021) | 15.0 | 0.57 | 1.94 / 0.77 | 0.666 s |
+  | fix | **46.8** | **0.01** | **1.27 / 0.30** | **0.668 s** |
+  | fix + `_REWARD=0` | 15.0 | — | 2.00 / 0.77 | 0.668 s |
+  | 30 fps, smooth off | 14.8 | 0.56 | 1.98 / 0.78 | 0.668 s |
+  | 30 fps + smooth, fix | 29.8 | 0.00 (>= 34 ms) | 1.71 / 0.54 | 0.667 s |
+
+  Ruling on Step 4's ">= 50 changes/s, p50 <= 20 ms": not reachable at this capture rate (later captures come
+  ~11 ms apart, two grabs per vblank, which caps changes/s at ~47 of 58); among captures at least one vblank apart
+  only 1 % repeat (57 % before), i.e. the halo changes every vblank. Speed within 0.3 % of 30 fps.
+- Review Focus: 1. 30-frame burst from X (0.79 s): lid opens, item rises, halo grows, nothing detached; discs, rays
+  and beam move together. 2. Only the wooden chest was seen (twice: "Alas de Hielo", "Arco de Fuego"); silver/gold
+  chests and rare items not checked. 3./4. Full 60 fps tour with and without `_REWARD=0`: 32/32 both; Arena route at
+  60 fps: talk ends, clock runs 4:26 -> 4:21, drum HUD. 5. 30 fps + smooth: halo changes every game frame.
+- Gates: ctest 97/97; 30 fps tour `build/tour/reward30` vs `baked30`: RT_REGRESS PASS (21 gated).

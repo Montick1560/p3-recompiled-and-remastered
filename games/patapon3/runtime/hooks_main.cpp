@@ -27,6 +27,7 @@
 #include "p3_prompts.h"
 #include "psp_achievements_run.h"
 #include "psp_anim_blend.h"
+#include "psp_code_match.h"
 #include "psp_game_module.h"
 #include "psp_ge_list_blend.h"
 #include "psp_half_ahead.h"
@@ -445,28 +446,50 @@ struct ScopeMotions {
 };
 thread_local ScopeMotions g_scope_motions = {};
 
-// The overlay motion player of the current scope (overlay_motion_scope below), whose other
-// clocks apply to some of its models; 0 in a main player's scope.
-thread_local uint32_t g_scope_player = 0;
+// A baked model that the object of the current scope draws at its own clock: the words holding
+// the model and its clock (float frames), relative to the object. Any other model of the scope is
+// drawn at the scope's clock.
+struct ScopeClock {
+    uint32_t model, clock;
+};
+struct ScopeKind {
+    const ScopeClock* clocks;
+    size_t n;
+};
 
-// Runs `orig` (a0 = a motion player) inside a smooth scope on the player's clock (+0x68).
-void smooth_scope_call(uint8_t* rdram, recomp_context* ctx, FuncPtr orig, uint32_t overlay_player = 0) {
-    const uint32_t clock = rd32(rdram, static_cast<uint32_t>(ctx->r[4]) + 0x68);
-    float t;
-    std::memcpy(&t, &clock, 4);
+// The object of the current overlay scope (overlay_motion_scope, reward_scope below) and the
+// clocks of its models; 0 / nullptr in a main player's scope.
+thread_local uint32_t g_scope_player = 0;
+thread_local const ScopeKind* g_scope_kind = nullptr;
+
+// Runs `orig` inside a smooth scope on clock `t`, for `object`'s models listed in `kind`.
+void smooth_scope_run(uint8_t* rdram, recomp_context* ctx, FuncPtr orig, float t, uint32_t object,
+                      const ScopeKind* kind) {
     const bool outer = g_smooth_scope;
     const float outer_time = g_smooth_time;
     const ScopeMotions outer_motions = g_scope_motions;
     const uint32_t outer_player = g_scope_player;
+    const ScopeKind* outer_kind = g_scope_kind;
     g_smooth_scope = true;
     g_smooth_time = t;
     g_scope_motions.n = 0;
-    g_scope_player = overlay_player;
+    g_scope_player = object;
+    g_scope_kind = kind;
     orig(rdram, ctx);
     g_smooth_scope = outer;
     g_smooth_time = outer_time;
     g_scope_motions = outer_motions;
     g_scope_player = outer_player;
+    g_scope_kind = outer_kind;
+}
+
+// Runs `orig` (a0 = a motion player) inside a smooth scope on the player's clock (+0x68).
+void smooth_scope_call(uint8_t* rdram, recomp_context* ctx, FuncPtr orig, uint32_t overlay_player = 0,
+                       const ScopeKind* kind = nullptr) {
+    const uint32_t clock = rd32(rdram, static_cast<uint32_t>(ctx->r[4]) + 0x68);
+    float t;
+    std::memcpy(&t, &clock, 4);
+    smooth_scope_run(rdram, ctx, orig, t, overlay_player, kind);
 }
 
 template <FuncPtr* Orig>
@@ -489,31 +512,58 @@ void motion_scope(uint8_t* rdram, recomp_context* ctx) {
 constexpr uint32_t kOverlayMotionDraw = 0x08B72338u;
 constexpr uint32_t kOverlayMotionDrawCode[] = {0x27BDFF90u, 0xAFBF001Cu, 0xAFB10018u, 0xAFB00014u,
                                                0xE7B50010u, 0xE7B4000Cu, 0xC4800068u};
+constexpr ScopeClock kWormClocks[] = {{0x98, 0xA8}, {0x90, 0xA0}, {0x94, 0xA0}};
+constexpr ScopeKind kWormScope = {kWormClocks, sizeof kWormClocks / sizeof kWormClocks[0]};
 
 void overlay_motion_scope(uint8_t* rdram, recomp_context* ctx) {
     const FuncPtr orig = psp_on_lookup_miss(kOverlayMotionDraw);  // what the call resolves to unhooked
-    bool same = true;
-    for (size_t i = 0; i < sizeof kOverlayMotionDrawCode / sizeof kOverlayMotionDrawCode[0]; i++)
-        same &= rd32(rdram, kOverlayMotionDraw + 4 * static_cast<uint32_t>(i)) == kOverlayMotionDrawCode[i];
-    if (same) {
-        smooth_scope_call(rdram, ctx, orig, static_cast<uint32_t>(ctx->r[4]));
+    if (psp_code_matches(rdram, kOverlayMotionDraw, kOverlayMotionDrawCode,
+                         sizeof kOverlayMotionDrawCode / sizeof kOverlayMotionDrawCode[0])) {
+        smooth_scope_call(rdram, ctx, orig, static_cast<uint32_t>(ctx->r[4]), &kWormScope);
     } else {
         orig(rdram, ctx);
     }
 }
 
-// The clock a baked model of the current scope is drawn at (see overlay_motion_scope).
+// The reward that comes out of a chest in the chest room (after a mission) and its glowing halo
+// are drawn by the mission overlay too (id 3, bank ovTitle in all three variants):
+// FUN_08B4CB28(object, matrix) draws two motion-player blocks of the object, +0x10 (the item:
+// model +0x70, clock +0x78, motion +0x88) and +0x90 (the halo: model +0xF0, clock +0xF8, motion
+// +0x108, a loop of 31 frame lists whose clock wraps from 29.75 to 0), each through
+// FUN_08B4D1A8(model, matrix, motion, (int)clock), which calls the model's draw (FUN_0887A814
+// for these baked models). Nothing opened a scope around
+// it, so at 60 fps the halo, whose clock moves 0.25 frame per vblank, showed each frame for 4
+// vblanks (15 changes/s), at the right speed. The hook opens a scope whose own clock is a whole
+// frame (nothing else in it blends) and gives the two models their clocks. Same overlay-window
+// check as the worm.
+constexpr uint32_t kRewardDraw = 0x08B4CB28u;
+constexpr uint32_t kRewardDrawCode[] = {0x27BDFF90u, 0xAFBF001Cu, 0xAFB10018u, 0xAFB00014u,
+                                        0xE7B4000Cu, 0x00A08821u, 0x8C8501A4u};
+constexpr ScopeClock kRewardClocks[] = {{0x70, 0x78}, {0xF0, 0xF8}};
+constexpr ScopeKind kRewardScope = {kRewardClocks, sizeof kRewardClocks / sizeof kRewardClocks[0]};
+
+void reward_scope(uint8_t* rdram, recomp_context* ctx) {
+    const FuncPtr orig = psp_on_lookup_miss(kRewardDraw);
+    if (psp_code_matches(rdram, kRewardDraw, kRewardDrawCode, sizeof kRewardDrawCode / sizeof kRewardDrawCode[0])) {
+        smooth_scope_run(rdram, ctx, orig, 0.0f, static_cast<uint32_t>(ctx->r[4]), &kRewardScope);
+    } else {
+        orig(rdram, ctx);
+    }
+}
+
+// The clock a baked model of the current scope is drawn at (see ScopeClock).
 float scope_clock(uint8_t* rdram, uint32_t model) {
     const uint32_t p = g_scope_player;
-    if (p == 0 || model == 0) return g_smooth_time;
-    uint32_t off = 0;
-    if (model == rd32(rdram, p + 0x90) || model == rd32(rdram, p + 0x94)) off = 0xA0;
-    if (model == rd32(rdram, p + 0x98)) off = 0xA8;
-    if (off == 0) return g_smooth_time;
-    const uint32_t bits = rd32(rdram, p + off);
-    float t;
-    std::memcpy(&t, &bits, 4);
-    return t;
+    if (p == 0 || model == 0 || g_scope_kind == nullptr) return g_smooth_time;
+    for (size_t i = 0; i < g_scope_kind->n; i++) {
+        const ScopeClock& c = g_scope_kind->clocks[i];
+        if (model != rd32(rdram, p + c.model)) continue;
+        const uint32_t bits = rd32(rdram, p + c.clock);
+        float t;
+        std::memcpy(&t, &bits, 4);
+        return t;
+    }
+    return g_smooth_time;
 }
 
 // The bone the overlay player hangs +0x98 on: the baked bone getter FUN_0887A988 (a0 = model
@@ -527,7 +577,8 @@ void baked_bone_smooth(uint8_t* rdram, recomp_context* ctx) {
     const uint32_t model = static_cast<uint32_t>(ctx->r[4]);
     const int32_t frame = static_cast<int32_t>(ctx->r[8]);
     const float alpha = g_smooth_time - static_cast<float>(psp_f2i(g_smooth_time));
-    if (p == 0 || model == 0 || model != rd32(rdram, p + 0x80) || frame != psp_f2i(g_smooth_time) ||
+    if (p == 0 || g_scope_kind != &kWormScope || model == 0 || model != rd32(rdram, p + 0x80) ||
+        frame != psp_f2i(g_smooth_time) ||
         !(alpha > 0.0f && alpha < 1.0f)) {
         g_baked_bone(rdram, ctx);
         return;
@@ -981,6 +1032,11 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
             g_baked_bone = RECOMP_LOOKUP(kBakedBone);
             psp_dispatch_register(kBakedBone, baked_bone_smooth);
             std::fprintf(stderr, "[P3] smooth animation: FEVER worm motion blended too\n");
+        }
+        const char* reward = std::getenv("PSPRECOMP_P3_ANIM_SMOOTH_REWARD");
+        if (!(reward && reward[0] == '0')) {
+            psp_dispatch_register(kRewardDraw, reward_scope);
+            std::fprintf(stderr, "[P3] smooth animation: reward halo blended too\n");
         }
         const char* diag = std::getenv("PSPRECOMP_P3_ANIM_SMOOTH_DIAG");
         g_diag_interp = diag && std::strcmp(diag, "interp") == 0;
