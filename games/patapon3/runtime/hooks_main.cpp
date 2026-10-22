@@ -28,6 +28,7 @@
 #include "psp_achievements_run.h"
 #include "psp_anim_blend.h"
 #include "psp_game_module.h"
+#include "psp_ge_list_blend.h"
 #include "psp_half_ahead.h"
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_intr.h"
@@ -717,6 +718,85 @@ void bone_smooth(uint8_t* rdram, recomp_context* ctx) {
     std::memcpy(rdram + (out & 0x07FFFFFFu), m0, sizeof m0);
 }
 
+// Smooth baked frames (same switch as above). A baked model (vtable 0x08A82BB0) also draws its
+// own parts, the Patapons' body and eye among them, from one GE list recorded per animation
+// frame: its draw FUN_0887A814 (a0 = model, a1 = motion, a2 = whole frame) gets the list with
+// FUN_08858CC8(FUN_08858CA0(model +4), motion, frame) and calls it through FUN_0883DC8C (BASE +
+// CALL into the current list). Each part is "texture scale/offset, material alpha, world matrix
+// (0x3A + 12 x 0x3B), BASE + CALL its geometry", then RET, so at 60 fps the body and eye stepped
+// every second or third vblank while the parts hung on bones (bone_smooth) moved every vblank.
+// The draw runs inside the player's draw scope, so the real clock is known: when it lies between
+// the drawn frame and the next one, the two frames' lists are blended (psp_ge_list_blend.h:
+// matrices and alpha; texture offsets stay, they flip atlas cells) into a ring of guest memory
+// and that copy is called instead. The geometry calls carry their own BASE, so the copy runs
+// anywhere; the GE reads it before the ring comes round (~60 frames of draws).
+constexpr uint32_t kBakedDraw = 0x0887A814u;
+constexpr uint32_t kBakedData = 0x08858CA0u;
+constexpr uint32_t kBakedFrameList = 0x08858CC8u;
+constexpr uint32_t kListCall = 0x0883DC8Cu;
+// Unused guest RAM above the 64 MB user space (masks to 0x07000000 of the 128 MB rdram; the GE
+// resolves BASE + CALL up to 0x0FFFFFFF).
+constexpr uint32_t kBakedRing = 0x0F000000u, kBakedRingSize = 0x00100000u;
+constexpr size_t kBakedMaxWords = 1024;
+FuncPtr g_baked_draw = nullptr;
+FuncPtr g_list_call = nullptr;
+uint32_t g_baked_ring_pos = 0;
+thread_local uint32_t g_list_from = 0, g_list_to = 0;
+
+uint32_t baked_frame_list(uint8_t* rdram, const recomp_context* base, uint32_t model, uint32_t motion, int32_t frame) {
+    recomp_context c = *base;
+    c.r[4] = static_cast<int32_t>(rd32(rdram, model + 4));
+    RECOMP_LOOKUP(kBakedData)(rdram, &c);
+    if (c.r[2] == 0) return 0;
+    c.r[4] = c.r[2];
+    c.r[5] = static_cast<int32_t>(motion);
+    c.r[6] = frame;
+    RECOMP_LOOKUP(kBakedFrameList)(rdram, &c);
+    return static_cast<uint32_t>(c.r[2]);
+}
+
+void list_call_smooth(uint8_t* rdram, recomp_context* ctx) {
+    if (g_list_from != 0 && static_cast<uint32_t>(ctx->r[4]) == g_list_from) ctx->r[4] = static_cast<int32_t>(g_list_to);
+    g_list_call(rdram, ctx);
+}
+
+void baked_draw_smooth(uint8_t* rdram, recomp_context* ctx) {
+    const uint32_t model = static_cast<uint32_t>(ctx->r[4]), motion = static_cast<uint32_t>(ctx->r[5]);
+    const int32_t frame = static_cast<int32_t>(ctx->r[6]);
+    const float alpha = g_smooth_time - static_cast<float>(psp_f2i(g_smooth_time));
+    if (!g_smooth_scope || model == 0 || frame != psp_f2i(g_smooth_time) || !(alpha > 0.0f && alpha < 1.0f)) {
+        g_baked_draw(rdram, ctx);
+        return;
+    }
+    const uint32_t la = baked_frame_list(rdram, ctx, model, motion, frame);
+    const uint32_t lb = la ? baked_frame_list(rdram, ctx, model, motion, frame + 1) : 0;
+    if (la == 0 || lb == 0 || la == lb) {
+        g_baked_draw(rdram, ctx);
+        return;
+    }
+    uint32_t a[kBakedMaxWords], b[kBakedMaxWords], out[kBakedMaxWords];
+    for (size_t i = 0; i < kBakedMaxWords; i++) {
+        a[i] = rd32(rdram, la + 4 * static_cast<uint32_t>(i));
+        b[i] = rd32(rdram, lb + 4 * static_cast<uint32_t>(i));
+        if (a[i] >> 24 == 0x0B) break;
+    }
+    const size_t n = psp_ge_blend_lists(a, b, kBakedMaxWords, alpha, out);
+    if (n == 0) {
+        g_baked_draw(rdram, ctx);
+        return;
+    }
+    if (g_baked_ring_pos + n * 4 > kBakedRingSize) g_baked_ring_pos = 0;
+    const uint32_t copy = kBakedRing + g_baked_ring_pos;
+    g_baked_ring_pos += static_cast<uint32_t>((n * 4 + 15) & ~size_t{15});
+    std::memcpy(rdram + (copy & 0x07FFFFFFu), out, n * 4);
+    const uint32_t outer_from = g_list_from, outer_to = g_list_to;
+    g_list_from = la;
+    g_list_to = copy;
+    g_baked_draw(rdram, ctx);
+    g_list_from = outer_from;
+    g_list_to = outer_to;
+}
+
 // PSPRECOMP_P3_WEATHER_TRACE=1 (diagnostic, 60 fps weather work): the mission script's weather
 // commands (setWindDirection / setWindLevel / setRainLevel / ...) store a target in a weather
 // object through eight setters, FUN_088FDD50..FUN_088FDDDC: each ORs one bit into +48 and stores
@@ -790,6 +870,14 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
         g_bone_named = RECOMP_LOOKUP(kBoneNamed);
         psp_dispatch_register(kBoneAt, bone_smooth<&g_bone_at>);
         psp_dispatch_register(kBoneNamed, bone_smooth<&g_bone_named>);
+        const char* baked = std::getenv("PSPRECOMP_P3_ANIM_SMOOTH_BAKED");
+        if (!(baked && baked[0] == '0')) {
+            g_baked_draw = RECOMP_LOOKUP(kBakedDraw);
+            g_list_call = RECOMP_LOOKUP(kListCall);
+            psp_dispatch_register(kBakedDraw, baked_draw_smooth);
+            psp_dispatch_register(kListCall, list_call_smooth);
+            std::fprintf(stderr, "[P3] smooth animation: baked frame lists blended too (Patapon bodies and eyes)\n");
+        }
         const char* diag = std::getenv("PSPRECOMP_P3_ANIM_SMOOTH_DIAG");
         g_diag_interp = diag && std::strcmp(diag, "interp") == 0;
         if (g_diag_interp) std::fprintf(stderr, "[P3] smooth animation diag: interpolate-flag path\n");

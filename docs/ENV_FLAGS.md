@@ -764,6 +764,21 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   `[P3] smooth animation: alpha blended too (halo, Hero Gate sparkles)`.
 - **Set it when:** `0` to compare against the stepped fades (A/B).
 
+### `PSPRECOMP_P3_ANIM_SMOOTH_BAKED`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`0` off; anything else or unset = on).
+- **Default:** on with `PSPRECOMP_P3_ANIM_SMOOTH`.
+- **Effect:** Baked models (vtable `0x08A82BB0`) draw their own parts (the Patapons'
+  body and eye) from one GE list recorded per animation frame (`0x0887A814` ->
+  `0x08858CC8` -> called through `0x0883DC8C`). Inside a player's draw, when the clock
+  lies between the drawn frame and the next, the two frames' lists are blended
+  (`runtime/include/psp_ge_list_blend.h`: world/bone matrix data and material alpha;
+  texture offsets stay, they flip atlas cells) into a 1 MB ring at guest `0x0F000000`
+  and that copy is called instead. Without it the Patapons' bodies and eyes stepped at
+  the key rate (~every second vblank at 60 fps) while their equipment moved every vblank.
+  Install prints `[P3] smooth animation: baked frame lists blended too (Patapon bodies and eyes)`.
+- **Set it when:** `0` to compare against the stepped bodies (A/B).
+
 ### `PSPRECOMP_P3_WEATHER_30HZ`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
 - **Type:** env (`0` off; anything else or unset = on).
