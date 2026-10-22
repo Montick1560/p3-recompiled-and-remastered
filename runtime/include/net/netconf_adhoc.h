@@ -4,7 +4,10 @@
 // dialog finishes once adhocctl reports CONNECTED. There is no on-screen
 // dialog in the port, so where PPSSPP waits for the player to press cancel
 // after its 15 s timeout, this finishes with ABORT by itself.
-// Infrastructure actions are not supported and finish with ABORT.
+// Infrastructure actions connect to the infrastructure-mode server
+// (net/infra_client.h) and finish with success once that attempt is over; a
+// failed connection is reported later by the game's own Matching2 messages.
+// With PSPRECOMP_INFRA_SERVER=off they finish with ABORT, as before.
 #include <cstdint>
 #include <string>
 
@@ -24,7 +27,7 @@ constexpr int kResultAbort = 2;
 constexpr int64_t kConnectTimeoutMs = 15000;  // NET_CONNECT_TIMEOUT
 constexpr int64_t kRescanMs = 500;
 
-enum class Command { None, Create, Connect, Scan, Join };
+enum class Command { None, Create, Connect, Scan, Join, InfraConnect };
 
 struct Input {
     int action = CONNECT_ADHOC;
@@ -34,7 +37,8 @@ struct Input {
     bool group_seen = false;      // JOIN: last scan listed the group
     int64_t elapsed_ms = 0;       // since the dialog started running
     int64_t since_scan_ms = 1 << 30;
-    bool infra_ok = false;        // recon: report infrastructure actions as connected
+    bool infra_ok = false;        // infrastructure server configured
+    bool infra_pending = false;   // connection to it in progress
 };
 
 struct Step {

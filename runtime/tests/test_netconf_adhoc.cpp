@@ -42,13 +42,34 @@ static void netconf_times_out() {
     CHECK(netconf::step(in).command == Command::None, "no group data: nothing to request");
 }
 
-static void infra_rejected() {
+static void infra_action_aborts_without_infra() {
     for (int a : {int(netconf::CONNECT_APNET), int(netconf::STATUS_APNET), int(netconf::CONNECT_APNET_LAST), 9}) {
         netconf::Input in;
         in.action = a;
         auto s = netconf::step(in);
-        CHECK(s.finished && s.result == netconf::kResultAbort, "infrastructure/unknown actions abort");
+        CHECK(s.finished && s.result == netconf::kResultAbort, "infrastructure off/unknown actions abort");
     }
+    netconf::Input in;
+    in.action = 9;
+    in.infra_ok = true;
+    CHECK(netconf::step(in).finished && netconf::step(in).result == netconf::kResultAbort, "unknown action aborts");
+}
+
+static void infra_action_ok_when_infra_ok() {
+    netconf::Input in;
+    in.action = netconf::CONNECT_APNET;
+    in.infra_ok = true;
+    auto s = netconf::step(in);
+    CHECK(!s.finished && s.command == Command::InfraConnect, "infrastructure: connect to the server first");
+    in.requested = true;
+    in.infra_pending = true;
+    s = netconf::step(in);
+    CHECK(!s.finished && s.command == Command::None, "waits while connecting");
+    in.infra_pending = false;
+    s = netconf::step(in);
+    CHECK(s.finished && s.result == netconf::kResultSuccess, "then finishes with success");
+    in.action = netconf::CONNECT_APNET_LAST;
+    CHECK(netconf::step(in).finished && netconf::step(in).result == netconf::kResultSuccess, "CONNECT_APNET_LAST too");
 }
 
 static void join_scans_until_group_seen() {
@@ -69,7 +90,8 @@ static void join_scans_until_group_seen() {
 int main() {
     connects();
     netconf_times_out();
-    infra_rejected();
+    infra_action_aborts_without_infra();
+    infra_action_ok_when_infra_ok();
     join_scans_until_group_seen();
     if (failures) {
         std::printf("%d failure(s)\n", failures);

@@ -6,7 +6,9 @@
 #include "psp_audio_out.h"
 #include "psp_osk_session.h"
 #include "net/adhocctl.h"
+#include "net/infra_client.h"
 #include "net/netconf_adhoc.h"
+#include "hle/psp_hle_np.h"
 #include "psp_event_loop.h"
 #include "psp_audio_volume.h"
 #include "psp_memory.h"
@@ -1756,7 +1758,8 @@ static void hle_sceUtilityNetconfGetStatus(
         const std::string group = netconf_group(rdram, p, &in.have_group);
         in.adhocctl_state = ac.state();
         in.requested = g_netconf.requested;
-        in.infra_ok = std::getenv("PSPRECOMP_INFRA_RECON") != nullptr;
+        in.infra_ok = infra::client().configured();
+        in.infra_pending = psp_infra_connecting();
         in.elapsed_ms = ms(now - g_netconf.start);
         in.since_scan_ms = g_netconf.last_scan == std::chrono::steady_clock::time_point{}
                                ? (int64_t)1 << 30 : ms(now - g_netconf.last_scan);
@@ -1774,6 +1777,10 @@ static void hle_sceUtilityNetconfGetStatus(
             case netconf::Command::Scan:
                 ac.scan();
                 g_netconf.last_scan = now;
+                break;
+            case netconf::Command::InfraConnect:
+                psp_infra_connect_async();
+                g_netconf.requested = true;
                 break;
             case netconf::Command::None: break;
         }

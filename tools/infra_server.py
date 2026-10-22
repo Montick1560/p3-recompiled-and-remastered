@@ -135,7 +135,6 @@ class Member:
         self.member_id = member_id
         self.join_ms = int(time.time() * 1000)
         self.bins = bins
-        self.announced = False  # signaling ESTABLISHED sent to the older members
 
     def json(self):
         c = self.conn
@@ -154,6 +153,10 @@ class Room:
         self.bins_internal = bins_internal
         self.members = []           # join order, owner first
         self.next_member_id = FIRST_MEMBER_ID
+        # Signaling between two members: (to, about) waits until `about` has bound its game
+        # socket (then ESTABLISHED to `to`) or its deadline passes (then DEAD).
+        self.waiting = {}           # (to Member, about Member) -> deadline
+        self.established = set()    # (to Member, about Member)
 
     def ext(self, attrs=None):
         bins = [[i, b.hex()] for i, b in self.bins.items() if not attrs or i in attrs]
@@ -203,7 +206,8 @@ class Conn:
 
 class Server:
     def __init__(self, host="127.0.0.1", port=27320, ws_port=27321, ws_path="/infra", max_rooms=64,
-                 idle=30.0, stats_every=60.0, delay_ms=0, max_per_addr=4, max_conns=512, logger=log):
+                 idle=30.0, stats_every=60.0, delay_ms=0, max_per_addr=4, max_conns=512, signal_timeout=15.0,
+                 logger=log):
         self.log = logger
         self.listeners = {}
         for p, kind in ((port, "tcp"), (ws_port, "ws")):
@@ -231,6 +235,7 @@ class Server:
         self.delay = delay_ms / 1000.0
         self.max_per_addr = max_per_addr
         self.max_conns = max_conns
+        self.signal_timeout = signal_timeout
         self.sel = selectors.DefaultSelector()
         for ls in self.listeners:
             self.sel.register(ls, selectors.EVENT_READ)
@@ -238,7 +243,8 @@ class Server:
         self.per_addr = {}      # addr key -> live connections
         self.by_vip = {}        # vip -> Conn
         self.rooms = {}         # room id -> Room
-        self.next_room_id = 1
+        # Ids from the start time, so a room list cached by a game across a restart cannot name a new room.
+        self.next_room_id = (int(time.time() * 1000) & 0xFFFFFFFFFF) << 8
         self.delayed = []       # heap of (due, seq, conn, frame bytes)
         self.seq = 0
         self.running = True
@@ -542,7 +548,7 @@ class Server:
         conn.port = port
         self.log("%s bound game port %d" % (conn.label(), port))
         if conn.room is not None:
-            self.announce(conn.room, conn.room.member_of(conn))
+            self.resolve(conn.room)
         return {}
 
     def match(self, room, filters):
@@ -593,7 +599,6 @@ class Server:
         member_bins = bin_attrs(msg.get("member_bins", []))
         self.next_room_id += 1
         owner = Member(conn, room.next_member_id, member_bins)
-        owner.announced = True
         room.next_member_id += 1
         room.owner = owner
         room.members.append(owner)
@@ -621,32 +626,34 @@ class Server:
                                                          len(room.members), room.max_slot))
         answer = {"id": msg.get("id"), "ok": True, "room": room.internal(member)}
         self.send_json(conn, answer)
+        deadline = time.monotonic() + self.signal_timeout
         for m in olds:
             self.send_json(m.conn, {"ev": "member_joined", "room_id": room.id, "member": member.json(),
                                     "opt": opt.hex()})
-            if m.conn.port:
-                self.signal(conn, room, m, SIG_ESTABLISHED)
-        self.announce(room, member)
+            room.waiting[(member, m)] = deadline
+            room.waiting[(m, member)] = deadline
+        self.resolve(room)
         return None
 
     def signal(self, to, room, about, event):
         self.send_json(to, {"ev": "signaling", "room_id": room.id, "member_id": about.member_id,
                             "event": event, "vip": about.conn.vip, "port": about.conn.port})
 
-    def announce(self, room, member):
-        """Signaling ESTABLISHED to the older members once the newcomer's game socket is bound."""
-        if member is None or member.announced or not member.conn.port:
-            return
-        member.announced = True
-        for m in room.members:
-            if m is not member:
-                self.signal(m.conn, room, member, SIG_ESTABLISHED)
+    def resolve(self, room):
+        """ESTABLISHED for every waiting pair whose `about` member has bound its game socket."""
+        for to, about in list(room.waiting):
+            if about.conn.port and room.waiting.pop((to, about), None) is not None:
+                room.established.add((to, about))
+                self.signal(to.conn, room, about, SIG_ESTABLISHED)
 
     def leave_room(self, conn, cause, opt):
         room = conn.room
         conn.room = None
         member = room.member_of(conn)
         room.members.remove(member)
+        told = {to for to, about in room.established if about is member}
+        room.waiting = {k: v for k, v in room.waiting.items() if member not in k}
+        room.established = {k for k in room.established if member not in k}
         if member is room.owner:
             del self.rooms[room.id]
             for m in room.members:
@@ -659,7 +666,7 @@ class Server:
         for m in room.members:
             self.send_json(m.conn, {"ev": "member_left", "room_id": room.id, "member": member.json(),
                                     "cause": cause, "opt": opt.hex()})
-            if member.announced:
+            if m in told:
                 self.signal(m.conn, room, member, SIG_DEAD)
         self.log("%s left room %d (cause %d, %d left)" % (conn.label(), room.id, cause, len(room.members)))
 
@@ -694,6 +701,11 @@ class Server:
 
     # ---- loop ----
     def tick(self, now):
+        for room in list(self.rooms.values()):
+            for (to, about), deadline in list(room.waiting.items()):
+                if deadline <= now and room.waiting.pop((to, about), None) is not None:
+                    self.log("%s: no game socket from %s, signaling DEAD" % (to.conn.label(), about.conn.label()))
+                    self.signal(to.conn, room, about, SIG_DEAD)
         while self.delayed and self.delayed[0][0] <= now:
             _, _, conn, data = heapq.heappop(self.delayed)
             self.send_frame(conn, data)
@@ -1018,6 +1030,26 @@ def selftest():
     p.close()
     srv.running = False
     th.join(timeout=2)
+
+    # ---- members whose game socket never binds get SIGNALING_DEAD, not an endless wait ----
+    srv = Server("127.0.0.1", 0, None, signal_timeout=0.5, logger=quiet)
+    th = run(srv)
+    p, q = TestClient(srv.port), TestClient(srv.port)
+    p.ok("login", online_id="HOST2")
+    q.ok("login", online_id="JOIN2")
+    r3 = p.ok("create", max_slot=4)["room"]
+    assert len({room["id"], r["id"], r3["id"]}) == 3, "room ids differ across server restarts"
+    q.ok("join", room_id=r3["id"])
+    dead_q = q.event(lambda x: x["ev"] == "signaling", what="joiner: signaling about the host")
+    dead_p = p.event(lambda x: x["ev"] == "signaling", what="host: signaling about the joiner")
+    assert dead_q["event"] == SIG_DEAD and dead_q["member_id"] == 0x10, dead_q
+    assert dead_p["event"] == SIG_DEAD and dead_p["member_id"] == 0x11, dead_p
+    p.ok("bound", port=5000)
+    assert not any(x["ev"] == "signaling" for x in q.events) and not q.pump(0.3), "no late ESTABLISHED"
+    p.close()
+    q.close()
+    srv.running = False
+    th.join(timeout=2)
     print("selftest OK")
 
 
@@ -1032,12 +1064,14 @@ def main():
     ap.add_argument("--stats-every", type=float, default=60.0)
     ap.add_argument("--delay-ms", type=int, default=0, help="extra latency on datagrams and pings (tests)")
     ap.add_argument("--max-per-addr", type=int, default=4)
+    ap.add_argument("--signal-timeout", type=float, default=15.0,
+                    help="seconds a member may take to bind its game socket before its peers get SIGNALING_DEAD")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
         return selftest()
     srv = Server(args.host, args.port, args.ws_port, args.ws_path, args.max_rooms, args.idle, args.stats_every,
-                 args.delay_ms, args.max_per_addr)
+                 args.delay_ms, args.max_per_addr, signal_timeout=args.signal_timeout)
     log("infrastructure server: tcp %s:%d, ws %s:%d%s" % (args.host, srv.port, args.host, srv.ws_port, args.ws_path))
     try:
         srv.serve()

@@ -1,8 +1,8 @@
 // sceNp / sceNpAuth / sceNpService / sceNetApctl imports for the game's
 // infrastructure mode. There is no PSN: sign-in always succeeds and the auth
 // ticket is a local dummy, after PPSSPP Core/HLE/sceNp.cpp and sceNet.cpp
-// (GPL-2.0-or-later). RECON: only reached with PSPRECOMP_INFRA_RECON set,
-// since the netconf dialog aborts infrastructure actions otherwise.
+// (GPL-2.0-or-later). Reached once the player picks "Modo Infraestructura"
+// and the netconf dialog connected to the infrastructure server.
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_np.h"
 #include "psp_memory.h"
@@ -13,8 +13,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cctype>
 #include <cstring>
 #include <string>
+
+#include "net/infra_client.h"
 
 static constexpr uint32_t kAddrMask = 0x07FFFFFFU;
 static constexpr uint32_t kNullPage = 0x00010000U;
@@ -30,12 +33,17 @@ static void log_call(const char* name, const recomp_context* ctx) {
                  (uint32_t)ctx->r[8], (uint32_t)ctx->r[9], (uint32_t)ctx->r[31]);
 }
 
-static std::string online_id() {
+std::string psp_np_online_id() {
     const char* n = std::getenv("PSPRECOMP_ADHOC_NICK");
     std::string s = n && *n ? n : "Patapon";
     if (s.size() > 16) s.resize(16);
+    for (char& c : s)
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '-') c = '_';
+    while (s.size() < 3) s.push_back('_');
     return s;
 }
+
+static std::string online_id() { return psp_np_online_id(); }
 
 static void write_str(uint8_t* rdram, uint32_t addr, const std::string& s, uint32_t field) {
     std::memset(rdram + (addr & kAddrMask), 0, field);
@@ -73,7 +81,14 @@ static void hle_sceNetApctlGetInfo(uint8_t* rdram, recomp_context* ctx) {
     case 5: ok = u8v(99); break;                                     // STRENGTH
     case 6: ok = u8v(6); break;                                      // CHANNEL
     case 7: ok = u8v(0); break;                                      // POWER_SAVE
-    case 8: ok = str("192.168.1.2", 16); break;                      // IP
+    case 8: {                                                        // IP: the virtual one on the server
+        const uint32_t v = infra::client().vip();
+        char ip[16] = "192.168.1.2";
+        if (infra::client().connected() && v)
+            std::snprintf(ip, sizeof(ip), "%u.%u.%u.%u", v >> 24, (v >> 16) & 255, (v >> 8) & 255, v & 255);
+        ok = str(ip, 16);
+        break;
+    }
     case 9: ok = str("255.255.255.0", 16); break;                    // SUBNETMASK
     case 10: ok = str("192.168.1.1", 16); break;                     // GATEWAY
     case 11: ok = str("192.168.1.1", 16); break;                     // PRIMDNS

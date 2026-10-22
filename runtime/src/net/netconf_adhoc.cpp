@@ -11,8 +11,15 @@ Step step(const Input& in) {
     Step s;
     const bool adhoc = in.action == CONNECT_ADHOC || in.action == CREATE_ADHOC || in.action == JOIN_ADHOC;
     if (!adhoc) {
-        s.finished = true;
-        s.result = in.infra_ok ? kResultSuccess : kResultAbort;
+        const bool infra = in.action == CONNECT_APNET || in.action == STATUS_APNET || in.action == CONNECT_APNET_LAST;
+        if (!infra || !in.infra_ok) {
+            s.finished = true;
+            s.result = kResultAbort;
+        } else if (!in.requested) {
+            s.command = Command::InfraConnect;
+        } else if (!in.infra_pending) {
+            s.finished = true;
+        }
         return s;
     }
     if (in.adhocctl_state == kStateConnected) {
