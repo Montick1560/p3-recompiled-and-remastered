@@ -158,7 +158,9 @@ void weather_step_register() {
 // (cmd add FUN_08837D18), set it (FUN_08911588)" once per run, so at 60 the star floated twice
 // as fast. Each script object runs at most once per two vblanks and a skipped call's frame
 // time goes to its next run (psp_paced_step.h): frame waits and per-run steps keep the 30 fps
-// rate, time waits still count real time. The return value is not used (FUN_0889459c).
+// rate, time waits still count real time. The return value is "keep running": the list update
+// FUN_0889459c clears the object's active byte +1272 when it is 0, so a skipped call returns 1
+// (what FUN_08909C7C itself returns for an object with nothing to run), never a stale v0.
 constexpr uint32_t kScriptUpdate = 0x08909C7Cu;
 FuncPtr g_script_update = nullptr;
 PacedStepTable g_script_paced;
@@ -286,6 +288,7 @@ void script_update_30hz(uint8_t* rdram, recomp_context* ctx) {
     const int64_t vb = psp_vblank_index(psp_display_elapsed_us());
     if (!g_script_paced.step(obj, vb, 2, &dt)) {
         hideout_event("script-skip", obj, vb);
+        ctx->r[2] = 1;
         return;
     }
     hideout_event("script-run", obj, vb);
