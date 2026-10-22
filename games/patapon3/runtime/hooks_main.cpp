@@ -563,15 +563,16 @@ void pose_eval_interp(uint8_t* rdram, recomp_context* ctx) {
 // Per-word blend kinds of one 0x100-byte GMO bone block (FUN_089DB1E0 outputs), from
 // anim_probe.py over six barracks models incl. the Hero (hero-ground plan, Evidence): +0x50
 // translation, +0x60 rotation quaternion, +0x70 scale (vec4 each) are blended; the rest are kept.
-// Two keyed channels that are not transforms are blended too (the hideout's place halo and the
-// Hero Gate's sparkles fade with them, 15 keys/s, and stepped every fourth vblank at 60 fps):
+// One keyed channel that is not a transform is blended too (the hideout's place halo and the
+// Hero Gate's sparkles fade with it, 15 keys/s, and stepped every fourth vblank at 60 fps):
 // channel 0x9C, the bone alpha, which FUN_089DDD88 packs as trunc(alpha * 255) << 24 | 0xFFFFFF
-// into +0x4C, and channel 0x9B, the texture offset u/v at +0xC0/+0xC4 (FUN_089DB1E0 resets them
-// to 0, 0 and the scale +0xC8/+0xCC to 1, 1 before the channels run).
-constexpr uint8_t kBoneKinds[64] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 1, 1, 1, 1, 2, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-// PSPRECOMP_P3_ANIM_SMOOTH_FADE=0 keeps alpha and texture offset on whole frames (A/B).
+// into +0x4C. The texture offset (channel 0x9B, +0xC0/+0xC4) is kept: models flip through
+// atlas cells with it (u 0.125 -> 0.25 -> 0.125, cells 1/8 wide, e.g. the Patapons' eyes), and a
+// blended offset drew half of one cell and half of the next.
+constexpr uint8_t kBoneKinds[64] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 1, 1, 1, 1, 2, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+// PSPRECOMP_P3_ANIM_SMOOTH_FADE=0 keeps alpha on whole frames (A/B).
 uint8_t g_bone_kinds[64] = {};
-constexpr int kBoneAlphaWord = 0x4C / 4, kBoneUvWord = 0xC0 / 4;
+constexpr int kBoneAlphaWord = 0x4C / 4;
 
 // The shipped smooth mode for one GMO evaluation in a player tick/draw scope.
 void pose_eval_blend(uint8_t* rdram, recomp_context* ctx, uint32_t model, uint16_t count, float alpha) {
@@ -797,9 +798,9 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
         std::memcpy(g_bone_kinds, kBoneKinds, sizeof g_bone_kinds);
         const char* fade = std::getenv("PSPRECOMP_P3_ANIM_SMOOTH_FADE");
         if (fade && fade[0] == '0') {
-            g_bone_kinds[kBoneAlphaWord] = g_bone_kinds[kBoneUvWord] = g_bone_kinds[kBoneUvWord + 1] = kBlendKeep;
+            g_bone_kinds[kBoneAlphaWord] = kBlendKeep;
         } else {
-            std::fprintf(stderr, "[P3] smooth animation: alpha and texture offset blended too (halo, Hero Gate sparkles)\n");
+            std::fprintf(stderr, "[P3] smooth animation: alpha blended too (halo, Hero Gate sparkles)\n");
         }
     }
     const char* trace = std::getenv("PSPRECOMP_P3_ANIM_TRACE");

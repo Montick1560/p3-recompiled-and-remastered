@@ -753,14 +753,15 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
 - **Type:** env (`0` off; anything else or unset = on).
 - **Default:** on with `PSPRECOMP_P3_ANIM_SMOOTH`.
-- **Effect:** The smooth-animation blend also covers two keyed bone channels that are
-  not transforms: the bone alpha (channel 0x9C, packed by `0x089DDD88` as
-  `trunc(alpha * 255) << 24 | 0xFFFFFF` at bone +0x4C; the top byte is blended) and the
-  texture offset u/v (channel 0x9B, bone +0xC0/+0xC4; blended unless it jumps by more
-  than half a texture). Without it the hideout's place halo and the Hero Gate's
+- **Effect:** The smooth-animation blend also covers a keyed bone channel that is not a
+  transform: the bone alpha (channel 0x9C, packed by `0x089DDD88` as
+  `trunc(alpha * 255) << 24 | 0xFFFFFF` at bone +0x4C; the top byte is blended). The
+  texture offset (channel 0x9B, +0xC0/+0xC4) stays on whole frames: models flip through
+  atlas cells with it (the Patapons' eyes, u 0.125 -> 0.25), and blending it drew half of
+  one cell and half of the next. Without it the hideout's place halo and the Hero Gate's
   sparkles (motions keyed at 15 frames/s) faded in steps every fourth vblank at 60 fps
   while their scale moved every vblank. Install prints
-  `[P3] smooth animation: alpha and texture offset blended too (halo, Hero Gate sparkles)`.
+  `[P3] smooth animation: alpha blended too (halo, Hero Gate sparkles)`.
 - **Set it when:** `0` to compare against the stepped fades (A/B).
 
 ### `PSPRECOMP_P3_WEATHER_30HZ`
