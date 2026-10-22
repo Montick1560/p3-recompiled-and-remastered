@@ -10,6 +10,9 @@
 
 namespace relay {
 
+// Connects to host:port (up to timeout_ms): a nonblocking TCP_NODELAY socket,
+// or -1. log_tag prefixes the failure lines ("[ADHOC] relay", "[INFRA]").
+int connect_tcp(const std::string& host, uint16_t port, int timeout_ms, const char* log_tag);
 // Connects to host:port (up to timeout_ms) and sends the init packet. A
 // nonblocking socket, or -1.
 int open_session(const std::string& host, uint16_t port, const std::array<uint8_t, kInitSize>& init,

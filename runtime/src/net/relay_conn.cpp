@@ -49,8 +49,7 @@ int wait_fd(int fd, bool write, int ms) {
 
 }  // namespace
 
-int open_session(const std::string& host, uint16_t port, const std::array<uint8_t, kInitSize>& init,
-                 int timeout_ms) {
+int connect_tcp(const std::string& host, uint16_t port, int timeout_ms, const char* log_tag) {
     psp_sock_startup();
     addrinfo hints{};
     hints.ai_family = AF_INET;
@@ -58,7 +57,7 @@ int open_session(const std::string& host, uint16_t port, const std::array<uint8_
     addrinfo* res = nullptr;
     const std::string service = std::to_string(port);
     if (::getaddrinfo(host.c_str(), service.c_str(), &hints, &res) != 0 || res == nullptr) {
-        std::fprintf(stderr, "[ADHOC] relay: cannot resolve %s\n", host.c_str());
+        std::fprintf(stderr, "%s: cannot resolve %s\n", log_tag, host.c_str());
         return -1;
     }
     const int fd = static_cast<int>(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
@@ -73,14 +72,26 @@ int open_session(const std::string& host, uint16_t port, const std::array<uint8_
     const int r = ::connect(fd, res->ai_addr, static_cast<int>(res->ai_addrlen));
     ::freeaddrinfo(res);
     if (r != 0 && !(would_block() && wait_fd(fd, true, timeout_ms) > 0)) {
-        std::fprintf(stderr, "[ADHOC] relay: cannot connect to %s:%u\n", host.c_str(), port);
+        std::fprintf(stderr, "%s: cannot connect to %s:%u\n", log_tag, host.c_str(), port);
         psp_sock_close(fd);
         return -1;
     }
     int err = 0;
     socklen_t len = sizeof(err);
     ::getsockopt(fd, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&err), &len);
-    if (err != 0 || !send_all(fd, init.data(), init.size(), timeout_ms)) {
+    if (err != 0) {
+        std::fprintf(stderr, "%s: connection to %s:%u failed\n", log_tag, host.c_str(), port);
+        psp_sock_close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+int open_session(const std::string& host, uint16_t port, const std::array<uint8_t, kInitSize>& init,
+                 int timeout_ms) {
+    const int fd = connect_tcp(host, port, timeout_ms, "[ADHOC] relay");
+    if (fd < 0) return -1;
+    if (!send_all(fd, init.data(), init.size(), timeout_ms)) {
         std::fprintf(stderr, "[ADHOC] relay: connection to %s:%u failed\n", host.c_str(), port);
         psp_sock_close(fd);
         return -1;

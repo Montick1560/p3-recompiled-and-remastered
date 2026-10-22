@@ -20,6 +20,7 @@ if(WIN32)
     target_include_directories(zlibstatic INTERFACE ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR})
     add_library(ZLIB::ZLIB ALIAS zlibstatic)
     set(PSP_SOCKET_LIBS ws2_32)
+    set(PSP_WINHTTP_LIBS winhttp)  # infrastructure-mode WebSocket transport
 else()
     # Find SDL2 via pkg-config (Homebrew installs pkg-config file)
     find_package(PkgConfig REQUIRED)
@@ -29,6 +30,7 @@ else()
     # Find zlib (system zlib on macOS; pkg-config-discoverable on Linux)
     find_package(ZLIB REQUIRED)
     set(PSP_SOCKET_LIBS)
+    set(PSP_WINHTTP_LIBS)
 endif()
 
 # Find OpenGL
@@ -193,6 +195,7 @@ set(RUNTIME_SOURCES
     src/net/relay_protocol.cpp
     src/net/relay_conn.cpp
     src/net/infra_protocol.cpp
+    src/net/infra_client.cpp
     src/net/pro_client.cpp
     src/net/adhocctl.cpp
     src/net/guest_callbacks.cpp
@@ -429,6 +432,7 @@ target_link_libraries(psprecomp_runtime PRIVATE
     ZLIB::ZLIB
     pthread
     ${PSP_SOCKET_LIBS}
+    ${PSP_WINHTTP_LIBS}
 )
 if(TARGET psp_ffmpeg)
     target_link_libraries(psprecomp_runtime PRIVATE psp_ffmpeg)
@@ -1030,6 +1034,15 @@ target_include_directories(test_infra_protocol PRIVATE ${CMAKE_CURRENT_SOURCE_DI
                            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
 target_compile_options(test_infra_protocol PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME infra_protocol_tests COMMAND test_infra_protocol)
+
+# Infrastructure-mode client against an in-process fake server.
+add_executable(test_infra_client tests/test_infra_client.cpp src/net/infra_client.cpp src/net/infra_protocol.cpp
+               src/net/relay_conn.cpp src/net/relay_protocol.cpp)
+target_include_directories(test_infra_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                           ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
+target_compile_options(test_infra_client PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(test_infra_client PRIVATE pthread ${PSP_SOCKET_LIBS} ${PSP_WINHTTP_LIBS})
+add_test(NAME infra_client_tests COMMAND test_infra_client)
 
 add_executable(test_pro_protocol tests/test_pro_protocol.cpp src/net/pro_protocol.cpp)
 target_include_directories(test_pro_protocol PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
