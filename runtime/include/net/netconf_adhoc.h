@@ -34,6 +34,7 @@ struct Input {
     bool group_seen = false;      // JOIN: last scan listed the group
     int64_t elapsed_ms = 0;       // since the dialog started running
     int64_t since_scan_ms = 1 << 30;
+    bool infra_ok = false;        // recon: report infrastructure actions as connected
 };
 
 struct Step {

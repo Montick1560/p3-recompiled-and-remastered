@@ -1,5 +1,6 @@
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_net.h"
+#include "hle/psp_hle_np.h"
 #include "hle/psp_hle_imports.h"
 #include "psp_cpu.h"
 #include "psp_scheduler.h"
@@ -361,6 +362,16 @@ static int g_unimpl_slot_count = 0;
 static void hle_unimpl_call(int slot, uint8_t* rdram, recomp_context* ctx) {
     (void)rdram;
     HleUnimplSlot& s = g_unimpl_slots[slot];
+    static const bool recon = std::getenv("PSPRECOMP_INFRA_RECON") != nullptr;
+    if (recon && s.logged) {
+        const char* m = s.stub->module_name;
+        if (!std::strncmp(m, "sceNp", 5) || !std::strncmp(m, "sceNet", 6) || !std::strncmp(m, "sceUtility", 10) ||
+            !std::strncmp(m, "sceHttp", 7) || !std::strncmp(m, "sceSsl", 6)) {
+            std::fprintf(stderr, "[RECON] %s/%s a0=%08X a1=%08X a2=%08X a3=%08X t0=%08X t1=%08X ra=%08X\n",
+                         m, s.stub->func_name, ctx->r[4], ctx->r[5], ctx->r[6], ctx->r[7], ctx->r[8], ctx->r[9],
+                         ctx->r[31]);
+        }
+    }
     if (!s.logged) {
         s.logged = true;
         std::fprintf(stderr,
@@ -643,6 +654,8 @@ void psp_hle_register_all_modules() {
     psp_hle_register_ctrl();
     psp_hle_register_utility();
     psp_hle_register_net();
+    psp_hle_register_np();
+    psp_hle_register_np_matching2();
 
     // SAS voice state machine (issue #29)
     psp_hle_register_sas();

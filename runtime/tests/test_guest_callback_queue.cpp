@@ -31,7 +31,7 @@ static void five_args_and_buffer() {
     q.push(c);
     GuestCall out;
     CHECK(q.pop(&out, 10) && out.buf == c.buf && out.a[3] == 2, "buffer and args survive the queue");
-    uint32_t args[5];
+    uint32_t args[8];
     guest_call_resolve(out, 0x09F00000u, args);
     CHECK(args[0] == 1 && args[1] == 7 && args[2] == 0x09F00000u && args[3] == 2 && args[4] == 0x09F00008u,
           "buffer address added to the marked args only");

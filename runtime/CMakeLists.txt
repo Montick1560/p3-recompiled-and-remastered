@@ -217,6 +217,8 @@ set(RUNTIME_SOURCES
     src/hle/psp_hle_misc.cpp
     src/hle/psp_hle_net.cpp
     src/hle/psp_hle_net_matching.cpp
+    src/hle/psp_hle_np.cpp
+    src/hle/psp_hle_np_matching2.cpp
     src/hle/psp_hle_ctrl.cpp
     src/hle/psp_hle_utility.cpp
     src/hle/psp_system_param.cpp

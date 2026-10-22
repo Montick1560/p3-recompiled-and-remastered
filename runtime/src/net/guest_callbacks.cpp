@@ -40,11 +40,11 @@ void run(uint8_t* rdram, uint32_t stack_sp) {
             }
             std::memcpy(rdram + (scratch & 0x07FFFFFFU), c.buf.data(), c.buf.size());
         }
-        uint32_t args[5];
+        uint32_t args[8];
         guest_call_resolve(c, scratch, args);
         recomp_context ctx{};
         vfpu_init_context(&ctx);
-        for (int i = 0; i < 5; i++) ctx.r[4 + i] = static_cast<int32_t>(args[i]);
+        for (int i = 0; i < 8; i++) ctx.r[4 + i] = static_cast<int32_t>(args[i]);
         ctx.r[28] = static_cast<int32_t>(psp_get_boot_module_gp());
         ctx.r[29] = static_cast<int32_t>(stack_sp);
         ctx.r[31] = 0;

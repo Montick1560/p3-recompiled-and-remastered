@@ -1756,6 +1756,7 @@ static void hle_sceUtilityNetconfGetStatus(
         const std::string group = netconf_group(rdram, p, &in.have_group);
         in.adhocctl_state = ac.state();
         in.requested = g_netconf.requested;
+        in.infra_ok = std::getenv("PSPRECOMP_INFRA_RECON") != nullptr;
         in.elapsed_ms = ms(now - g_netconf.start);
         in.since_scan_ms = g_netconf.last_scan == std::chrono::steady_clock::time_point{}
                                ? (int64_t)1 << 30 : ms(now - g_netconf.last_scan);

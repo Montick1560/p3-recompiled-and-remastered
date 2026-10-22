@@ -12,7 +12,7 @@ Step step(const Input& in) {
     const bool adhoc = in.action == CONNECT_ADHOC || in.action == CREATE_ADHOC || in.action == JOIN_ADHOC;
     if (!adhoc) {
         s.finished = true;
-        s.result = kResultAbort;
+        s.result = in.infra_ok ? kResultSuccess : kResultAbort;
         return s;
     }
     if (in.adhocctl_state == kStateConnected) {

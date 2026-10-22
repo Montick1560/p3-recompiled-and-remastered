@@ -13,7 +13,7 @@
 
 struct GuestCall {
     uint32_t fn = 0;
-    uint32_t a[5] = {0, 0, 0, 0, 0};  // a0..a4
+    uint32_t a[8] = {0, 0, 0, 0, 0, 0, 0, 0};  // a0..a3, t0..t3
     // Optional data the call points at: the runner copies it into a guest
     // scratch buffer right before the call (so it stays valid until the
     // handler returns) and adds the buffer address to every argument whose
@@ -74,6 +74,6 @@ inline void guest_callbacks_post(uint8_t* rdram, uint32_t fn, uint32_t a0, uint3
 }
 
 // Arguments after the buffer is placed at guest address buf_addr (pure).
-inline void guest_call_resolve(const GuestCall& c, uint32_t buf_addr, uint32_t out[5]) {
-    for (int i = 0; i < 5; i++) out[i] = c.a[i] + (((c.buf_args >> i) & 1) ? buf_addr : 0);
+inline void guest_call_resolve(const GuestCall& c, uint32_t buf_addr, uint32_t out[8]) {
+    for (int i = 0; i < 8; i++) out[i] = c.a[i] + (((c.buf_args >> i) & 1) ? buf_addr : 0);
 }
