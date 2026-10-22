@@ -779,6 +779,21 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   Install prints `[P3] smooth animation: baked frame lists blended too (Patapon bodies and eyes)`.
 - **Set it when:** `0` to compare against the stepped bodies (A/B).
 
+### `PSPRECOMP_P3_ANIM_SMOOTH_WORM`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`0` off; anything else or unset = on).
+- **Default:** on with `PSPRECOMP_P3_ANIM_SMOOTH`.
+- **Effect:** The FEVER worm is drawn by the mission overlay's motion player draw
+  `0x08B72338` (overlay id 3, all three variants), outside the main player's scope, so its
+  baked parts showed whole frames: at 60 fps each body key for 2 vblanks and each head key
+  for 4. The hook opens the smooth scope there (the overlay function is resolved per call
+  and the scope opens only when the loaded code is that function); the baked list blend
+  then takes the clock of the model it draws (body `+0x68`, head pair `+0xA0`, the part on
+  a bone `+0xA8`), and the baked bone getter `0x0887A988` blends the bone that part hangs
+  on. The clocks are only read, so the speed does not change. Install prints
+  `[P3] smooth animation: FEVER worm motion blended too`.
+- **Set it when:** `0` to compare against the stepped worm (A/B).
+
 ### `PSPRECOMP_P3_WEATHER_30HZ`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
 - **Type:** env (`0` off; anything else or unset = on).

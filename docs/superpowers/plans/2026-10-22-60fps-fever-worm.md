@@ -108,3 +108,33 @@ git commit -m "feat(p3): the FEVER worm moves smoothly at 60 fps"
 - [ ] **Step 2: Deploy with backup** to `build/e2e_portable` and `build/e2e_portable3` (`game/dxd-1.1.4` <- `rtw`, `game/dxd-1.1.5b` <- `v115b/rtw`, `game/vanilla-eu` <- `vanilla/rtw`), backup first to `build/backup_pre_worm_2026-10-22/<portable>/<variant>/`. If a copy fails because the exe is in use, the user is playing: leave the backup, skip that copy and say so in the hand-off. md5 of each deployed exe = its build.
 - [ ] **Step 3: Hand-off** `EN_QUE_NOS_QUEDAMOS_2026-10-22.md`: qué pasaba (who drew the worm at whole frames), qué cambió, before/after table, cómo probarlo (launcher at 60 + smooth, Campo de los Gigantes, chaka chaka to FEVER), A/B flag, deployed + backup path, "nada subido; va en push-p3-30 tras tu OK". If Task 1 ended in branch C, the hand-off is the finding and the question instead.
 - [ ] **Step 4: Memory.** Update `p3-60fps.md` and its `MEMORY.md` line (local commit hash, not pushed, next push branch `push-p3-30`).
+
+---
+
+## Evidence (22 Oct 2026, executed)
+
+- **Task 1 (branch A, with a twist).** [DL] dumps were useless here: a dump slows the game to a few lists/s and
+  the worm's clock is time based, so the per-list vertex values came out identical at 30 and 60 fps. A temporary
+  trace of the baked draw `FUN_0887A814` outside any player scope (frame history per model, no dump) showed the
+  worm: body models (3) keyed 30/s, each key drawn 2 vblanks at 60 fps (`11 12 12 13 13 14 14 0 0 1 1 ...`), head
+  keyed 15/s, 4 vblanks per key; speed already equal to 30 fps. Drawer: FEVER gauge `FUN_08B69628` -> layout
+  items `FUN_08B65C08` -> `FUN_08B66FE8` -> the item's motion player draw `FUN_08B72338` (mission overlay id 3,
+  bank ovTitle; same code at that address in DxD 1.1.4, 1.1.5b and vanilla). It draws at three clocks: +0x68
+  (body: +0x60/+0x80/+0x84/+0x88), +0xA0 (head pair +0x90/+0x94, end +0xA4 = 30) and +0xA8 (+0x98, hung on bone
+  +0x9C of +0x80 read through baked vtable +0x50 = `FUN_0887A988` at (int)+0x68). Notes: build/worm60/notes.md.
+- **Task 2.** Ruling on the plan's Step 2: no `ClockOff` template parameter (the scope clock is +0x68 like the main
+  player); instead `smooth_scope_call` shared by `motion_scope` and `overlay_motion_scope`, a per-model clock
+  (`scope_clock`) for the baked draw, and `baked_bone_smooth` for the hung part. Trace with the fix (60 fps, FEVER,
+  per 4 s): body models in scope 206/206 draws, blended 103 (every in-between vblank); head 89 draws, blended 67
+  (the 3 fractional vblanks of each 4); hung part's bone blended (~600 per 24 s). With
+  `PSPRECOMP_P3_ANIM_SMOOTH_WORM=0`: worm draws out of scope, 0 blended.
+- Speed: the hook only reads the clocks; frame history unchanged (+1 key per 2 vblanks). `prop_period.py` on the
+  worm box was not usable (peaks 0.1-0.3: the box is dominated by beat-synced HUD motion and FEVER drops).
+- Review Focus: 1. zoomed 8-frame burst during FEVER: worm whole, head and eyes attached; a blend only mixes
+  frames f and f+1 of the same model and motion. 2. loop wrap: body 14 -> 0 blends 14 with list 15 when the table
+  has it, else whole frame (same rule as the army); the bone uses `psp_anim_next_frame` with +0x6C/+0x70/+0x7B.
+  4. Arena route at 60 fps (save_arena): talk ends, clock runs 4:51 -> 4:33, drum HUD, FEVER worm whole. Full
+  60 fps tour with and without the flag: 32/32 checkpoints both; march/attack/combo/clear frames fine.
+  5. Pause: P3's pause box does not freeze the mission and FEVER ended before it opened (inconclusive); a stopped
+  clock gives the same fraction every vblank, so the drawn pose cannot drift.
+- Gates: ctest 96/96; 30 fps tour `build/tour/worm30` vs `baked30`: RT_REGRESS PASS (21 gated).

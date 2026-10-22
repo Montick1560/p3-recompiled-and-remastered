@@ -49,6 +49,7 @@
 #include <vector>
 
 void psp_print_host_backtrace(const char* tag);  // runtime/src/psp_backtrace.cpp
+FuncPtr psp_on_lookup_miss(uint32_t vaddr);      // runtime/src/psp_dispatch.cpp
 
 namespace {
 
@@ -444,21 +445,116 @@ struct ScopeMotions {
 };
 thread_local ScopeMotions g_scope_motions = {};
 
-template <FuncPtr* Orig>
-void motion_scope(uint8_t* rdram, recomp_context* ctx) {
+// The overlay motion player of the current scope (overlay_motion_scope below), whose other
+// clocks apply to some of its models; 0 in a main player's scope.
+thread_local uint32_t g_scope_player = 0;
+
+// Runs `orig` (a0 = a motion player) inside a smooth scope on the player's clock (+0x68).
+void smooth_scope_call(uint8_t* rdram, recomp_context* ctx, FuncPtr orig, uint32_t overlay_player = 0) {
     const uint32_t clock = rd32(rdram, static_cast<uint32_t>(ctx->r[4]) + 0x68);
     float t;
     std::memcpy(&t, &clock, 4);
     const bool outer = g_smooth_scope;
     const float outer_time = g_smooth_time;
     const ScopeMotions outer_motions = g_scope_motions;
+    const uint32_t outer_player = g_scope_player;
     g_smooth_scope = true;
     g_smooth_time = t;
     g_scope_motions.n = 0;
-    (*Orig)(rdram, ctx);
+    g_scope_player = overlay_player;
+    orig(rdram, ctx);
     g_smooth_scope = outer;
     g_smooth_time = outer_time;
     g_scope_motions = outer_motions;
+    g_scope_player = outer_player;
+}
+
+template <FuncPtr* Orig>
+void motion_scope(uint8_t* rdram, recomp_context* ctx) {
+    smooth_scope_call(rdram, ctx, *Orig);
+}
+
+// The FEVER worm (top-left during FEVER) is drawn by the mission overlay (id 3, bank ovTitle in
+// all three variants): the FEVER gauge FUN_08B69628 draws its layout items (FUN_08B65C08 ->
+// FUN_08B66FE8), and each item's motion player draws through FUN_08B72338, an extended copy of
+// the main player draw (motion +0x78, start/end +0x6C/+0x70, loop byte +0x7B). It draws its
+// baked models at three clocks: +0x60/+0x80/+0x84/+0x88 (the body) at (int)+0x68, the head pair
+// +0x90/+0x94 at (int)+0xA0, and +0x98 at (int)+0xA8, hung on bone +0x9C of +0x80 read at
+// (int)+0x68 (baked vtable +0x50). It runs outside the main player's scope, so the worm showed
+// whole frames: at 60 fps each body key for 2 vblanks (30 keys/s) and each head key for 4
+// (15 keys/s), at the right speed. The hook opens the same scope on +0x68, and the baked draw
+// and bone hooks take the clock of the model they are given (scope_clock). The address lies in
+// the shared overlay window, so the hook resolves the loaded bank's function per call and opens
+// the scope only when that code is this function.
+constexpr uint32_t kOverlayMotionDraw = 0x08B72338u;
+constexpr uint32_t kOverlayMotionDrawCode[] = {0x27BDFF90u, 0xAFBF001Cu, 0xAFB10018u, 0xAFB00014u,
+                                               0xE7B50010u, 0xE7B4000Cu, 0xC4800068u};
+
+void overlay_motion_scope(uint8_t* rdram, recomp_context* ctx) {
+    const FuncPtr orig = psp_on_lookup_miss(kOverlayMotionDraw);  // what the call resolves to unhooked
+    bool same = true;
+    for (size_t i = 0; i < sizeof kOverlayMotionDrawCode / sizeof kOverlayMotionDrawCode[0]; i++)
+        same &= rd32(rdram, kOverlayMotionDraw + 4 * static_cast<uint32_t>(i)) == kOverlayMotionDrawCode[i];
+    if (same) {
+        smooth_scope_call(rdram, ctx, orig, static_cast<uint32_t>(ctx->r[4]));
+    } else {
+        orig(rdram, ctx);
+    }
+}
+
+// The clock a baked model of the current scope is drawn at (see overlay_motion_scope).
+float scope_clock(uint8_t* rdram, uint32_t model) {
+    const uint32_t p = g_scope_player;
+    if (p == 0 || model == 0) return g_smooth_time;
+    uint32_t off = 0;
+    if (model == rd32(rdram, p + 0x90) || model == rd32(rdram, p + 0x94)) off = 0xA0;
+    if (model == rd32(rdram, p + 0x98)) off = 0xA8;
+    if (off == 0) return g_smooth_time;
+    const uint32_t bits = rd32(rdram, p + off);
+    float t;
+    std::memcpy(&t, &bits, 4);
+    return t;
+}
+
+// The bone the overlay player hangs +0x98 on: the baked bone getter FUN_0887A988 (a0 = model
+// +0x80, a1 = out 4x4, a2 = bone, a3 = motion, t0 = frame (int)+0x68). Read the next frame too
+// and blend, like bone_smooth; the getter only reads tables.
+constexpr uint32_t kBakedBone = 0x0887A988u;
+FuncPtr g_baked_bone = nullptr;
+
+void baked_bone_smooth(uint8_t* rdram, recomp_context* ctx) {
+    const uint32_t p = g_scope_player;
+    const uint32_t model = static_cast<uint32_t>(ctx->r[4]);
+    const int32_t frame = static_cast<int32_t>(ctx->r[8]);
+    const float alpha = g_smooth_time - static_cast<float>(psp_f2i(g_smooth_time));
+    if (p == 0 || model == 0 || model != rd32(rdram, p + 0x80) || frame != psp_f2i(g_smooth_time) ||
+        !(alpha > 0.0f && alpha < 1.0f)) {
+        g_baked_bone(rdram, ctx);
+        return;
+    }
+    const uint32_t start_bits = rd32(rdram, p + 0x6C), end_bits = rd32(rdram, p + 0x70);
+    float start, end;
+    std::memcpy(&start, &start_bits, 4);
+    std::memcpy(&end, &end_bits, 4);
+    const int32_t next = psp_anim_next_frame(frame, start, end, rdram[(p + 0x7B) & 0x07FFFFFFu] != 0);
+    if (next < 0 || next == frame) {
+        g_baked_bone(rdram, ctx);
+        return;
+    }
+    const recomp_context args = *ctx;
+    const uint32_t out = static_cast<uint32_t>(args.r[5]);
+    float m0[16], m1[16];
+    g_baked_bone(rdram, ctx);
+    std::memcpy(m0, rdram + (out & 0x07FFFFFFu), sizeof m0);
+    const recomp_context after = *ctx;
+    *ctx = args;
+    ctx->r[8] = next;
+    g_baked_bone(rdram, ctx);
+    std::memcpy(m1, rdram + (out & 0x07FFFFFFu), sizeof m1);
+    *ctx = after;
+    static const uint8_t kMatrix[16] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+    psp_blend_pose(m0, m1, kMatrix, 16, alpha);
+    std::memcpy(rdram + (out & 0x07FFFFFFu), m0, sizeof m0);
 }
 
 // PSPRECOMP_P3_ANIM_SMOOTH_DIAG=interp (A/B only): the earlier smooth mode — the player's
@@ -763,8 +859,9 @@ void list_call_smooth(uint8_t* rdram, recomp_context* ctx) {
 void baked_draw_smooth(uint8_t* rdram, recomp_context* ctx) {
     const uint32_t model = static_cast<uint32_t>(ctx->r[4]), motion = static_cast<uint32_t>(ctx->r[5]);
     const int32_t frame = static_cast<int32_t>(ctx->r[6]);
-    const float alpha = g_smooth_time - static_cast<float>(psp_f2i(g_smooth_time));
-    if (!g_smooth_scope || model == 0 || frame != psp_f2i(g_smooth_time) || !(alpha > 0.0f && alpha < 1.0f)) {
+    const float t = g_smooth_scope ? scope_clock(rdram, model) : g_smooth_time;
+    const float alpha = t - static_cast<float>(psp_f2i(t));
+    if (!g_smooth_scope || model == 0 || frame != psp_f2i(t) || !(alpha > 0.0f && alpha < 1.0f)) {
         g_baked_draw(rdram, ctx);
         return;
     }
@@ -877,6 +974,13 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
             psp_dispatch_register(kBakedDraw, baked_draw_smooth);
             psp_dispatch_register(kListCall, list_call_smooth);
             std::fprintf(stderr, "[P3] smooth animation: baked frame lists blended too (Patapon bodies and eyes)\n");
+        }
+        const char* worm = std::getenv("PSPRECOMP_P3_ANIM_SMOOTH_WORM");
+        if (!(worm && worm[0] == '0')) {
+            psp_dispatch_register(kOverlayMotionDraw, overlay_motion_scope);
+            g_baked_bone = RECOMP_LOOKUP(kBakedBone);
+            psp_dispatch_register(kBakedBone, baked_bone_smooth);
+            std::fprintf(stderr, "[P3] smooth animation: FEVER worm motion blended too\n");
         }
         const char* diag = std::getenv("PSPRECOMP_P3_ANIM_SMOOTH_DIAG");
         g_diag_interp = diag && std::strcmp(diag, "interp") == 0;
