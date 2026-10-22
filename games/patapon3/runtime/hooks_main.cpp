@@ -161,9 +161,22 @@ void weather_step_register() {
 // rate, time waits still count real time. The return value is "keep running": the list update
 // FUN_0889459c clears the object's active byte +1272 when it is 0, so a skipped call returns 1
 // (what FUN_08909C7C itself returns for an object with nothing to run), never a stale v0.
+// Only in the hideout (overlay id 2 in the window): paced mission scripts lost the stage,
+// the army and the drum HUD, and missions ran fine at 60 with unpaced scripts before.
 constexpr uint32_t kScriptUpdate = 0x08909C7Cu;
 FuncPtr g_script_update = nullptr;
 PacedStepTable g_script_paced;
+
+// The code-overlay window (psp_overlay.h) starts with "MWo3" and the overlay id. The hideout is
+// id 2 in every release (read live: hideout 2, missions 3); go by the id, not the file name: the
+// DxD discs ship the hideout code as OL_Mission.bin, the vanilla EU disc as OL_Azito.bin.
+constexpr uint32_t kOverlayWindow = 0x08ABB180u, kOverlayMagic = 0x336F574Du;  // "MWo3"
+constexpr uint32_t kHideoutOverlayId = 2;
+
+bool in_hideout(uint8_t* rdram) {
+    return static_cast<uint32_t>(MEM_W(rdram, kOverlayWindow)) == kOverlayMagic &&
+           static_cast<uint32_t>(MEM_W(rdram, kOverlayWindow + 4)) == kHideoutOverlayId;
+}
 
 // Smooth scripted props (with PSPRECOMP_P3_HIDEOUT_30HZ; PSPRECOMP_P3_HIDEOUT_SMOOTH=0 keeps the
 // plain 30 Hz pacing). A script sets a prop's position in its 3D node (+192/+196/+200, x y z)
@@ -236,6 +249,10 @@ ScriptNode* script_node_find(uint32_t node, bool add) {
 }
 
 void node_matrix_smooth(uint8_t* rdram, recomp_context* ctx) {
+    if (!in_hideout(rdram)) {  // scripts are paced only there
+        g_node_matrix(rdram, ctx);
+        return;
+    }
     const uint32_t node = static_cast<uint32_t>(ctx->r[4]);
     const int64_t vb = psp_vblank_index(psp_display_elapsed_us());
     if (g_running_script) {  // the script moved it: record (once per run; the last build wins)
@@ -283,6 +300,10 @@ void node_matrix_smooth(uint8_t* rdram, recomp_context* ctx) {
 }
 
 void script_update_30hz(uint8_t* rdram, recomp_context* ctx) {
+    if (!in_hideout(rdram)) {
+        g_script_update(rdram, ctx);
+        return;
+    }
     uint32_t dt = static_cast<uint32_t>(ctx->r[5]);
     const uint32_t obj = static_cast<uint32_t>(ctx->r[4]);
     const int64_t vb = psp_vblank_index(psp_display_elapsed_us());
@@ -817,7 +838,7 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
         if (!(scripts && scripts[0] == '0')) {
             g_script_update = RECOMP_LOOKUP(kScriptUpdate);
             psp_dispatch_register(kScriptUpdate, script_update_30hz);
-            std::fprintf(stderr, "[P3] 60fps: script objects paced to 30 Hz (hideout animations)\n");
+            std::fprintf(stderr, "[P3] 60fps: script objects paced to 30 Hz in the hideout only\n");
             const char* trace = std::getenv("PSPRECOMP_P3_HIDEOUT_TRACE");
             g_hideout_trace = trace && trace[0] == '1';
             const char* smooth_scripts = std::getenv("PSPRECOMP_P3_HIDEOUT_SMOOTH");

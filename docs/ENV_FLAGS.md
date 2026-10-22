@@ -800,8 +800,10 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   hideout's Silver Hoshipon: read the actor position, add a step, set it), so at 60 fps
   they ran twice as fast. Each script object runs at most once per two vblanks and a
   skipped call's frame time goes to its next run (`runtime/include/psp_paced_step.h`),
-  so `cmd_waitTime` still counts real time. Covers every script object (hideout and
-  missions). Install prints `[P3] 60fps: script objects paced to 30 Hz (hideout animations)`.
+  so `cmd_waitTime` still counts real time; a skipped call returns 1 ("keep running").
+  Only while the hideout overlay (id 2 at `0x08ABB180`) is loaded: paced mission scripts
+  lost the stage, the army and the drum HUD (Arena del Valor froze). Install prints
+  `[P3] 60fps: script objects paced to 30 Hz in the hideout only`.
 - **Set it when:** `0` to see the old double-speed scripts at 60 fps (A/B).
 
 ### `PSPRECOMP_P3_HIDEOUT_SMOOTH`
