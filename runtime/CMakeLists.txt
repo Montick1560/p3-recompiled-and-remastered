@@ -192,6 +192,7 @@ set(RUNTIME_SOURCES
     src/net/pro_protocol.cpp
     src/net/relay_protocol.cpp
     src/net/relay_conn.cpp
+    src/net/infra_protocol.cpp
     src/net/pro_client.cpp
     src/net/adhocctl.cpp
     src/net/guest_callbacks.cpp
@@ -1022,6 +1023,13 @@ add_executable(test_relay_protocol tests/test_relay_protocol.cpp src/net/relay_p
 target_include_directories(test_relay_protocol PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_relay_protocol PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME relay_protocol_tests COMMAND test_relay_protocol)
+
+# Infrastructure-mode server frames (tools/infra_server.py wire format).
+add_executable(test_infra_protocol tests/test_infra_protocol.cpp src/net/infra_protocol.cpp)
+target_include_directories(test_infra_protocol PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                           ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
+target_compile_options(test_infra_protocol PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME infra_protocol_tests COMMAND test_infra_protocol)
 
 add_executable(test_pro_protocol tests/test_pro_protocol.cpp src/net/pro_protocol.cpp)
 target_include_directories(test_pro_protocol PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
