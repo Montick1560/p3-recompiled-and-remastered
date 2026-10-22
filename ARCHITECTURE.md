@@ -160,7 +160,9 @@ frame, rain drops are drawn half a step ahead on the frames in between, `psp_par
 and the wind ribbons step every frame with their per-call advance halved; the script
 objects run their script VM the same way, since scripts wait in frames and move props such as
 the hideout's Silver Hoshipon by a fixed step per run, and the 3D nodes a script moved are
-built half a step ahead on the frame in between, `psp_half_ahead.h`). Reasoning: cheats patch guest RAM, but recompiled code never reads instruction
+built half a step ahead on the frame in between, `psp_half_ahead.h`; that pacing is hideout-only, and
+outside it a frame wait that has just started is made twice as long instead, `psp_frame_wait.h`, so
+mission scripts keep running every vblank while their waits keep the 30 fps length). Reasoning: cheats patch guest RAM, but recompiled code never reads instruction
 words, so the patched words have to become code at recompile time; keeping both bodies
 leaves the default build byte-identical.
 

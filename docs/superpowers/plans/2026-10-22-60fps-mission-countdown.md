@@ -93,3 +93,20 @@ Message body: the countdown and hints were 2x, cmd_waitFrame counts script runs,
 - [ ] **Step 2: Deploy with backup** to `build/e2e_portable` and `build/e2e_portable3` (`game/dxd-1.1.4` <- `rtw`, `game/dxd-1.1.5b` <- `v115b/rtw`, `game/vanilla-eu` <- `vanilla/rtw`), backup first to `build/backup_pre_waits_2026-10-22/<portable>/<variant>/`. If an exe is in use the user is playing: skip that copy and say so. `cmp` each deployed exe with its build.
 - [ ] **Step 3: Hand-off** in Spanish: qué pasaba (las esperas de los scripts cuentan frames), qué cambió, tabla antes/después (cuenta atrás y pistas), cómo probarlo (Campos de prueba, primera misión, pasar los diálogos con X, mirar ¡TON! ¡CHIN! ¡KAN! ¡Ya!), flag A/B, qué más puede notar distinto (otras esperas de misión ahora al tiempo de 30 fps), desplegado + backup, "nada subido; va en push-p3-31 tras tu OK".
 - [ ] **Step 4: Memory.** Update `p3-60fps.md` and its `MEMORY.md` line (local commit hash, not pushed, next push branch).
+
+## Evidence (22 Oct, executed inline)
+
+| Measure (Campos de prueba, first mission) | 30 fps | 60 fps before | 60 fps with the fix | fix off (`_SCRIPT_WAIT_30HZ=0`) |
+|---|---|---|---|---|
+| Countdown bubbles TON / CHIN / KAN / Ya | 0.25 / 0.75 / 1.24 / 1.76 s | 0.19 / 0.44 / 0.67 / 0.93 s | 0.22 / 0.72 / 1.22 / 1.71 s | 0.20 / 0.44 / 0.68 / 0.95 s |
+| March hint bubbles | ~4 s apart | 2.0 s | ~4 s (4.2, 8.2, 12.2) | 2.0 s |
+| Mission clock at tour checkpoints 24 / 26 / 27 / 28 | 0:41 / 0:31 / 0:21 / 0:17 | 0:55 / 0:40 / 0:30 / 0:15 | 0:41 / 0:31 / 0:20 / 0:16 | — |
+| Time-up -> MISION COMPLETADA / chest room | ~13 s / ~18 s | — | ~13 s / ~17 s (1 s sampling) | — |
+
+- Unit test `frame_wait_tests`: compile FAIL before the header, then `frame_wait: all tests passed`; ctest 98/98.
+- Full 60 fps tour (`tour/wait60full`): 32/32, mission and reward frames normal.
+- Arena del Valor at 60 (`tour/arena60w`): talk over, clock 4:27 -> 4:22 in 5 s, drum HUD, battle running.
+- Hideout at 60, Silver Hoshipon float: 4.36 s with the hideout pacing (not 8.8: the hideout is not scaled twice);
+  with `PSPRECOMP_P3_HIDEOUT_30HZ=0` the wait scaling alone gives 4.35 / 4.42 s (2.2 s unpaced on 21 Oct).
+- Step 1 baseline was the recon measurement on the same code (5cbf2b8; bf3ac0f is docs only).
+- Notes, scripts and contact sheets: `build/count60/` (outside the repo).

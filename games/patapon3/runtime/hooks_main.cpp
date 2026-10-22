@@ -28,6 +28,7 @@
 #include "psp_achievements_run.h"
 #include "psp_anim_blend.h"
 #include "psp_code_match.h"
+#include "psp_frame_wait.h"
 #include "psp_game_module.h"
 #include "psp_ge_list_blend.h"
 #include "psp_half_ahead.h"
@@ -321,6 +322,31 @@ void script_update_30hz(uint8_t* rdram, recomp_context* ctx) {
     g_running_script = obj;
     g_script_update(rdram, ctx);
     g_running_script = 0;
+}
+
+// 60 fps script frame waits (with the 60fps set; PSPRECOMP_P3_SCRIPT_WAIT_30HZ=0 turns it off for
+// A/B). Outside the hideout the script objects run every vblank at 60 fps, and cmd_waitFrame
+// (FUN_08838434(a0, a1 = the VM)) counts one frame per run, so every frame wait of a mission
+// script ended in half the time: the mission-start countdown bubbles (TON, CHIN, KAN, Ya) came
+// one per 0.245 s instead of 0.50 s and the march hints every 2 s instead of 4 s. Pacing the
+// mission scripts instead lost the stage and froze the Arena (4100add), so they keep running
+// every vblank and only a wait that has just started is made twice as long
+// (psp_frame_wait.h). The command block is b = vm + [vm + 0x360] * 0x118: +0x118 "started",
+// +0x120 "still running" (cleared by the command when the wait is over), +0x124 frames left
+// (the first run stores N and counts itself: N - 1). Not in the hideout while its scripts are
+// paced to 30 Hz above: their waits already last their 30 fps time.
+constexpr uint32_t kWaitFrame = 0x08838434u;
+FuncPtr g_wait_frame = nullptr;
+
+void wait_frame_30hz(uint8_t* rdram, recomp_context* ctx) {
+    const uint32_t vm = static_cast<uint32_t>(ctx->r[5]);
+    const uint32_t b = vm + rd32(rdram, vm + 0x360) * 0x118;
+    const bool started = rd32(rdram, b + 0x118) != 0;
+    g_wait_frame(rdram, ctx);
+    if (started || rd32(rdram, b + 0x120) == 0) return;
+    if (g_script_update && in_hideout(rdram)) return;
+    const int32_t left = psp_frame_wait_left(static_cast<int32_t>(rd32(rdram, b + 0x124)), 2);
+    std::memcpy(rdram + ((b + 0x124) & 0x07FFFFFFu), &left, 4);
 }
 
 // Smooth weather (with the 60fps set; PSPRECOMP_P3_WEATHER_SMOOTH=0 keeps the plain 30 Hz
@@ -1097,6 +1123,12 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
                 psp_dispatch_register(kNodeMatrix, node_matrix_smooth);
                 std::fprintf(stderr, "[P3] 60fps: smooth hideout animations (scripted props drawn every frame)\n");
             }
+        }
+        const char* waits = std::getenv("PSPRECOMP_P3_SCRIPT_WAIT_30HZ");
+        if (!(waits && waits[0] == '0')) {
+            g_wait_frame = RECOMP_LOOKUP(kWaitFrame);
+            psp_dispatch_register(kWaitFrame, wait_frame_30hz);
+            std::fprintf(stderr, "[P3] 60fps: script frame waits last their 30 fps time\n");
         }
     }
     const char* e = std::getenv("PSPRECOMP_P3_GMO_GUARD");

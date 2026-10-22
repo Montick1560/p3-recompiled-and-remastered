@@ -190,7 +190,8 @@ Read by the runtime binary at start-up or during execution.
   help (`psp_patch_set_active`); Patapon 3's `60fps` set paces the input update
   to 30 Hz, turns on smooth animation (`PSPRECOMP_P3_ANIM_SMOOTH`) and paces the
   weather (`PSPRECOMP_P3_WEATHER_30HZ`, `PSPRECOMP_P3_WEATHER_SMOOTH`) and the
-  script objects (`PSPRECOMP_P3_HIDEOUT_30HZ`).
+  script objects (`PSPRECOMP_P3_HIDEOUT_30HZ`) and the scripts' frame waits
+  (`PSPRECOMP_P3_SCRIPT_WAIT_30HZ`).
 - **Set it when:** playing with an opt-in game patch, e.g. Patapon 3
   `PSPRECOMP_PATCHES=60fps` (60 fps; see `games/patapon3/game.toml`).
 
@@ -850,6 +851,21 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   lost the stage, the army and the drum HUD (Arena del Valor froze). Install prints
   `[P3] 60fps: script objects paced to 30 Hz in the hideout only`.
 - **Set it when:** `0` to see the old double-speed scripts at 60 fps (A/B).
+
+### `PSPRECOMP_P3_SCRIPT_WAIT_30HZ`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`0` off; anything else or unset = on).
+- **Default:** on when `PSPRECOMP_PATCHES` enables `60fps`; never installed otherwise.
+- **Effect:** Outside the hideout the script objects run every vblank at 60 fps, and
+  `cmd_waitFrame` (`0x08838434`, a1 = the script VM) counts one frame per run, so frame
+  waits ended in half the time (mission-start countdown bubbles one per 0.245 s instead
+  of 0.50 s, march hints every 2 s instead of 4 s). When a wait has just started (command
+  block `vm + [vm+0x360]*0x118`: +0x118 started, +0x120 still running, +0x124 frames
+  left), its count is set so it lasts twice as many runs (`runtime/include/psp_frame_wait.h`);
+  scripts are never skipped. Not in the hideout while `PSPRECOMP_P3_HIDEOUT_30HZ` paces
+  its scripts. `cmd_waitTime` already counts real time and is left alone. Install prints
+  `[P3] 60fps: script frame waits last their 30 fps time`.
+- **Set it when:** `0` to see the old double-speed mission waits at 60 fps (A/B).
 
 ### `PSPRECOMP_P3_HIDEOUT_SMOOTH`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
