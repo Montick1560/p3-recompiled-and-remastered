@@ -304,6 +304,7 @@ static void silent_server_is_dead() {
     const auto t = Clock::now();
     while (c.connected() && ms_since(t) < 3000) sleep_ms(20);
     CHECK(!c.connected() && ms_since(t) < 1500, "a server silent past dead_after_ms is dropped");
+    while (failed == 0 && ms_since(t) < 3000) sleep_ms(10);  // lost() runs the callbacks after the flag
     CHECK(failed == 1, "its pending request fails");
 }
 
