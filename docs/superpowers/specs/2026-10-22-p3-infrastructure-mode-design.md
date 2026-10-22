@@ -112,6 +112,29 @@ from the server: source vip).
   connects to the configured server (default above). With `PSPRECOMP_INFRA_SERVER=off` the netconf dialog aborts
   as today. Nothing changes for ad hoc or offline play. The recon flag `PSPRECOMP_INFRA_RECON` goes away.
 
+## Traffic (measured 2026-10-22, two instances, build/infra/e2e8 and e2e14)
+
+The server's `traffic:` lines (all sessions, kB = 1024 bytes) for one 2-player room:
+
+| Phase | Server upload | Server download |
+|---|---|---|
+| Hideout together (TCP P2P state sync) | 19.8-22.3 kB/s | the same |
+| Mission (UDP P2P, ~5 datagrams/s each way) | 0.6-0.8 kB/s | the same |
+
+Per player the hideout traffic is asymmetric: over a whole 8-minute session the host sent 4.1 MB and the visitor
+1.0 MB (e2e8), so in the hideout the host uploads about 17-18 kB/s per visitor and a visitor about 4-5 kB/s.
+
+Estimate for 4 players (3 visitors): host-centric (what the game's sockets show: every visitor connects to the
+host's listener) about 3 x 22 = 66 kB/s of server upload per room in the hideout; if visitors also exchanged state
+with each other, up to 6 x 22 = 132 kB/s. Missions stay near 1 kB/s per player pair.
+
+40 Mb/s of home upload is about 4880 kB/s; with 30 % headroom about 3400 kB/s usable: roughly 50 full rooms all in
+their hideouts at once (25 in the worst case above), and far more when rooms are in missions.
+
+Observed game rule: a visitor who gives no command for about 60 s in a mission leaves with "Se ha agotado el tiempo
+de conexión" (seen in four runs; with the visitor drumming for 2+ minutes and the host idle nobody left, and the
+network traffic was normal up to the visitor's own Close). The host is not affected.
+
 ## Out of scope (later)
 Launcher setting for the server address (env only for now), hosting next to patapon.net, TCP sockets (`sceNetInetConnect/Listen`)
 unless the game turns out to use them in a session (checked in the plan), chat via `sceNpMatching2SendRoomChatMessage`

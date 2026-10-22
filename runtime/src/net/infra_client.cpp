@@ -502,6 +502,13 @@ void Client::ticker() {
         for (Done& d : expired) fail(d);
         const int64_t t = now_ms();
         if (t - last_rx_ms_ > opt_.dead_after_ms) {
+            size_t pending;
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                pending = pending_.size();
+            }
+            std::fprintf(stderr, "[INFRA] no frame for %lld ms (last ping sent %lld ms ago, %zu requests pending)\n",
+                         static_cast<long long>(t - last_rx_ms_), static_cast<long long>(t - last_ping), pending);
             lost("server silent");
             return;
         }

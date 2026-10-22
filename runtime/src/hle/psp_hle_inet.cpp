@@ -436,8 +436,25 @@ void hle_sceNetInetRecv(uint8_t* rdram, recomp_context* ctx) {
     stream_result(ctx, r);
 }
 
-void hle_sceNetInetClose(uint8_t*, recomp_context* ctx) {
+// Trace aid: the return address and the code addresses found on the guest stack (callers).
+void trace_callers(uint8_t* rdram, const recomp_context* ctx, const char* what) {
+    if (!trace()) return;
+    const uint32_t sp = static_cast<uint32_t>(ctx->r[29]);
+    std::fprintf(stderr, "[INET] %s ra=%08X stack:", what, static_cast<uint32_t>(ctx->r[31]));
+    int found = 0;
+    for (uint32_t o = 0; o < 0x400 && found < 16 && valid_range(sp + o, 4); o += 4) {
+        const uint32_t v = psp_mem_read<uint32_t>(rdram, sp + o);
+        if (v >= 0x08804000 && v < 0x08A52000 && (v & 3) == 0) {
+            std::fprintf(stderr, " %08X", v);
+            found++;
+        }
+    }
+    std::fprintf(stderr, "\n");
+}
+
+void hle_sceNetInetClose(uint8_t* rdram, recomp_context* ctx) {
     const int s = ctx->r[4];
+    trace_callers(rdram, ctx, "Close");
     {
         std::lock_guard<std::mutex> lock(g_mu);
         Socket* so = sock(s);
@@ -469,6 +486,9 @@ bool psp_inet_streams_idle() {
         std::lock_guard<std::mutex> lock(g_mu);
         pump_streams();
         idle = g_streams.idle();
+        for (const Socket& so : g_socks)
+            if (idle && so.used && so.type != kSockStreamP2P && so.key() && infra::client().has_datagram(so.key()))
+                idle = false;
     }
     flush_streams();
     return idle;

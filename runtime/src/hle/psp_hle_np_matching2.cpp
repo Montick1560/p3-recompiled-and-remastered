@@ -400,8 +400,8 @@ void handle_event(const nlohmann::json& e) {
 
 // Server events go through the worker in arrival order. A member leaving or
 // the room going away waits (up to 1.5 s) until the game has read the stream
-// data that came before it, as with a real host whose last TCP bytes arrive
-// before the matching server notices it left.
+// data and datagrams that came before it, as with a real host whose last
+// packets arrive before the matching server notices it left.
 void on_event(const nlohmann::json& e) {
     worker().post([e] {
         const std::string ev = e.value("ev", "");
