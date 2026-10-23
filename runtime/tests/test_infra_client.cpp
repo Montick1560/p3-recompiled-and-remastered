@@ -309,6 +309,23 @@ static void stream_segments_in_order() {
     CHECK(seen, "send_stream reaches the server as kind 3");
 }
 
+static void queues_bounded_in_bytes() {
+    FakeInfraServer s;
+    s.start();
+    infra::Client c(s.address(), fast());
+    CHECK(c.connect("P3A", 2000), "connect");
+    std::vector<uint8_t> big(4000, 1);
+    for (int i = 0; i < 600; i++)  // 2.4 MB spread over 600 ports nobody reads
+        s.send_raw(infra::encode_datagram(0x0A500002, static_cast<uint16_t>(20000 + i), 1, big.data(), big.size()));
+    for (int i = 0; i < 1200; i++)  // 4.8 MB of stream segments nobody reads
+        s.send_raw(infra::encode_segment(infra::kKindStream, 0x0A500002, 7000, 1, big.data(), big.size()));
+    sleep_ms(500);
+    CHECK(c.queued_bytes() <= infra::Client::kMaxQueuedBytes, "datagram queues capped in bytes");
+    CHECK(c.queued_stream_bytes() <= infra::Client::kMaxStreamBytes, "stream queue capped in bytes");
+    infra::Client::Datagram g;
+    CHECK(c.pop_datagram(20000, &g) && g.payload.size() == 4000, "early datagrams still delivered");
+}
+
 static void rtt_from_ping() {
     FakeInfraServer s;
     s.ping_delay_ms = 40;
@@ -368,6 +385,7 @@ int main() {
     disconnect_fails_pending();
     datagram_queue_per_port();
     stream_segments_in_order();
+    queues_bounded_in_bytes();
     rtt_from_ping();
     silent_server_is_dead();
     ws_against_real_server();

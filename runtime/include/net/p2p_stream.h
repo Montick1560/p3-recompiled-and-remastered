@@ -19,6 +19,10 @@ namespace p2p {
 enum SegmentType : uint8_t { kSyn = 1, kAccept = 2, kData = 3, kFin = 4, kRst = 5 };
 constexpr size_t kMaxSegmentData = 1024;
 constexpr uint16_t kFirstLocalPort = 49152;  // connecting sockets get local ports from here
+// A peer cannot make the game hold more than this: a connection with more unread bytes is reset, and a
+// listener answers at most kMaxBacklog connections the game has not accepted yet.
+constexpr size_t kMaxUnreadBytes = 4 * 1024 * 1024;
+constexpr size_t kMaxBacklog = 16;
 
 // On receive vip is the sender; bytes[0] is the SegmentType.
 struct Segment {

@@ -313,6 +313,7 @@ void Client::lost(const char* why) {
         fn = on_event_;
         queues_.clear();
         streams_.clear();
+        queued_bytes_ = stream_bytes_ = 0;
     }
     cv_.notify_all();
     if (transport_) transport_->close();
@@ -368,7 +369,18 @@ bool Client::pop_datagram(uint16_t local_port, Datagram* out) {
     if (it == queues_.end() || it->second.empty()) return false;
     *out = std::move(it->second.front());
     it->second.pop_front();
+    queued_bytes_ -= out->payload.size();
     return true;
+}
+
+size_t Client::queued_bytes() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return queued_bytes_;
+}
+
+size_t Client::queued_stream_bytes() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return stream_bytes_;
 }
 
 void Client::send_stream(uint32_t vip, uint16_t dst_port, uint16_t src_port, const uint8_t* data, size_t len) {
@@ -380,6 +392,7 @@ bool Client::pop_stream(Datagram* out) {
     if (streams_.empty()) return false;
     *out = std::move(streams_.front());
     streams_.pop_front();
+    stream_bytes_ -= out->payload.size();
     return true;
 }
 
@@ -460,16 +473,23 @@ void Client::reader() {
             }
             std::lock_guard<std::mutex> lock(mu_);
             if (f.kind == kKindStream) {
-                streams_.push_back(Datagram{f.vip, f.src_port, f.dst_port, std::move(f.payload)});
-                if (streams_.size() > kStreamQueueCap) {
-                    streams_.pop_front();
-                    std::fprintf(stderr, "[INFRA] stream queue full: a game stream lost data\n");
+                if (streams_.size() >= kStreamQueueCap || stream_bytes_ + f.payload.size() > kMaxStreamBytes) {
+                    static int logged = 0;
+                    if (logged++ < 4) std::fprintf(stderr, "[INFRA] stream queue full: a game stream lost data\n");
+                    continue;
                 }
+                stream_bytes_ += f.payload.size();
+                streams_.push_back(Datagram{f.vip, f.src_port, f.dst_port, std::move(f.payload)});
                 continue;
             }
+            if (queued_bytes_ + f.payload.size() > kMaxQueuedBytes) continue;  // nobody reads them: drop new
             auto& q = queues_[f.dst_port];
+            queued_bytes_ += f.payload.size();
             q.push_back(Datagram{f.vip, f.src_port, f.dst_port, std::move(f.payload)});
-            if (q.size() > kQueueCap) q.pop_front();
+            if (q.size() > kQueueCap) {
+                queued_bytes_ -= q.front().payload.size();
+                q.pop_front();
+            }
         }
         if (r.broken()) {
             lost("bad frame from the server");

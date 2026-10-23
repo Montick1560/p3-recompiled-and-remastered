@@ -71,6 +71,10 @@ public:
     using EventFn = std::function<void(const nlohmann::json& event)>;
     static constexpr size_t kQueueCap = 256;
     static constexpr size_t kStreamQueueCap = 16384;  // stream segments must not be lost: far above any burst
+    // Bytes a room peer can make this client hold: datagrams nobody reads (all ports together) and stream
+    // segments not yet taken by the game. Over the cap new data is dropped.
+    static constexpr size_t kMaxQueuedBytes = 1024 * 1024;
+    static constexpr size_t kMaxStreamBytes = 8 * 1024 * 1024;
 
     explicit Client(Address addr) : Client(std::move(addr), Options()) {}
     Client(Address addr, Options opt);
@@ -96,6 +100,8 @@ public:
     // Stream socket segments (kind 3), one queue for every port, in arrival order.
     void send_stream(uint32_t vip, uint16_t dst_port, uint16_t src_port, const uint8_t* data, size_t len);
     bool pop_stream(Datagram* out);
+    size_t queued_bytes() const;
+    size_t queued_stream_bytes() const;
 
     int rtt_ms() const;  // median of the last 5 pings, -1 before the first answer
     uint32_t vip() const { return vip_; }
@@ -131,6 +137,7 @@ private:
     EventFn on_event_;
     std::map<uint16_t, std::deque<Datagram>> queues_;
     std::deque<Datagram> streams_;
+    size_t queued_bytes_ = 0, stream_bytes_ = 0;
     std::deque<int> rtts_;
     std::string session_, online_id_;
     int64_t room_id_ = 0;  // joined room, for the room_destroyed synthesised on loss

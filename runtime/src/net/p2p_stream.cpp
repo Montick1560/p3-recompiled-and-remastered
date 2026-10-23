@@ -151,6 +151,10 @@ void Streams::on_segment(const Segment& s) {
             emit(s.vip, s.src_port, s.dst_port, kRst);
             return;
         }
+        if (!c && backlog_[s.dst_port].size() >= kMaxBacklog) {
+            emit(s.vip, s.src_port, s.dst_port, kRst);
+            return;
+        }
         if (!c) {
             Conn n;
             n.local = s.dst_port;
@@ -167,6 +171,13 @@ void Streams::on_segment(const Segment& s) {
         return;
     case kData:
         if (!c) {
+            emit(s.vip, s.src_port, s.dst_port, kRst);
+            return;
+        }
+        if (c->reset) return;
+        if (c->rx.size() + (s.bytes.size() - 1) > kMaxUnreadBytes) {
+            c->rx.clear();
+            c->reset = true;
             emit(s.vip, s.src_port, s.dst_port, kRst);
             return;
         }

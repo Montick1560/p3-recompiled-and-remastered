@@ -169,6 +169,40 @@ static void idle_until_read() {
     CHECK(!p.b.idle(), "data for a connection not accepted yet is unread data");
 }
 
+static void rx_cap_resets_connection() {
+    Pair p;
+    p.b.listen(1, 3700);
+    p.a.connect(0, kVipB, 3700);
+    p.deliver();
+    uint32_t vip;
+    uint16_t port;
+    p.b.accept(1, 9, &vip, &port);
+    std::vector<uint8_t> chunk(64 * 1024, 7);
+    for (size_t sent = 0; sent < p2p::kMaxUnreadBytes + 2 * chunk.size(); sent += chunk.size()) {
+        p.a.send(0, chunk.data(), chunk.size());
+        p.deliver();
+    }
+    uint8_t b[4];
+    CHECK(p.b.idle(), "unread bytes over the cap are dropped, not kept");
+    CHECK(p.b.recv(9, b, 4) == -kECONNRESET, "the flooded connection is reset");
+    p.deliver();
+    CHECK(p.a.send(0, b, 1) == -kECONNRESET, "and the sender learns it");
+}
+
+static void backlog_cap() {
+    Pair p;
+    p.b.listen(1, 3700);
+    int refused = 0, ok = 0;
+    for (int i = 0; i < static_cast<int>(p2p::kMaxBacklog) + 4; i++) p.a.connect(10 + i, kVipB, 3700);
+    p.deliver();
+    for (int i = 0; i < static_cast<int>(p2p::kMaxBacklog) + 4; i++) {
+        const int r = p.a.connect(10 + i, kVipB, 3700);
+        ok += r == 0;
+        refused += r == -kECONNREFUSED;
+    }
+    CHECK(ok == static_cast<int>(p2p::kMaxBacklog) && refused == 4, "connections past the backlog are refused");
+}
+
 static void unknown_socket() {
     Pair p;
     uint8_t b[1];
@@ -183,6 +217,8 @@ int main() {
     big_payload_in_order();
     two_connections_one_listener();
     idle_until_read();
+    rx_cap_resets_connection();
+    backlog_cap();
     unknown_socket();
     if (failures) {
         std::printf("%d failure(s)\n", failures);
