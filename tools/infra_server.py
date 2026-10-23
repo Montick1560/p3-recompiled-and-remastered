@@ -21,9 +21,11 @@ the public server behind a Cloudflare Tunnel.
 """
 import argparse
 import base64
+import calendar
 import hashlib
 import heapq
 import json
+import os
 import queue
 import random
 import re
@@ -47,6 +49,11 @@ CONSOLE_ID = re.compile(r"[0-9a-f]{12}")  # the 6-byte MAC that starts the OpenP
 VIP_BASE = 0x0A500000        # 10.80.0.0
 FIRST_MEMBER_ID = 0x10
 MAX_ROOMS_PER_CONN = 4       # the game stays in its hideout room while it hosts or joins a VS room
+MAX_HTTP_BODY = 4096         # POST /beta/check
+INFRA_PROTO = 2              # login field "proto" of runtimes that speak this wire protocol (beta 1)
+BETA_CONNS_PER_ADDR = 64     # with a beta config: connections per address at the handshake (staff load tests)
+MAX_ROOMS_PER_ADDR = 8       # with a beta config: rooms owned by invitee sessions of one address
+CHECKS_PER_MIN = 30          # POST /beta/check per address
 
 # SCE_NP_MATCHING2_ROOM_FLAG_ATTR_* (RPCS3 sceNp2.h)
 FLAG_CLOSED, FLAG_FULL, FLAG_HIDDEN = 0x40000000, 0x20000000, 0x10000000
@@ -60,6 +67,15 @@ NO_SUCH_ROOM = 0x80550D13
 ROOM_FULL = 0x80550D19
 NO_SUCH_USER = 0x80550D1C
 ALREADY_JOINED = 0x80550D30
+# Our own (beta gate), in the same range so the runtime treats them as login failures.
+INVITE_UNKNOWN = 0x80550DA1
+INVITE_DISABLED = 0x80550DA2
+BETA_CLOSED = 0x80550DA3
+OUTDATED = 0x80550DA4
+INVITE_IN_USE = 0x80550DA5
+REFUSAL = {INVITE_UNKNOWN: "invite unknown", INVITE_DISABLED: "invite disabled", BETA_CLOSED: "beta closed",
+           OUTDATED: "outdated runtime", INVITE_IN_USE: "invite in use",
+           SERVICE_UNAVAILABLE: "too many sessions from this address"}
 
 # SCE_NP_MATCHING2_EVENT_CAUSE_*
 CAUSE_LEAVE, CAUSE_KICKOUT, CAUSE_DISAPPEARED = 1, 2, 5
@@ -121,6 +137,40 @@ def disable_quick_edit():
     if not k32.GetConsoleMode(h, ctypes.byref(mode)) or not mode.value & 0x40:  # no console / already off
         return False
     return bool(k32.SetConsoleMode(h, (mode.value & ~0x40) | 0x80))  # ENABLE_EXTENDED_FLAGS keeps it applied
+
+
+def normalize_code(text):
+    """Invite codes are shown as P3-XXXX-XXXX; case, spaces and dashes do not matter."""
+    return re.sub(r"[\s-]", "", str(text)).upper()
+
+
+def code_hash(text):
+    return hashlib.sha256(normalize_code(text).encode()).hexdigest()
+
+
+def parse_utc(text):
+    return calendar.timegm(time.strptime(text, "%Y-%m-%dT%H:%M:%SZ"))
+
+
+def iso_utc(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+
+
+def load_beta(path):
+    """The beta config: window (UTC), minimum protocol, invite codes by SHA-256 (the codes themselves are never
+    stored here). Raises OSError / ValueError / KeyError / TypeError on a bad file."""
+    with open(path, encoding="utf-8") as f:
+        raw = json.load(f)
+    cfg = {"starts": raw["starts"], "ends": raw["ends"], "t0": parse_utc(raw["starts"]), "t1": parse_utc(raw["ends"]),
+           "min_proto": int(raw.get("min_proto", INFRA_PROTO)), "max_per_code": int(raw.get("max_per_code", 2)),
+           "codes": {}}
+    for c in raw.get("codes", []):
+        sha = str(c["sha256"]).lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", sha):
+            raise ValueError("bad sha256 for %r" % c.get("label"))
+        cfg["codes"][sha] = {"label": str(c["label"]), "enabled": bool(c.get("enabled", True)),
+                             "staff": bool(c.get("staff", False))}
+    return cfg
 
 
 class Err(Exception):
@@ -252,6 +302,10 @@ class Conn:
         self.bytes_in = self.bytes_out = 0
         self.online_id = None
         self.console = None         # console id from the login, None for older runtimes
+        self.proto = None           # wire protocol version from the login
+        self.code_label = None      # beta invite code label ("invitado 07"); the code itself is never kept
+        self.code_sha = None
+        self.staff = False
         self.session = None
         self.vip = 0
         self.port = 0
@@ -270,8 +324,16 @@ class Conn:
 class Server:
     def __init__(self, host="127.0.0.1", port=27320, ws_port=27321, ws_path="/infra", max_rooms=64,
                  idle=30.0, stats_every=60.0, delay_ms=0, max_per_addr=4, max_conns=512, signal_timeout=15.0,
-                 loss=0, logger=log):
+                 loss=0, logger=log, beta_path=None, clock=time.time):
         self.log = logger
+        self.clock = clock
+        self.beta_path = beta_path
+        self.beta = self.beta_mtime = None
+        if beta_path:
+            self.beta_mtime = os.stat(beta_path).st_mtime_ns
+            self.beta = load_beta(beta_path)
+        self.beta_checked = time.monotonic()
+        self.checks = {}        # addr -> times of POST /beta/check in the last minute
         self.listeners = {}
         for p, kind in ((port, "tcp"), (ws_port, "ws")):
             if p is None:
@@ -297,6 +359,9 @@ class Server:
         self.stats_every = stats_every
         self.delay = delay_ms / 1000.0
         self.max_per_addr = max_per_addr
+        # Without a beta config, max_per_addr caps connections as before; with one, connections get a wide cap (staff
+        # load tests) and max_per_addr caps invitee sessions at the login instead.
+        self.conn_cap = max(BETA_CONNS_PER_ADDR, max_per_addr) if self.beta else max_per_addr
         self.max_conns = max_conns
         self.signal_timeout = signal_timeout
         self.loss = loss / 100.0
@@ -318,7 +383,7 @@ class Server:
 
     # ---- connection plumbing ----
     def count_addr(self, conn, key):
-        if self.per_addr.get(key, 0) >= self.max_per_addr:
+        if self.per_addr.get(key, 0) >= self.conn_cap:
             return False
         self.per_addr[key] = self.per_addr.get(key, 0) + 1
         conn.addr_key = key
@@ -438,13 +503,27 @@ class Server:
                 self.drop(conn, "HTTP header too long")
             return
         head = bytes(conn.rx[:end]).decode("latin-1")
-        del conn.rx[:end + 4]
         lines = head.split("\r\n")
         parts = lines[0].split(" ")
         headers = {}
         for line in lines[1:]:
             k, _, v = line.partition(":")
             headers[k.strip().lower()] = v.strip()
+        body = b""
+        if parts[0] == "POST":
+            try:
+                n = int(headers.get("content-length", "0"))
+            except ValueError:
+                n = -1
+            if not 0 <= n <= MAX_HTTP_BODY:
+                del conn.rx[:]
+                return self.http_answer(conn, "413 Payload Too Large", {"error": "body"})
+            if len(conn.rx) < end + 4 + n:
+                return  # the rest of the body is still coming
+            body = bytes(conn.rx[end + 4:end + 4 + n])
+            del conn.rx[:end + 4 + n]
+        else:
+            del conn.rx[:end + 4]
         path = parts[1].split("?", 1)[0] if len(parts) >= 3 else ""
         upgrade = headers.get("upgrade", "").lower() == "websocket"
         key = headers.get("sec-websocket-key", "")
@@ -452,6 +531,10 @@ class Server:
         addr = conn.peer_ip
         if conn.peer_ip in ("127.0.0.1", "::1") and headers.get("cf-connecting-ip"):
             addr = headers["cf-connecting-ip"][:64]
+        if len(parts) >= 3 and not upgrade and path == "/beta" and parts[0] == "GET":
+            return self.http_answer(conn, "200 OK", self.beta_status())
+        if len(parts) >= 3 and not upgrade and path == "/beta/check" and parts[0] == "POST":
+            return self.http_check(conn, addr, body)
         if parts[0] != "GET" or len(parts) < 3:
             conn.close_after_flush = True
             return self.raw_send(conn, b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
@@ -474,6 +557,92 @@ class Server:
         conn.ws_open = True
         if conn.rx:
             self.parse_ws(conn)
+
+    # ---- beta: GET /beta, POST /beta/check on the WebSocket listener (online.montick.app) ----
+    def http_answer(self, conn, status, obj):
+        body = json.dumps(obj).encode()
+        conn.close_after_flush = True
+        self.raw_send(conn, b"HTTP/1.1 %s\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n"
+                            b"Content-Length: %d\r\nConnection: close\r\n\r\n%s" % (status.encode(), len(body), body))
+
+    def beta_open(self):
+        return self.beta is None or self.beta["t0"] <= self.clock() <= self.beta["t1"]
+
+    def beta_status(self):
+        b = self.beta or {}
+        return {"open": self.beta_open(), "starts": b.get("starts"), "ends": b.get("ends"), "now": iso_utc(self.clock()),
+                "min_proto": b.get("min_proto", INFRA_PROTO)}
+
+    def beta_code(self, invite):
+        if self.beta is None or not isinstance(invite, str) or not normalize_code(invite):
+            return None, None
+        sha = code_hash(invite)
+        return sha, self.beta["codes"].get(sha)
+
+    def http_check(self, conn, addr, body):
+        now = time.monotonic()
+        if len(self.checks) > 10000:
+            self.checks.clear()
+        recent = [t for t in self.checks.get(addr, ()) if now - t < 60]
+        if len(recent) >= CHECKS_PER_MIN:
+            self.checks[addr] = recent
+            return self.http_answer(conn, "429 Too Many Requests", {"error": "too many checks"})
+        self.checks[addr] = recent + [now]
+        try:
+            code = json.loads(body.decode("utf-8"))["code"]
+            if not isinstance(code, str):
+                raise TypeError
+        except (UnicodeDecodeError, ValueError, KeyError, TypeError):
+            return self.http_answer(conn, "400 Bad Request", {"error": "body"})
+        if self.beta is None:
+            return self.http_answer(conn, "200 OK", {"result": "ok"})
+        _, e = self.beta_code(code)
+        if e is None:
+            res = {"result": "unknown"}
+        elif not e["enabled"]:
+            res = {"result": "disabled"}
+        elif not e["staff"] and not self.beta_open():
+            res = {"result": "closed"}
+        else:
+            res = {"result": "ok", "label": e["label"]}
+        self.http_answer(conn, "200 OK", res)
+
+    def beta_reload(self):
+        try:
+            mtime = os.stat(self.beta_path).st_mtime_ns
+            if mtime == self.beta_mtime:
+                return
+            self.beta_mtime = mtime
+            self.beta = load_beta(self.beta_path)
+            self.log("beta config reloaded: %d codes" % len(self.beta["codes"]))
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            self.log("beta config not read (%s: %s): keeping the previous one" % (type(e).__name__, e))
+
+    def beta_login(self, conn, msg):
+        """Raises the refusal for a login the beta config does not allow; fills the session's code fields."""
+        label = "?"
+        try:
+            proto = msg.get("proto")
+            if type(proto) is not int or proto < self.beta["min_proto"]:
+                raise Err(OUTDATED)
+            sha, e = self.beta_code(msg.get("invite"))
+            if e is None:
+                raise Err(INVITE_UNKNOWN)
+            label = e["label"]
+            if not e["enabled"]:
+                raise Err(INVITE_DISABLED)
+            if not e["staff"]:
+                if not self.beta_open():
+                    raise Err(BETA_CLOSED)
+                live = [c for c in self.conns.values() if c.session and not c.closed]
+                if sum(1 for c in live if c.code_sha == sha) >= self.beta["max_per_code"]:
+                    raise Err(INVITE_IN_USE)
+                if sum(1 for c in live if not c.staff and c.addr_key == conn.addr_key) >= self.max_per_addr:
+                    raise Err(SERVICE_UNAVAILABLE)
+        except Err as err:
+            self.log("login refused %s: %s (%s)" % (label, REFUSAL.get(err.code, "0x%08X" % err.code), conn.label()))
+            raise
+        conn.code_label, conn.code_sha, conn.staff = label, sha, e["staff"]
 
     def parse_ws(self, conn):
         while len(conn.rx) >= 2 and not conn.closed:
@@ -621,6 +790,10 @@ class Server:
         console = msg.get("console")
         if console is not None and (not isinstance(console, str) or not CONSOLE_ID.fullmatch(console)):
             raise Err(BAD_REQUEST)
+        if self.beta is not None:
+            self.beta_login(conn, msg)
+        proto = msg.get("proto")
+        conn.proto = proto if type(proto) is int else None
         n = 1
         while VIP_BASE + n in self.by_vip:
             n += 1
@@ -685,6 +858,10 @@ class Server:
 
     def op_create(self, conn, msg):
         if len(conn.rooms) >= MAX_ROOMS_PER_CONN or len(self.rooms) >= self.max_rooms:
+            raise Err(SERVICE_UNAVAILABLE)
+        if self.beta is not None and not conn.staff and sum(
+                1 for r in self.rooms.values()
+                if not r.owner.conn.staff and r.owner.conn.addr_key == conn.addr_key) >= MAX_ROOMS_PER_ADDR:
             raise Err(SERVICE_UNAVAILABLE)
         max_slot = int(msg["max_slot"])
         if not 1 <= max_slot <= 16:
@@ -813,6 +990,13 @@ class Server:
 
     # ---- loop ----
     def tick(self, now):
+        if self.beta_path and now - self.beta_checked >= 1.0:
+            self.beta_checked = now
+            self.beta_reload()
+        if self.beta is not None and not self.beta_open():
+            for conn in list(self.conns.values()):
+                if conn.session and not conn.staff:
+                    self.drop(conn, "beta closed")
         for room in list(self.rooms.values()):
             for (to, about), deadline in list(room.waiting.items()):
                 if deadline <= now and room.waiting.pop((to, about), None) is not None:
@@ -1324,7 +1508,193 @@ def selftest():
         cl.close()
     srv.running = False
     th.join(timeout=2)
+
+    beta_selftest(run, quiet, lines)
     print("selftest OK")
+
+
+def beta_selftest(run, quiet, lines):
+    """Beta gate: invite codes, window, protocol version, limits, /beta routes."""
+    import datetime
+    import http.client
+    import os
+    import tempfile
+
+    def http_req(port, method, path, body=None):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+        headers = {"Content-Type": "application/json"} if body is not None else {}
+        c.request(method, path, json.dumps(body) if body is not None else None, headers)
+        r = c.getresponse()
+        data = r.read()
+        c.close()
+        if (r.getheader("Content-Type") or "").startswith("application/json"):
+            data = json.loads(data)
+        return r.status, data
+
+    def refused(cl, code, **kw):
+        a = cl.req("login", **kw)
+        assert not a["ok"] and a["error"] == code, (kw, a, "want 0x%08X" % code)
+
+    # no_config_unchanged
+    srv = Server("127.0.0.1", 0, 0, logger=quiet)
+    th = run(srv)
+    n = TestClient(srv.port)
+    n.ok("login", online_id="NOCFG")
+    st, body = http_req(srv.ws_port, "GET", "/beta")
+    assert st == 200 and body["open"] is True and body["starts"] is None and body["ends"] is None, (st, body)
+    four = [TestClient(srv.port) for _ in range(3)]
+    assert TestClient(srv.port).is_closed(), "without --beta the 5th connection from an address is refused as before"
+    for cl in [n] + four:
+        cl.close()
+    srv.running = False
+    th.join(timeout=2)
+
+    tmp = tempfile.mkdtemp(prefix="p3beta_")
+    cfg_path = os.path.join(tmp, "beta_config.json")
+    starts, ends = "2026-10-24T03:00:00Z", "2026-10-26T05:59:59Z"
+    t_start = datetime.datetime(2026, 10, 24, 3, 0, 0, tzinfo=datetime.timezone.utc).timestamp()
+    t_end = datetime.datetime(2026, 10, 26, 5, 59, 59, tzinfo=datetime.timezone.utc).timestamp()
+    codes = {"P3-K7QF-2MXD": ["invitado 07", True, False], "P3-AAAA-BBBB": ["invitado 08", True, False],
+             "P3-CCCC-DDDD": ["invitado 10", True, False], "P3-EEEE-FFFF": ["invitado 11", True, False],
+             "P3-STAF-F222": ["staff 01", True, True], "P3-NNNN-PPPP": ["invitado 09", False, False]}
+
+    def write_cfg(bump=0):
+        cfg = {"starts": starts, "ends": ends, "min_proto": 2, "max_per_code": 2,
+               "codes": [{"label": lab, "sha256": hashlib.sha256(c.replace("-", "").encode()).hexdigest(),
+                          "enabled": en, "staff": staff} for c, (lab, en, staff) in codes.items()]}
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f)
+        if bump:
+            st_ = os.stat(cfg_path)
+            os.utime(cfg_path, ns=(st_.st_atime_ns, st_.st_mtime_ns + bump * 1_000_000_000))
+    write_cfg()
+    now = [t_start + 3600]
+    srv = Server("127.0.0.1", 0, 0, logger=quiet, beta_path=cfg_path, clock=lambda: now[0])
+    th = run(srv)
+    by_id = lambda oid: next(c for c in list(srv.conns.values()) if c.online_id == oid)
+
+    # unknown_code + outdated_proto
+    u = TestClient(srv.port)
+    refused(u, INVITE_UNKNOWN, online_id="UNK", proto=2, invite="P3-ZZZZ-ZZZZ")
+    refused(u, INVITE_UNKNOWN, online_id="UNK", proto=2)
+    refused(u, OUTDATED, online_id="UNK", invite="P3-K7QF-2MXD")
+    refused(u, OUTDATED, online_id="UNK", proto=1, invite="P3-K7QF-2MXD")
+    assert any("login refused" in l and "outdated" in l for l in lines), "refusals logged"
+    # code_normalized
+    k = TestClient(srv.port)
+    k.ok("login", online_id="P3K1", proto=2, invite=" p3-k7qf-2mxd ")
+    kc = by_id("P3K1")
+    assert (kc.code_label, kc.staff, kc.proto) == ("invitado 07", False, 2), (kc.code_label, kc.staff, kc.proto)
+    s = TestClient(srv.port)
+    s.ok("login", online_id="STAFF1", proto=2, invite="P3STAFF222")
+    assert by_id("STAFF1").staff is True
+    # window_closed: before the start and after the end invitees are refused and staff is not; an invitee's open
+    # session ends with the window.
+    for t in (t_start - 1, t_end + 1):
+        now[0] = t
+        refused(u, BETA_CLOSED, online_id="LATE", proto=2, invite="P3-AAAA-BBBB")
+        w = TestClient(srv.port)
+        w.ok("login", online_id="STAFF2", proto=2, invite="P3-STAF-F222")
+        w.close()
+    assert k.is_closed(), "an invitee's session closes when the window ends"
+    assert s.ok("ping", t=1)["t"] == 1, "staff stays"
+    now[0] = t_start + 7200
+    # max_two_per_code
+    c1, c2, c3 = TestClient(srv.port), TestClient(srv.port), TestClient(srv.port)
+    c1.ok("login", online_id="P3B1", proto=2, invite="P3-AAAA-BBBB")
+    c2.ok("login", online_id="P3B2", proto=2, invite="P3-AAAA-BBBB")
+    refused(c3, INVITE_IN_USE, online_id="P3B3", proto=2, invite="P3-AAAA-BBBB")
+    c1.close()
+    deadline = time.monotonic() + 3
+    while True:
+        a = c3.req("login", online_id="P3B3", proto=2, invite="P3-AAAA-BBBB")
+        if a["ok"]:
+            break
+        assert time.monotonic() < deadline, "the code is free again after one session closes: %r" % a
+        time.sleep(0.05)
+    # disable_live: the open session stays, the next login is refused.
+    k2 = TestClient(srv.port)
+    k2.ok("login", online_id="P3K2", proto=2, invite="P3-K7QF-2MXD")
+    codes["P3-K7QF-2MXD"][1] = False
+    write_cfg(bump=2)
+    k3 = TestClient(srv.port)
+    deadline = time.monotonic() + 2
+    while True:
+        a = k3.req("login", online_id="P3K3", proto=2, invite="P3-K7QF-2MXD")
+        if not a["ok"] and a["error"] == INVITE_DISABLED:
+            break
+        assert time.monotonic() < deadline, "disabled code still logs in: %r" % a
+        if a["ok"]:
+            k3.close()
+            k3 = TestClient(srv.port)
+        time.sleep(0.1)
+    assert k2.ok("ping", t=2)["t"] == 2, "the open session of a disabled code stays"
+    # a broken file keeps the previous config
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write("{broken")
+    st_ = os.stat(cfg_path)
+    os.utime(cfg_path, ns=(st_.st_atime_ns, st_.st_mtime_ns + 4_000_000_000))
+    time.sleep(1.3)
+    assert c2.ok("ping", t=3)["t"] == 3
+    v = TestClient(srv.port)
+    refused(v, INVITE_DISABLED, online_id="P3K4", proto=2, invite="P3-K7QF-2MXD")
+    assert any("beta config" in l and "keeping" in l for l in lines), "broken config logged"
+    write_cfg(bump=6)
+    for cl in (k2, k3, v, c3):
+        cl.close()
+    time.sleep(0.3)
+    # two_codes_one_address: 4 sessions of two codes from 127.0.0.1 (c2 + three more), the 5th is refused.
+    d1, d2, d3, d4 = (TestClient(srv.port) for _ in range(4))
+    d1.ok("login", online_id="P3B4", proto=2, invite="P3-AAAA-BBBB")
+    d2.ok("login", online_id="P3C1", proto=2, invite="P3-CCCC-DDDD")
+    d3.ok("login", online_id="P3C2", proto=2, invite="P3-CCCC-DDDD")
+    refused(d4, SERVICE_UNAVAILABLE, online_id="P3E1", proto=2, invite="P3-EEEE-FFFF")
+    far = TestClient(srv.ws_port, ws=True, headers="CF-Connecting-IP: 203.0.113.9\r\n")
+    assert far.status == 101
+    far.ok("login", online_id="P3E2", proto=2, invite="P3-EEEE-FFFF")
+    # rooms_per_address: the four invitee sessions of 127.0.0.1 own 8 rooms at most; staff is not counted.
+    made = 0
+    for cl in (c2, d1, d2, d3):
+        for _ in range(2):
+            cl.ok("create", max_slot=4, ints=GAME_INTS)
+            made += 1
+    ninth = d1.req("create", max_slot=4, ints=GAME_INTS)
+    assert made == 8 and not ninth["ok"] and ninth["error"] == SERVICE_UNAVAILABLE, ninth
+    s.ok("create", max_slot=4, ints=GAME_INTS)
+    far.ok("create", max_slot=4, ints=GAME_INTS)
+    # http_beta_status
+    st, body = http_req(srv.ws_port, "GET", "/beta")
+    assert st == 200 and body["open"] is True and (body["starts"], body["ends"]) == (starts, ends), (st, body)
+    assert body["min_proto"] == 2 and body["now"].endswith("Z"), body
+    now[0] = t_start - 60
+    st, body = http_req(srv.ws_port, "GET", "/beta")
+    assert body["open"] is False, body
+    # http_beta_check
+    checks = 0
+
+    def check(code):
+        nonlocal checks
+        checks += 1
+        return http_req(srv.ws_port, "POST", "/beta/check", {"code": code})
+    assert check("P3-AAAA-BBBB") == (200, {"result": "closed"})
+    assert check("p3 staf f222") == (200, {"result": "ok", "label": "staff 01"})
+    now[0] = t_start + 60
+    assert check(" p3-aaaa-bbbb ") == (200, {"result": "ok", "label": "invitado 08"})
+    assert check("P3-K7QF-2MXD") == (200, {"result": "disabled"})
+    assert check("P3-ZZZZ-ZZZZ") == (200, {"result": "unknown"})
+    assert check("") == (200, {"result": "unknown"})
+    st, _ = http_req(srv.ws_port, "POST", "/beta/check", None)
+    checks += 1
+    assert st == 400, st
+    while checks < 30:
+        assert check("P3-ZZZZ-ZZZZ")[0] == 200, checks
+    assert check("P3-ZZZZ-ZZZZ")[0] == 429, "31st check in a minute"
+    st, body = http_req(srv.ws_port, "GET", "/")
+    assert st == 200 and body == b"Patapon 3 infrastructure server\n", (st, body)
+    for cl in (u, s, c2, d1, d2, d3, d4, far):
+        cl.close()
+    srv.running = False
+    th.join(timeout=2)
 
 
 def main():
@@ -1333,7 +1703,7 @@ def main():
     ap.add_argument("--port", type=int, default=27320, help="raw TCP listener")
     ap.add_argument("--ws-port", type=int, default=27321, help="WebSocket listener (behind the tunnel)")
     ap.add_argument("--ws-path", default="/infra")
-    ap.add_argument("--max-rooms", type=int, default=64)
+    ap.add_argument("--max-rooms", type=int, default=256)
     ap.add_argument("--idle", type=float, default=30.0, help="seconds without a frame before a session closes")
     ap.add_argument("--stats-every", type=float, default=60.0)
     ap.add_argument("--delay-ms", type=int, default=0, help="extra latency on datagrams and pings (tests)")
@@ -1341,16 +1711,23 @@ def main():
     ap.add_argument("--max-per-addr", type=int, default=4)
     ap.add_argument("--signal-timeout", type=float, default=15.0,
                     help="seconds a member may take to bind its game socket before its peers get SIGNALING_DEAD")
+    ap.add_argument("--beta", help="beta config (invite codes, window, minimum protocol); none = no gate")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
         return selftest()
     alog = AsyncLog()
     srv = Server(args.host, args.port, args.ws_port, args.ws_path, args.max_rooms, args.idle, args.stats_every,
-                 args.delay_ms, args.max_per_addr, signal_timeout=args.signal_timeout, loss=args.loss, logger=alog)
+                 args.delay_ms, args.max_per_addr, signal_timeout=args.signal_timeout, loss=args.loss, logger=alog,
+                 beta_path=args.beta)
     if disable_quick_edit():
         alog("console QuickEdit turned off: a click in this window no longer pauses the server")
     alog("infrastructure server: tcp %s:%d, ws %s:%d%s" % (args.host, srv.port, args.host, srv.ws_port, args.ws_path))
+    if srv.beta:
+        b = srv.beta
+        alog("beta gate: %d codes (%d staff), open %s .. %s UTC, min proto %d, %d per code"
+             % (len(b["codes"]), sum(1 for c in b["codes"].values() if c["staff"]), b["starts"], b["ends"],
+                b["min_proto"], b["max_per_code"]))
     try:
         srv.serve()
     except KeyboardInterrupt:
