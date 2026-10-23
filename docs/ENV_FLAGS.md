@@ -504,18 +504,27 @@ launcher's Saves screen sets this variable. Unset or missing save: the newest, a
   `[OSK] demo keyboard open` and, when accepted, `[OSK] demo text: <text>`.
 - **Set it when:** taking screenshots of the on-screen keyboard skins.
 
-### `PSPRECOMP_ADHOC_SERVER`, `PSPRECOMP_ADHOC_NICK`, `PSPRECOMP_ADHOC_MAC`, `PSPRECOMP_ADHOC_PORT_OFFSET`, `PSPRECOMP_ADHOC_BIND`, `PSPRECOMP_ADHOC_MAC_FILE`
+### `PSPRECOMP_ADHOC_SERVER`, `PSPRECOMP_ADHOC_NICK`, `PSPRECOMP_ADHOC_MAC`, `PSPRECOMP_ADHOC_PORT_OFFSET`, `PSPRECOMP_ADHOC_BIND`, `PSPRECOMP_ADHOC_MAC_FILE`, `PSPRECOMP_ADHOC_MACHINE_ID`
 - **Read in:** `runtime/src/net/adhoc_config.cpp` (`adhoc_config_load`), once, from
   `psp_net_config()` in `runtime/src/hle/psp_hle_net.cpp` (first sceWlan/sceNetAdhocctl call).
 - **Type:** env. `SERVER` = `host` or `host:port`; `MAC` = `aa:bb:cc:dd:ee:ff`; `PORT_OFFSET`
-  = 0..65535; `BIND` = local IPv4 address; `MAC_FILE` = path.
+  = 0..65535; `BIND` = local IPv4 address; `MAC_FILE` = path; `MACHINE_ID` = any string.
 - **Default:** server `127.0.0.1:27312` (a local PRO ad hoc server, e.g. PPSSPP's built-in one or
   `tools/adhoc_server.py`), nickname `Patapon`, port offset 10000 (PPSSPP's), no bind address,
   MAC read from `psprecomp_adhoc_mac.txt` in the working directory or generated once and written
-  there (first byte's two low bits clear, like PPSSPP).
+  there (first byte's two low bits clear, like PPSSPP). The file is one line
+  `aa:bb:cc:dd:ee:ff <hash16>`, the hash being FNV-1a 64 of the host's machine id (Windows
+  `MachineGuid`, else the computer name; POSIX `/etc/machine-id`, else the host name,
+  `runtime/src/psp_machine_id.cpp`). A file without the hash (older runtimes) or with another
+  machine's hash is replaced once by a new MAC (`[ADHOC] new MAC for this machine ...`), so a game
+  folder copied to another PC never shares the console identity. `MACHINE_ID` replaces the host's
+  id (tests: two "machines" on one PC). `MAC` still wins over the file.
 - **Effect:** Ad hoc multiplayer identity and server. The game sees the MAC through
   `sceWlanGetEtherAddr`; `sceNetAdhocctlInit` logs in to the server with MAC, nickname and the
-  game's product code. Logged as `[ADHOC] config: ...`, `[ADHOC] logged in ...`.
+  game's product code. Patapon 3 tells players apart by the OpenPSID built from this MAC, in ad hoc
+  and in infrastructure mode, so two consoles with one MAC are both "player 1"; the infrastructure
+  server refuses a second member with the same MAC in one room. Logged as `[ADHOC] config: ...`
+  (with the machine hash, never the raw id), `[ADHOC] logged in ...`.
 - **Set it when:** running two instances on one PC (each needs its own `MAC`, `BIND` such as
   127.0.0.1 / 127.0.0.2, and `PSPRECOMP_DEBUG_PORT`), or playing through another server.
 

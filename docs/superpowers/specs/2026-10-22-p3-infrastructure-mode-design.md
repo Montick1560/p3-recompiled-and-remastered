@@ -146,6 +146,16 @@ answers from the measured server RTT (`net/infra_signal.h`: <=80 ms 99 %, <=150 
 else 5 %) for any code path that asks. Where the game takes the meter's value from is still open (candidates: a
 field of the hideout state the host sends over TCP, or a constant in infrastructure mode).
 
+## Player identity (2026-10-22, plan 2026-10-22-p3-unique-player-identity.md)
+
+The game tells players apart by `sceOpenPSIDGetOpenPSID`, which the runtime builds from the ad hoc MAC. Every
+two-instance e2e up to `pub2` shared one MAC file, and in the mission the visitor's own hero was `1.Edson`, its
+screen identical to the host's (`build/infra/pub2/ms_B.png`); with two MACs it is `2.Edson` and its HUD icons swap
+order (`build/infra/mac1/compare_ms.png`). The MAC file now records a hash of the host's machine id and is
+regenerated on another machine (a copied game folder no longer copies the identity), the login carries
+`"console"` (the MAC as 12 hex digits) and the server refuses a join into a room where a member has the same
+console id with FORBIDDEN (0x80550D07), which the game shows as a failed connection.
+
 ## Out of scope (later)
 Launcher setting for the server address (env only for now), hosting next to patapon.net, TCP sockets (`sceNetInetConnect/Listen`)
 unless the game turns out to use them in a session (checked in the plan), chat via `sceNpMatching2SendRoomChatMessage`

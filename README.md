@@ -298,7 +298,10 @@ Run the server with `python -I tools/infra_server.py` (TCP 27320, WebSocket 2732
 `tools/run_infra_server.bat`; the runtime connects to `PSPRECOMP_INFRA_SERVER` (default
 `wss://online.montick.app/infra`, `off` to disable) only after the player picks infrastructure mode
 ([docs/ENV_FLAGS.md](docs/ENV_FLAGS.md)). Play across machines is not tested yet; the signal meter under each hero
-always shows full bars (see the spec).
+always shows full bars (see the spec). The game tells players apart by the console MAC: each machine generates
+its own on its first start (the MAC file is bound to the machine, so a copied game folder gets a new one), and two
+instances on one PC need their own `PSPRECOMP_ADHOC_MAC`; the server refuses a second player with the same MAC in a
+room instead of making two "player 1"s.
 
 ### Prerequisites
 
