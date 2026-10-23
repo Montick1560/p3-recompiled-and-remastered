@@ -5,7 +5,9 @@ The port answers the PSN/NP imports itself and implements sceNpMatching2 over
 this server: login (online id -> session + virtual IP 10.80.0.n), room search
 with the game's int filters, room details, create / join / leave / kickout,
 room and signaling events pushed to the members, and forwarding of the game's
-UDP datagrams between virtual IPs of the same room.
+UDP datagrams between virtual IPs that share a room. A connection can be in up to
+four rooms at once (the game keeps its hideout room while it hosts or joins a VS
+room); room flags (HIDDEN, CLOSED, FULL) apply to search and join as on PSN.
 
 Wire format (docs/superpowers/specs/2026-10-22-p3-infrastructure-mode-design.md):
 frames `u32 length (LE, of kind + body) | u8 kind | body`; kind 1 = UTF-8 JSON
@@ -44,6 +46,10 @@ ONLINE_ID = re.compile(r"[A-Za-z0-9_-]{3,16}")
 CONSOLE_ID = re.compile(r"[0-9a-f]{12}")  # the 6-byte MAC that starts the OpenPSID
 VIP_BASE = 0x0A500000        # 10.80.0.0
 FIRST_MEMBER_ID = 0x10
+MAX_ROOMS_PER_CONN = 4       # the game stays in its hideout room while it hosts or joins a VS room
+
+# SCE_NP_MATCHING2_ROOM_FLAG_ATTR_* (RPCS3 sceNp2.h)
+FLAG_CLOSED, FLAG_FULL, FLAG_HIDDEN = 0x40000000, 0x20000000, 0x10000000
 
 # PSP NP Matching2 server errors: 0x80550D00 | (PS3 SCE_NP_MATCHING2_SERVER_ERROR_* & 0xFF)
 BAD_REQUEST = 0x80550D01
@@ -249,7 +255,7 @@ class Conn:
         self.session = None
         self.vip = 0
         self.port = 0
-        self.room = None
+        self.rooms = {}             # room id -> Room this connection is a member of
         self.dgram_window = 0.0
         self.dgram_count = 0
         self.dgram_dropped = 0
@@ -357,8 +363,8 @@ class Server:
         if conn.closed:
             return
         conn.closed = True
-        if conn.room is not None:
-            self.leave_room(conn, CAUSE_DISAPPEARED, b"")
+        for room in list(conn.rooms.values()):
+            self.leave_room(conn, room, CAUSE_DISAPPEARED, b"")
         try:
             self.sel.unregister(conn.sock)
         except (KeyError, ValueError):
@@ -569,7 +575,7 @@ class Server:
             return
         vip, dst_port, src_port = struct.unpack_from("<IHH", body)
         dst = self.by_vip.get(vip)
-        if dst is None or conn.room is None or dst.room is not conn.room or dst is conn:
+        if dst is None or dst is conn or not self.share_room(conn, dst):
             conn.dgram_dropped += 1
             return
         if self.loss and self.rng.random() < self.loss:
@@ -593,13 +599,17 @@ class Server:
             return self.drop(conn, "stream flood")
         vip, dst_port, src_port = struct.unpack_from("<IHH", body)
         dst = self.by_vip.get(vip)
-        if dst is None or conn.room is None or dst.room is not conn.room or dst is conn:
+        if dst is None or dst is conn or not self.share_room(conn, dst):
             return
         out = frame(3, struct.pack("<IHH", conn.vip, dst_port, src_port) + body[8:])
         if self.delay:
             self.later(dst, out)
         else:
             self.send_frame(dst, out)
+
+    @staticmethod
+    def share_room(a, b):
+        return not a.rooms.keys().isdisjoint(b.rooms.keys())
 
     # ---- requests ----
     def op_login(self, conn, msg):
@@ -635,11 +645,13 @@ class Server:
             raise Err(BAD_REQUEST)
         conn.port = port
         self.log("%s bound game port %d" % (conn.label(), port))
-        if conn.room is not None:
-            self.resolve(conn.room)
+        for room in conn.rooms.values():
+            self.resolve(room)
         return {}
 
-    def match(self, room, filters):
+    def match(self, room, filters, flag_filter=0, flag_attr=0):
+        if room.flag_attr & FLAG_HIDDEN or room.flag_attr & flag_filter != flag_attr & flag_filter:
+            return False
         for op, aid, value in filters:
             if not OPS[op](room.ints.get(aid, 0), value):
                 return False
@@ -655,7 +667,8 @@ class Server:
         attrs = {attr_id(a) for a in msg.get("attrs", [])[:16]}
         start = max(1, int(msg.get("start", 1)))
         count = max(0, min(20, int(msg.get("max", 20))))
-        found = [r for r in self.rooms.values() if self.match(r, filters)]
+        flag_filter, flag_attr = u32(msg.get("flag_filter", 0)), u32(msg.get("flag_attr", 0))
+        found = [r for r in self.rooms.values() if self.match(r, filters, flag_filter, flag_attr)]
         page = found[start - 1:start - 1 + count]
         self.log("%s search (%d filters) -> %d of %d rooms" % (conn.label(), len(filters), len(page), len(found)))
         return {"total": len(found), "rooms": [r.ext(attrs) for r in page]}
@@ -671,9 +684,7 @@ class Server:
         return {"rooms": rooms}
 
     def op_create(self, conn, msg):
-        if conn.room is not None:
-            raise Err(ALREADY_JOINED)
-        if len(self.rooms) >= self.max_rooms:
+        if len(conn.rooms) >= MAX_ROOMS_PER_CONN or len(self.rooms) >= self.max_rooms:
             raise Err(SERVICE_UNAVAILABLE)
         max_slot = int(msg["max_slot"])
         if not 1 <= max_slot <= 16:
@@ -691,18 +702,20 @@ class Server:
         room.owner = owner
         room.members.append(owner)
         self.rooms[room.id] = room
-        conn.room = room
+        conn.rooms[room.id] = room
         self.log("%s create room %d (%d slots, %d int, %d bin attrs)"
                  % (conn.label(), room.id, max_slot, len(ints), len(room.bins)))
         return {"room": room.internal(owner)}
 
     def op_join(self, conn, msg):
-        if conn.room is not None:
-            raise Err(ALREADY_JOINED)
         room = self.rooms.get(int(msg["room_id"]))
         if room is None:
             raise Err(NO_SUCH_ROOM)
-        if len(room.members) >= room.max_slot:
+        if room.id in conn.rooms:
+            raise Err(ALREADY_JOINED)
+        if len(conn.rooms) >= MAX_ROOMS_PER_CONN:
+            raise Err(SERVICE_UNAVAILABLE)
+        if len(room.members) >= room.max_slot or room.flag_attr & (FLAG_CLOSED | FLAG_FULL):
             raise Err(ROOM_FULL)
         # The game tells players apart by the OpenPSID built from the console
         # MAC: a second member with the same one would also be "player 1".
@@ -715,7 +728,7 @@ class Server:
         room.next_member_id += 1
         olds = list(room.members)
         room.members.append(member)
-        conn.room = room
+        conn.rooms[room.id] = room
         self.log("%s join room %d as 0x%X (%d/%d)" % (conn.label(), room.id, member.member_id,
                                                          len(room.members), room.max_slot))
         answer = {"id": msg.get("id"), "ok": True, "room": room.internal(member)}
@@ -740,9 +753,8 @@ class Server:
                 room.established.add((to, about))
                 self.signal(to.conn, room, about, SIG_ESTABLISHED)
 
-    def leave_room(self, conn, cause, opt):
-        room = conn.room
-        conn.room = None
+    def leave_room(self, conn, room, cause, opt):
+        del conn.rooms[room.id]
         member = room.member_of(conn)
         room.members.remove(member)
         told = {to for to, about in room.established if about is member}
@@ -751,7 +763,7 @@ class Server:
         if member is room.owner:
             del self.rooms[room.id]
             for m in room.members:
-                m.conn.room = None
+                m.conn.rooms.pop(room.id, None)
                 self.send_json(m.conn, {"ev": "room_destroyed", "room_id": room.id, "cause": cause,
                                         "opt": opt.hex()})
             self.log("%s left room %d: room destroyed (%d members told)"
@@ -765,14 +777,15 @@ class Server:
         self.log("%s left room %d (cause %d, %d left)" % (conn.label(), room.id, cause, len(room.members)))
 
     def op_leave(self, conn, msg):
-        if conn.room is None or conn.room.id != int(msg["room_id"]):
+        room = conn.rooms.get(int(msg["room_id"]))
+        if room is None:
             raise Err(NO_SUCH_ROOM)
-        self.leave_room(conn, CAUSE_LEAVE, hex_bytes(msg.get("opt", ""), 16))
+        self.leave_room(conn, room, CAUSE_LEAVE, hex_bytes(msg.get("opt", ""), 16))
         return {}
 
     def op_kick(self, conn, msg):
-        room = conn.room
-        if room is None or room.id != int(msg["room_id"]):
+        room = conn.rooms.get(int(msg["room_id"]))
+        if room is None:
             raise Err(NO_SUCH_ROOM)
         if room.owner.conn is not conn:
             raise Err(FORBIDDEN)
@@ -781,15 +794,20 @@ class Server:
             raise Err(NO_SUCH_USER)
         opt = hex_bytes(msg.get("opt", ""), 16)
         self.send_json(target.conn, {"ev": "kicked", "room_id": room.id, "cause": CAUSE_KICKOUT, "opt": opt.hex()})
-        self.leave_room(target.conn, CAUSE_KICKOUT, opt)
+        self.leave_room(target.conn, room, CAUSE_KICKOUT, opt)
         return {}
 
     def op_set_internal(self, conn, msg):
-        room = conn.room
-        if room is None or room.id != int(msg["room_id"]):
+        room = conn.rooms.get(int(msg["room_id"]))
+        if room is None:
             raise Err(NO_SUCH_ROOM)
         room.bins_internal.update(bin_attrs(msg.get("bins", [])))
-        if "flag_attr" in msg:
+        if "flag_filter" in msg:
+            # PS3 semantics: only the bits in the filter change.
+            flag_filter = u32(msg["flag_filter"])
+            room.flag_attr = (room.flag_attr & ~flag_filter) | (u32(msg.get("flag_attr", 0)) & flag_filter)
+            self.log("%s room %d flags 0x%08X" % (conn.label(), room.id, room.flag_attr))
+        elif "flag_attr" in msg:
             room.flag_attr = u32(msg["flag_attr"])
         return {}
 
@@ -1099,9 +1117,9 @@ def selftest():
     h.ok("login", online_id="HOST")
     g.ok("login", online_id="GUEST")
     r = h.ok("create", max_slot=4, ints=GAME_INTS)["room"]
-    again = h.req("create", max_slot=4)
-    assert not again["ok"], "one room per session"
     g.ok("join", room_id=r["id"])
+    again = g.req("join", room_id=r["id"])
+    assert not again["ok"] and again["error"] == ALREADY_JOINED, "one membership per room"
     h.event(lambda ev: ev["ev"] == "member_joined")
     burst = b"".join(frame(2, struct.pack("<IHH", 0x0A500001, 1, 1) + b"d") for _ in range(500))
     g.send_raw_frame(burst)
@@ -1226,6 +1244,86 @@ def selftest():
     assert len(got) >= 2001 and got[0].endswith(" line 0") and any("login P3Q" in l for l in got), got[:2]
     srv5.running = False
     th5.join(timeout=2)
+
+    # ---- VS: a player is in its hideout room and a VS room at once (up to 4 rooms), room flags ----
+    srv = Server("127.0.0.1", 0, None, max_per_addr=16, logger=quiet)
+    th = run(srv)
+    p1, p2, p3, p4 = (TestClient(srv.port) for _ in range(4))
+    for i, cl in enumerate((p1, p2, p3, p4)):
+        cl.ok("login", online_id="VS%d" % (i + 1))  # vips 10.80.0.1 .. 10.80.0.4
+
+    def next_dgram(cl, timeout=3):
+        deadline = time.monotonic() + timeout
+        while not cl.dgrams and time.monotonic() < deadline:
+            cl.pump(0.1)
+        return cl.dgrams.pop(0) if cl.dgrams else None
+
+    hide = p1.ok("create", max_slot=4, flag_attr=0x04000000, ints=GAME_INTS)["room"]
+    p2.ok("join", room_id=hide["id"])
+    p1.event(lambda x: x["ev"] == "member_joined" and x["room_id"] == hide["id"])
+    vs = p1.ok("create", max_slot=4, ints=GAME_INTS)["room"]  # two_rooms
+    assert vs["id"] != hide["id"] and vs["me"] == 0x10, vs
+    p3.ok("join", room_id=vs["id"])
+    p1.event(lambda x: x["ev"] == "member_joined" and x["room_id"] == vs["id"])
+    extra = [p1.ok("create", max_slot=4)["room"]["id"] for _ in range(2)]
+    fifth = p1.req("create", max_slot=4)
+    assert not fifth["ok"] and fifth["error"] == SERVICE_UNAVAILABLE, fifth
+    again = p1.req("join", room_id=hide["id"])
+    assert not again["ok"] and again["error"] == ALREADY_JOINED, again
+    for rid in extra:
+        p1.ok("leave", room_id=rid)
+    nope = p2.req("leave", room_id=vs["id"])
+    assert not nope["ok"] and nope["error"] == NO_SUCH_ROOM, nope
+    # dgram_needs_a_shared_room: P2 (hideout only) cannot reach P3 (VS only); P1 shares the VS room with P3.
+    p2.dgram(0x0A500003, 1, 1, b"no shared room")
+    assert next_dgram(p3, 0.4) is None, "datagram between players who share no room"
+    p1.dgram(0x0A500003, 2, 1, b"via vs")
+    assert next_dgram(p3) == (0x0A500001, 2, 1, b"via vs")
+    p3.dgram(0x0A500001, 1, 2, b"back")
+    assert next_dgram(p1) == (0x0A500003, 1, 2, b"back")
+    # flags: SetRoomDataInternal's filter/attr pair as the game sends it on VS, then back.
+    hroom = srv.rooms[hide["id"]]
+    p1.ok("set_internal", room_id=hide["id"], flag_filter=0x54000000, flag_attr=0x14000000)
+    assert hroom.flag_attr == 0x14000000, hex(hroom.flag_attr)
+    # hidden_rooms_not_found
+    ids = [x["id"] for x in p4.ok("search")["rooms"]]
+    assert hide["id"] not in ids and vs["id"] in ids, ids
+    p1.ok("set_internal", room_id=hide["id"], flag_filter=0x54000000, flag_attr=0x04000000)
+    assert hroom.flag_attr == 0x04000000, hex(hroom.flag_attr)
+    assert hide["id"] in [x["id"] for x in p4.ok("search")["rooms"]], "found again after HIDDEN is cleared"
+    # search_flag_filter + closed_refuses_join
+    p1.ok("set_internal", room_id=vs["id"], flag_filter=0x40000000, flag_attr=0x40000000)
+    ids = [x["id"] for x in p4.ok("search", flag_filter=0x40000000, flag_attr=0)["rooms"]]
+    assert hide["id"] in ids and vs["id"] not in ids, ids
+    closed = p4.req("join", room_id=vs["id"])
+    assert not closed["ok"] and closed["error"] == ROOM_FULL, closed
+    p1.ok("set_internal", room_id=vs["id"], flag_filter=0x40000000, flag_attr=0)
+    # leave_one_room: P3 leaves the VS room and stays in P4's room W.
+    w = p4.ok("create", max_slot=4)["room"]
+    p3.ok("join", room_id=w["id"])
+    p3.ok("leave", room_id=vs["id"])
+    left = p1.event(lambda x: x["ev"] == "member_left", what="member_left of the VS room")
+    assert left["room_id"] == vs["id"], left
+    p4.dgram(0x0A500003, 3, 4, b"via w")
+    assert next_dgram(p3) == (0x0A500004, 3, 4, b"via w")
+    p3.ok("join", room_id=vs["id"])
+    # drop_leaves_every_room: P1 owns H and V; its connection closes.
+    p1.close()
+    gone = p2.event(lambda x: x["ev"] == "room_destroyed", what="P2: hideout destroyed")
+    assert gone["room_id"] == hide["id"] and gone["cause"] == CAUSE_DISAPPEARED, gone
+    gone = p3.event(lambda x: x["ev"] == "room_destroyed", what="P3: VS room destroyed")
+    assert gone["room_id"] == vs["id"], gone
+    deadline = time.monotonic() + 3
+    while hide["id"] in srv.rooms or vs["id"] in srv.rooms:
+        assert time.monotonic() < deadline, "rooms left behind: %r" % list(srv.rooms)
+        time.sleep(0.05)
+    assert list(srv.rooms) == [w["id"]], list(srv.rooms)
+    p4.dgram(0x0A500003, 3, 4, b"still w")
+    assert next_dgram(p3) == (0x0A500004, 3, 4, b"still w")
+    for cl in (p2, p3, p4):
+        cl.close()
+    srv.running = False
+    th.join(timeout=2)
     print("selftest OK")
 
 
