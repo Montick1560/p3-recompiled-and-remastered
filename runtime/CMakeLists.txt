@@ -137,6 +137,7 @@ set(RUNTIME_SOURCES
     src/psp_time.cpp
     src/psp_rtc.cpp
     src/psp_beta.cpp
+    src/psp_hw_info.cpp
     src/psp_subintr.cpp
     src/psp_backtrace.cpp
     src/psp_cpu.cpp
@@ -652,6 +653,12 @@ target_include_directories(test_beta PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
 target_compile_options(test_beta PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(test_beta PRIVATE ${PSP_SDL2_LIBS})
 add_test(NAME beta_tests COMMAND test_beta)
+
+# The hardware line logged at start (CPU, RAM, OS, GPU, GL, display): pure formatting.
+add_executable(test_hw_info tests/test_hw_info.cpp src/psp_hw_info.cpp)
+target_include_directories(test_hw_info PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_hw_info PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME hw_info_tests COMMAND test_hw_info)
 
 # Sub-interrupt handler table unit test (pure bookkeeping, no guest code).
 add_executable(test_subintr tests/test_subintr.cpp src/psp_subintr.cpp)

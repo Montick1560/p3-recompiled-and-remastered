@@ -14,6 +14,7 @@
 #include "psp_exit.h"
 #include "psp_perf.h"
 #include "psp_toast.h"
+#include "psp_hw_info.h"
 
 #include <SDL.h>
 #include <glad/glad.h>
@@ -466,9 +467,29 @@ int psp_runtime_init_sdl() {
         }
     }
 
-    // 6. Print GL info for diagnostics
+    // 6. Print GL info for diagnostics, and the hardware line problem reports rely on
     std::fprintf(stderr, "[RT] GL: %s\n",
         glGetString(GL_VERSION));
+    {
+        PspHwInfo hw;
+        psp_hw_fill_system(&hw);
+        hw.threads = SDL_GetCPUCount();
+        hw.ram_mb = SDL_GetSystemRAM();
+        auto gl = [](GLenum e) {
+            const GLubyte* v = glGetString(e);
+            return v ? std::string(reinterpret_cast<const char*>(v)) : std::string();
+        };
+        hw.gpu_vendor = gl(GL_VENDOR);
+        hw.gpu_renderer = gl(GL_RENDERER);
+        hw.gl_version = gl(GL_VERSION);
+        SDL_DisplayMode mode;
+        if (SDL_GetDesktopDisplayMode(SDL_GetWindowDisplayIndex(g_window), &mode) == 0) {
+            hw.display_w = mode.w;
+            hw.display_h = mode.h;
+            hw.display_hz = mode.refresh_rate;
+        }
+        std::fprintf(stderr, "%s\n", psp_hw_format(hw).c_str());
+    }
 
     // 7. Clear to black and swap — show initial frame
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
