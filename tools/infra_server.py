@@ -32,6 +32,7 @@ import re
 import secrets
 import selectors
 import socket
+import sqlite3
 import struct
 import sys
 import threading
@@ -118,6 +119,92 @@ class AsyncLog:
             except OSError:
                 pass
             self.q.task_done()
+
+    def flush(self, timeout=5.0):
+        deadline = time.monotonic() + timeout
+        while self.q.unfinished_tasks and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+
+METRICS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS sessions(id INTEGER PRIMARY KEY, label TEXT, staff INT, online_id TEXT, transport TEXT,
+    proto INT, start_utc TEXT, end_utc TEXT, end_reason TEXT, bytes_in INT, bytes_out INT, dgrams_dropped INT);
+CREATE TABLE IF NOT EXISTS rooms(id INTEGER PRIMARY KEY, kind TEXT, owner_session INT, created_utc TEXT,
+    closed_utc TEXT, max_members INT);
+CREATE TABLE IF NOT EXISTS events(t_utc TEXT, session INT, kind TEXT, room INT, detail TEXT);
+"""
+
+
+class MetricsDb:
+    """Beta metrics in SQLite (WAL): sessions, rooms, events, by invite code label; no address is stored. put() only
+    queues; one writer thread commits in batches, so a slow or locked disk never stops the server (the AsyncLog
+    pattern: over 10000 rows waiting, new rows are dropped and counted). Session ids come from the server, so rows
+    can be updated without waiting for the database. With no path, a no-op."""
+
+    def __init__(self, path, logger=log, max_rows=10000):
+        self.path = path
+        self.log = logger
+        self.q = queue.Queue(max_rows)
+        self.dropped = 0
+        self.next_sid = 1
+        if not path:
+            return
+        c = sqlite3.connect(path, timeout=30)
+        try:
+            c.execute("PRAGMA journal_mode=WAL")
+            c.executescript(METRICS_SCHEMA)
+            now = iso_utc(time.time())
+            # A server that died without stopping left these open: closed by this restart.
+            n = c.execute("UPDATE sessions SET end_utc=?, end_reason='server_stop' WHERE end_utc IS NULL",
+                          (now,)).rowcount
+            c.execute("UPDATE rooms SET closed_utc=? WHERE closed_utc IS NULL", (now,))
+            self.next_sid = (c.execute("SELECT MAX(id) FROM sessions").fetchone()[0] or 0) + 1
+            c.commit()
+        finally:
+            c.close()
+        if n:
+            self.log("metrics: %d sessions left open by the previous run closed as server_stop" % n)
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def session_id(self):
+        sid, self.next_sid = self.next_sid, self.next_sid + 1
+        return sid
+
+    def put(self, sql, params=()):
+        if not self.path:
+            return
+        try:
+            self.q.put_nowait((sql, params))
+        except queue.Full:
+            self.dropped += 1
+
+    def _run(self):
+        c = sqlite3.connect(self.path, timeout=5)
+        c.execute("PRAGMA synchronous=NORMAL")
+        while True:
+            batch = [self.q.get()]
+            while len(batch) < 500:
+                try:
+                    batch.append(self.q.get_nowait())
+                except queue.Empty:
+                    break
+            while True:
+                try:
+                    with c:
+                        for sql, params in batch:
+                            c.execute(sql, params)
+                    break
+                except sqlite3.OperationalError as e:  # locked or busy: the same batch again
+                    self.log("metrics: database busy (%s), retrying" % e)
+                    time.sleep(1)
+                except sqlite3.Error as e:
+                    self.log("metrics: %d rows lost (%s)" % (len(batch), e))
+                    break
+            if self.dropped:
+                n, self.dropped = self.dropped, 0
+                self.log("metrics: %d rows dropped while the database was slow" % n)
+            for _ in batch:
+                self.q.task_done()
 
     def flush(self, timeout=5.0):
         deadline = time.monotonic() + timeout
@@ -306,6 +393,7 @@ class Conn:
         self.code_label = None      # beta invite code label ("invitado 07"); the code itself is never kept
         self.code_sha = None
         self.staff = False
+        self.sid = None             # metrics session id
         self.session = None
         self.vip = 0
         self.port = 0
@@ -324,8 +412,9 @@ class Conn:
 class Server:
     def __init__(self, host="127.0.0.1", port=27320, ws_port=27321, ws_path="/infra", max_rooms=64,
                  idle=30.0, stats_every=60.0, delay_ms=0, max_per_addr=4, max_conns=512, signal_timeout=15.0,
-                 loss=0, logger=log, beta_path=None, clock=time.time):
+                 loss=0, logger=log, beta_path=None, clock=time.time, db_path=None):
         self.log = logger
+        self.metrics = MetricsDb(db_path, logger)
         self.clock = clock
         self.beta_path = beta_path
         self.beta = self.beta_mtime = None
@@ -442,6 +531,12 @@ class Server:
                 del self.per_addr[conn.addr_key]
         if conn.vip:
             self.by_vip.pop(conn.vip, None)
+        if conn.sid is not None:
+            reason = {"server stopping": "server_stop", "connection closed": "closed", "idle": "idle",
+                      "beta closed": "beta_closed"}.get(why, why[:64])
+            self.metrics.put("UPDATE sessions SET end_utc=?, end_reason=?, bytes_in=?, bytes_out=?, dgrams_dropped=? "
+                             "WHERE id=?", (self.now_utc(), reason, conn.bytes_in, conn.bytes_out, conn.dgram_dropped,
+                                            conn.sid))
         self.log("close %s: %s (in %d B, out %d B, dropped %d datagrams)"
                  % (conn.label(), why, conn.bytes_in, conn.bytes_out, conn.dgram_dropped))
 
@@ -565,6 +660,13 @@ class Server:
         self.raw_send(conn, b"HTTP/1.1 %s\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n"
                             b"Content-Length: %d\r\nConnection: close\r\n\r\n%s" % (status.encode(), len(body), body))
 
+    def now_utc(self):
+        return iso_utc(self.clock())
+
+    def event(self, kind, conn=None, room=None, detail=None):
+        self.metrics.put("INSERT INTO events(t_utc, session, kind, room, detail) VALUES (?, ?, ?, ?, ?)",
+                         (self.now_utc(), conn.sid if conn else None, kind, room.id if room else None, detail))
+
     def beta_open(self):
         return self.beta is None or self.beta["t0"] <= self.clock() <= self.beta["t1"]
 
@@ -640,7 +742,9 @@ class Server:
                 if sum(1 for c in live if not c.staff and c.addr_key == conn.addr_key) >= self.max_per_addr:
                     raise Err(SERVICE_UNAVAILABLE)
         except Err as err:
-            self.log("login refused %s: %s (%s)" % (label, REFUSAL.get(err.code, "0x%08X" % err.code), conn.label()))
+            reason = REFUSAL.get(err.code, "0x%08X" % err.code)
+            self.log("login refused %s: %s (%s)" % (label, reason, conn.label()))
+            self.event("refused", detail="%s: %s" % (reason, label))
             raise
         conn.code_label, conn.code_sha, conn.staff = label, sha, e["staff"]
 
@@ -717,6 +821,8 @@ class Server:
         except Err as e:
             if op not in ("ping",):
                 self.log("%s %s -> error 0x%08X" % (conn.label(), op, e.code))
+            if not (op == "login" and self.beta is not None and e.code in REFUSAL):  # those are "refused"
+                self.event("error", conn if conn.sid is not None else None, detail="%s 0x%08X" % (op, e.code))
             return self.send_json(conn, {"id": rid, "ok": False, "error": e.code})
         except (KeyError, TypeError, ValueError, AttributeError) as e:
             self.log("%s %s -> bad request (%s)" % (conn.label(), op, e))
@@ -802,6 +908,10 @@ class Server:
         conn.online_id, conn.session, conn.vip = oid, secrets.token_hex(8), VIP_BASE + n
         conn.console = console
         self.by_vip[conn.vip] = conn
+        conn.sid = self.metrics.session_id()
+        self.metrics.put("INSERT INTO sessions(id, label, staff, online_id, transport, proto, start_utc) "
+                         "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                         (conn.sid, conn.code_label, int(conn.staff), oid, conn.kind, conn.proto, self.now_utc()))
         self.log("login %s" % conn.label())
         return {"session": conn.session, "vip": conn.vip}
 
@@ -880,6 +990,10 @@ class Server:
         room.members.append(owner)
         self.rooms[room.id] = room
         conn.rooms[room.id] = room
+        k = room.ints.get(0x4D, 0)
+        kind = "vs" if k == 3 else "hideout" if k & 0x30000 else "other"
+        self.metrics.put("INSERT INTO rooms(id, kind, owner_session, created_utc, max_members) VALUES (?, ?, ?, ?, 1)",
+                         (room.id, kind, conn.sid, self.now_utc()))
         self.log("%s create room %d (%d slots, %d int, %d bin attrs)"
                  % (conn.label(), room.id, max_slot, len(ints), len(room.bins)))
         return {"room": room.internal(owner)}
@@ -906,6 +1020,8 @@ class Server:
         olds = list(room.members)
         room.members.append(member)
         conn.rooms[room.id] = room
+        self.event("join", conn, room)
+        self.metrics.put("UPDATE rooms SET max_members=MAX(max_members, ?) WHERE id=?", (len(room.members), room.id))
         self.log("%s join room %d as 0x%X (%d/%d)" % (conn.label(), room.id, member.member_id,
                                                          len(room.members), room.max_slot))
         answer = {"id": msg.get("id"), "ok": True, "room": room.internal(member)}
@@ -937,7 +1053,10 @@ class Server:
         told = {to for to, about in room.established if about is member}
         room.waiting = {k: v for k, v in room.waiting.items() if member not in k}
         room.established = {k for k in room.established if member not in k}
+        self.event("kick" if cause == CAUSE_KICKOUT else "leave", conn, room,
+                   "disappeared" if cause == CAUSE_DISAPPEARED else None)
         if member is room.owner:
+            self.metrics.put("UPDATE rooms SET closed_utc=? WHERE id=?", (self.now_utc(), room.id))
             del self.rooms[room.id]
             for m in room.members:
                 m.conn.rooms.pop(room.id, None)
@@ -1001,6 +1120,7 @@ class Server:
             for (to, about), deadline in list(room.waiting.items()):
                 if deadline <= now and room.waiting.pop((to, about), None) is not None:
                     self.log("%s: no game socket from %s, signaling DEAD" % (to.conn.label(), about.conn.label()))
+                    self.event("signal_dead", to.conn, room, "no game socket from session %s" % about.conn.sid)
                     self.signal(to.conn, room, about, SIG_DEAD)
         while self.delayed and self.delayed[0][0] <= now:
             _, _, conn, data = heapq.heappop(self.delayed)
@@ -1032,6 +1152,7 @@ class Server:
             self.tick(time.monotonic())
         for conn in list(self.conns.values()):
             self.drop(conn, "server stopping")
+        self.metrics.flush()
         self.sel.close()
         for ls in self.listeners:
             ls.close()
@@ -1696,6 +1817,76 @@ def beta_selftest(run, quiet, lines):
     srv.running = False
     th.join(timeout=2)
 
+    # ---- metrics in SQLite ----
+    import sqlite3
+    db = os.path.join(tmp, "beta.db")
+
+    def q(sql, *params):
+        with sqlite3.connect(db) as c:
+            return c.execute(sql, params).fetchall()
+    now[0] = t_start + 3600
+    srv = Server("127.0.0.1", 0, None, logger=quiet, beta_path=cfg_path, clock=lambda: now[0], db_path=db)
+    th = run(srv)
+    # metrics_rows
+    ma, mb, mr = TestClient(srv.port), TestClient(srv.port), TestClient(srv.port)
+    ma.ok("login", online_id="MET_A", proto=2, invite="P3-AAAA-BBBB")
+    mb.ok("login", online_id="MET_B", proto=2, invite="P3-CCCC-DDDD")
+    refused(mr, INVITE_UNKNOWN, online_id="MET_R", proto=2, invite="P3-ZZZZ-ZZZZ")
+    hide = ma.ok("create", max_slot=4, flag_attr=0x04000000, ints=GAME_INTS)["room"]
+    mb.ok("join", room_id=hide["id"])
+    vs = ma.ok("create", max_slot=4, ints=[[0x4D, 3]])["room"]
+    mb.ok("leave", room_id=hide["id"])
+    bad = mb.req("join", room_id=12345)
+    assert not bad["ok"] and bad["error"] == NO_SUCH_ROOM, bad
+    srv.metrics.flush(3)
+    sess = q("SELECT id, label, staff, online_id, transport, proto, start_utc, end_utc FROM sessions ORDER BY id")
+    assert [r[1:6] for r in sess] == [("invitado 08", 0, "MET_A", "tcp", 2), ("invitado 10", 0, "MET_B", "tcp", 2)], sess
+    assert all(r[6].endswith("Z") and r[7] is None for r in sess), sess
+    sid_a, sid_b = sess[0][0], sess[1][0]
+    rooms = q("SELECT id, kind, owner_session, max_members, closed_utc FROM rooms ORDER BY created_utc, id")
+    assert rooms == [(hide["id"], "hideout", sid_a, 2, None), (vs["id"], "vs", sid_a, 1, None)], rooms
+    ev = q("SELECT session, kind, room, detail FROM events ORDER BY rowid")
+    kinds = [e[1] for e in ev]
+    assert ("refused" in kinds and "join" in kinds and "leave" in kinds and "error" in kinds), ev
+    assert any(e[1] == "refused" and "invite unknown" in e[3] for e in ev), ev
+    assert (sid_b, "join", hide["id"]) in [e[:3] for e in ev] and (sid_b, "leave", hide["id"]) in [e[:3] for e in ev]
+    dump = "\n".join(str(r) for t in ("sessions", "rooms", "events") for r in q("SELECT * FROM " + t))
+    assert "127.0.0.1" not in dump and "P3AAAABBBB" not in dump, "no address or code stored"
+    # metrics_never_block: the writer is stuck behind another process's lock on the file.
+    lock = sqlite3.connect(db, isolation_level=None)
+    lock.execute("BEGIN EXCLUSIVE")
+    t0 = time.monotonic()
+    for i in range(2000):
+        srv.metrics.put("INSERT INTO events(t_utc, kind, detail) VALUES (?, ?, ?)", ("x", "error", "nb%d" % i))
+    assert time.monotonic() - t0 < 0.5, "metrics waited for the database"
+    assert ma.ok("ping", t=5)["t"] == 5, "served while the database is locked"
+    lock.execute("ROLLBACK")
+    lock.close()
+    srv.metrics.flush(10)
+    assert q("SELECT COUNT(*) FROM events WHERE detail LIKE 'nb%'") == [(2000,)]
+    # metrics_survive_restart: the server stops with two sessions open; a second server appends.
+    srv.running = False
+    th.join(timeout=5)
+    assert q("SELECT end_reason FROM sessions WHERE id IN (?, ?)", sid_a, sid_b) == [("server_stop",)] * 2
+    assert q("SELECT COUNT(*) FROM rooms WHERE closed_utc IS NULL") == [(0,)]
+    for cl in (ma, mb, mr):
+        cl.close()
+    srv = Server("127.0.0.1", 0, None, logger=quiet, beta_path=cfg_path, clock=lambda: now[0], db_path=db)
+    th = run(srv)
+    mc = TestClient(srv.port)
+    mc.ok("login", online_id="MET_C", proto=2, invite="P3-AAAA-BBBB")
+    srv.metrics.flush(3)
+    assert [r[0] for r in q("SELECT online_id FROM sessions ORDER BY id")] == ["MET_A", "MET_B", "MET_C"]
+    # a server killed without stopping: the next start closes what was left open
+    srv.metrics.flush(3)
+    MetricsDb(db, quiet)
+    assert q("SELECT end_reason FROM sessions WHERE online_id='MET_C'") == [("server_stop",)]
+    mc.close()
+    srv.running = False
+    th.join(timeout=5)
+    # metrics are a no-op without --db
+    assert MetricsDb(None).put("anything") is None
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -1712,6 +1903,7 @@ def main():
     ap.add_argument("--signal-timeout", type=float, default=15.0,
                     help="seconds a member may take to bind its game socket before its peers get SIGNALING_DEAD")
     ap.add_argument("--beta", help="beta config (invite codes, window, minimum protocol); none = no gate")
+    ap.add_argument("--db", help="SQLite file for beta metrics (sessions, rooms, events); none = no metrics")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
@@ -1719,7 +1911,7 @@ def main():
     alog = AsyncLog()
     srv = Server(args.host, args.port, args.ws_port, args.ws_path, args.max_rooms, args.idle, args.stats_every,
                  args.delay_ms, args.max_per_addr, signal_timeout=args.signal_timeout, loss=args.loss, logger=alog,
-                 beta_path=args.beta)
+                 beta_path=args.beta, db_path=args.db)
     if disable_quick_edit():
         alog("console QuickEdit turned off: a click in this window no longer pauses the server")
     alog("infrastructure server: tcp %s:%d, ws %s:%d%s" % (args.host, srv.port, args.host, srv.ws_port, args.ws_path))
