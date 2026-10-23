@@ -22,6 +22,7 @@ import base64
 import hashlib
 import heapq
 import json
+import random
 import re
 import secrets
 import selectors
@@ -210,7 +211,7 @@ class Conn:
 class Server:
     def __init__(self, host="127.0.0.1", port=27320, ws_port=27321, ws_path="/infra", max_rooms=64,
                  idle=30.0, stats_every=60.0, delay_ms=0, max_per_addr=4, max_conns=512, signal_timeout=15.0,
-                 logger=log):
+                 loss=0, logger=log):
         self.log = logger
         self.listeners = {}
         for p, kind in ((port, "tcp"), (ws_port, "ws")):
@@ -239,6 +240,8 @@ class Server:
         self.max_per_addr = max_per_addr
         self.max_conns = max_conns
         self.signal_timeout = signal_timeout
+        self.loss = loss / 100.0
+        self.rng = random.Random(1)
         self.sel = selectors.DefaultSelector()
         for ls in self.listeners:
             self.sel.register(ls, selectors.EVENT_READ)
@@ -515,6 +518,8 @@ class Server:
         dst = self.by_vip.get(vip)
         if dst is None or conn.room is None or dst.room is not conn.room or dst is conn:
             conn.dgram_dropped += 1
+            return
+        if self.loss and self.rng.random() < self.loss:
             return
         out = frame(2, struct.pack("<IHH", conn.vip, dst_port, src_port) + body[8:])
         if self.delay:
@@ -1066,6 +1071,28 @@ def selftest():
     srv.running = False
     th.join(timeout=2)
 
+    # ---- --loss drops that share of game datagrams (signal-meter tests); streams are never dropped ----
+    srv = Server("127.0.0.1", 0, None, loss=50, logger=quiet)
+    th = run(srv)
+    p, q = TestClient(srv.port), TestClient(srv.port)
+    p.ok("login", online_id="LOSSA")
+    q.ok("login", online_id="LOSSB")
+    rl = p.ok("create", max_slot=4)["room"]
+    q.ok("join", room_id=rl["id"])
+    for i in range(200):
+        p.dgram(0x0A500002, 1, 1, b"d")
+    for i in range(50):
+        p.dgram(0x0A500002, 7000, 50000, bytes([3]) + struct.pack("<H", i), kind=3)
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        q.pump(0.05)
+    assert 50 <= len(q.dgrams) <= 150, "about half the datagrams: %d" % len(q.dgrams)
+    assert len(q.streams) == 50, "every stream segment"
+    p.close()
+    q.close()
+    srv.running = False
+    th.join(timeout=2)
+
     # ---- members whose game socket never binds get SIGNALING_DEAD, not an endless wait ----
     srv = Server("127.0.0.1", 0, None, signal_timeout=0.5, logger=quiet)
     th = run(srv)
@@ -1082,8 +1109,11 @@ def selftest():
     p.ok("bound", port=5000)
     assert not any(x["ev"] == "signaling" for x in q.events) and not q.pump(0.3), "no late ESTABLISHED"
     big = bytes([3]) + b"z" * 60000  # 40 x 60 kB in one second is over the 2 MiB/s stream cap
-    for _ in range(40):
-        q.dgram(0x0A500001, 7000, 50000, big, kind=3)
+    try:
+        for _ in range(40):
+            q.dgram(0x0A500001, 7000, 50000, big, kind=3)
+    except (ConnectionError, OSError):
+        pass  # the server may close it while the flood is still being written
     assert q.is_closed(), "stream flood closes the session"
     p.close()
     q.close()
@@ -1102,6 +1132,7 @@ def main():
     ap.add_argument("--idle", type=float, default=30.0, help="seconds without a frame before a session closes")
     ap.add_argument("--stats-every", type=float, default=60.0)
     ap.add_argument("--delay-ms", type=int, default=0, help="extra latency on datagrams and pings (tests)")
+    ap.add_argument("--loss", type=float, default=0, help="percent of game datagrams dropped (tests)")
     ap.add_argument("--max-per-addr", type=int, default=4)
     ap.add_argument("--signal-timeout", type=float, default=15.0,
                     help="seconds a member may take to bind its game socket before its peers get SIGNALING_DEAD")
@@ -1110,7 +1141,7 @@ def main():
     if args.selftest:
         return selftest()
     srv = Server(args.host, args.port, args.ws_port, args.ws_path, args.max_rooms, args.idle, args.stats_every,
-                 args.delay_ms, args.max_per_addr, signal_timeout=args.signal_timeout)
+                 args.delay_ms, args.max_per_addr, signal_timeout=args.signal_timeout, loss=args.loss)
     log("infrastructure server: tcp %s:%d, ws %s:%d%s" % (args.host, srv.port, args.host, srv.ws_port, args.ws_path))
     try:
         srv.serve()

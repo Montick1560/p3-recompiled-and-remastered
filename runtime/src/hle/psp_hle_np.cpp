@@ -18,6 +18,7 @@
 #include <string>
 
 #include "net/infra_client.h"
+#include "net/infra_signal.h"
 
 static constexpr uint32_t kAddrMask = 0x07FFFFFFU;
 static constexpr uint32_t kNullPage = 0x00010000U;
@@ -78,7 +79,7 @@ static void hle_sceNetApctlGetInfo(uint8_t* rdram, recomp_context* ctx) {
     case 2: ok = str("Wifi", 32); break;                             // SSID
     case 3: ok = u32v(4); break;                                     // SSID_LENGTH
     case 4: ok = u32v(0); break;                                     // SECURITY_TYPE
-    case 5: ok = u8v(99); break;                                     // STRENGTH
+    case 5: ok = u8v(infra::strength_from_rtt(infra::client().rtt_ms())); break;  // STRENGTH
     case 6: ok = u8v(6); break;                                      // CHANNEL
     case 7: ok = u8v(0); break;                                      // POWER_SAVE
     case 8: {                                                        // IP: the virtual one on the server

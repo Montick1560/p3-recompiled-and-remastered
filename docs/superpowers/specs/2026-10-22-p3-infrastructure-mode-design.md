@@ -135,6 +135,17 @@ Observed game rule: a visitor who gives no command for about 60 s in a mission l
 de conexión" (seen in four runs; with the visitor drumming for 2+ minutes and the host idle nobody left, and the
 network traffic was normal up to the visitor's own Close). The host is not affected.
 
+## Signal meter (recon 2026-10-22, plan Task 8)
+
+The meter under each hero (team totem, hideout) shows full bars in every session so far, and it does not follow
+the connection: the game calls `sceNetApctlGetInfo` only with code 8 (IP, at connection time), never 5
+(STRENGTH); its signaling callback ignores 0x5103 (netinfo); the overlays import no network function; and the
+bars stayed full with the server adding 300 ms per hop (`--delay-ms 300`, e2e15), dropping 60 % of the game
+datagrams (`--loss 60`, e2e16) and with the members' NAT type set to 3 (e2e17). `sceNetApctlGetInfo(5)` still
+answers from the measured server RTT (`net/infra_signal.h`: <=80 ms 99 %, <=150 75 %, <=250 50 %, <=400 25 %,
+else 5 %) for any code path that asks. Where the game takes the meter's value from is still open (candidates: a
+field of the hideout state the host sends over TCP, or a constant in infrastructure mode).
+
 ## Out of scope (later)
 Launcher setting for the server address (env only for now), hosting next to patapon.net, TCP sockets (`sceNetInetConnect/Listen`)
 unless the game turns out to use them in a session (checked in the plan), chat via `sceNpMatching2SendRoomChatMessage`

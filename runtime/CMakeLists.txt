@@ -1066,6 +1066,12 @@ target_include_directories(test_p2p_stream PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/i
 target_compile_options(test_p2p_stream PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME p2p_stream_tests COMMAND test_p2p_stream)
 
+# Signal strength reported to the game from the server RTT (pure).
+add_executable(test_infra_signal tests/test_infra_signal.cpp)
+target_include_directories(test_infra_signal PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_infra_signal PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME infra_signal_tests COMMAND test_infra_signal)
+
 add_executable(test_pro_protocol tests/test_pro_protocol.cpp src/net/pro_protocol.cpp)
 target_include_directories(test_pro_protocol PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_pro_protocol PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
