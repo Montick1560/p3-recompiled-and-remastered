@@ -44,6 +44,14 @@ struct Address {
 Address parse_address(const char* text);
 std::string to_string(const Address& a);
 
+// Wire protocol version sent in the login ("proto"); bumped when the protocol changes.
+constexpr int kProto = 2;
+// The login's extra fields: console id, protocol, and the beta invite code
+// (PSPRECOMP_INFRA_INVITE, set by the launcher) when there is one.
+nlohmann::json login_fields(const std::string& console_hex, const char* invite);
+// Name of a beta-gate login refusal of tools/infra_server.py (INVITE_UNKNOWN...), nullptr for others.
+const char* login_error_name(uint32_t code);
+
 class Transport {
 public:
     virtual ~Transport() = default;

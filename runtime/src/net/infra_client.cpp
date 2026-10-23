@@ -202,6 +202,23 @@ Address parse_address(const char* text) {
     return a;
 }
 
+nlohmann::json login_fields(const std::string& console_hex, const char* invite) {
+    nlohmann::json f = {{"console", console_hex}, {"proto", kProto}};
+    if (invite && invite[0]) f["invite"] = invite;
+    return f;
+}
+
+const char* login_error_name(uint32_t code) {
+    switch (code) {
+    case 0x80550DA1: return "INVITE_UNKNOWN";
+    case 0x80550DA2: return "INVITE_DISABLED";
+    case 0x80550DA3: return "BETA_CLOSED";
+    case 0x80550DA4: return "OUTDATED";
+    case 0x80550DA5: return "INVITE_IN_USE";
+    default: return nullptr;
+    }
+}
+
 std::string to_string(const Address& a) {
     switch (a.kind) {
     case Address::Off: return "off";
@@ -281,8 +298,9 @@ bool Client::connect(const std::string& online_id, int timeout_ms, const nlohman
         wcv.wait(l, [&] { return done; });
     }
     if (!answer.value("ok", false)) {
-        std::fprintf(stderr, "[INFRA] login to %s as %s failed: %s\n", to_string(addr_).c_str(), online_id.c_str(),
-                     answer.dump().c_str());
+        const char* name = login_error_name(answer.value("error", 0u));
+        std::fprintf(stderr, "[INFRA] login to %s as %s failed: %s%s%s\n", to_string(addr_).c_str(),
+                     online_id.c_str(), name ? name : "", name ? " " : "", answer.dump().c_str());
         lost("login failed");
         return false;
     }

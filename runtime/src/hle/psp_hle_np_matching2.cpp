@@ -171,7 +171,9 @@ bool ensure_connected() {
     // The console id (the MAC that starts the OpenPSID) lets the server refuse
     // a second member that the game would also take for player 1.
     const AdhocMac& mac = psp_net_config().mac;
-    return c.connect(psp_np_online_id(), 10000, {{"console", infra::to_hex(mac.data(), mac.size())}});
+    // PSPRECOMP_INFRA_INVITE: the beta invite code the launcher passes (none outside a beta).
+    return c.connect(psp_np_online_id(), 10000,
+                     infra::login_fields(infra::to_hex(mac.data(), mac.size()), std::getenv("PSPRECOMP_INFRA_INVITE")));
 }
 
 // ---- requests ----

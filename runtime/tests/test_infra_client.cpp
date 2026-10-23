@@ -86,6 +86,16 @@ static void login_carries_extra_fields() {
           "login carries the console id");
 }
 
+static void login_fields_carry_proto_and_invite() {
+    nlohmann::json f = infra::login_fields("02000000000a", "P3-K7QF-2MXD");
+    CHECK(f.value("console", "") == "02000000000a" && f.value("proto", 0) == 2 && infra::kProto == 2,
+          "console id and protocol 2");
+    CHECK(f.value("invite", "") == "P3-K7QF-2MXD", "invite when given");
+    CHECK(!infra::login_fields("02000000000a", "").contains("invite"), "no invite when empty");
+    CHECK(!infra::login_fields("02000000000a", nullptr).contains("invite"), "no invite when unset");
+    CHECK(infra::login_fields("02000000000a", nullptr).value("proto", 0) == 2, "proto always");
+}
+
 static void request_answer_matched_by_id() {
     FakeInfraServer s;
     nlohmann::json first;
@@ -550,6 +560,7 @@ int main() {
     parse_address_forms();
     login_sets_vip();
     login_carries_extra_fields();
+    login_fields_carry_proto_and_invite();
     request_answer_matched_by_id();
     request_times_out();
     disconnect_fails_pending();

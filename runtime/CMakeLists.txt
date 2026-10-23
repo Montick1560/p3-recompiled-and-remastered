@@ -136,6 +136,7 @@ set(RUNTIME_SOURCES
     src/psp_audio_out.cpp
     src/psp_time.cpp
     src/psp_rtc.cpp
+    src/psp_beta.cpp
     src/psp_subintr.cpp
     src/psp_backtrace.cpp
     src/psp_cpu.cpp
@@ -418,6 +419,19 @@ ${_bank_fp_output}")
     math(EXPR _bank_index "${_bank_index} + 1")
 endforeach()
 
+# ── Beta builds of the online mode ─────────────────────────────────────────
+# PSPRECOMP_BETA_UNTIL (ISO UTC, e.g. 2026-10-26T05:59:59Z): after it the exe shows "the beta ended" and exits
+# with code 12 (src/psp_beta.cpp). Empty (default) = not a beta build, never expires.
+set(PSPRECOMP_BETA_UNTIL "" CACHE STRING "Beta builds: ISO UTC end date (YYYY-MM-DDTHH:MM:SSZ); empty = no limit")
+if(PSPRECOMP_BETA_UNTIL)
+    if(NOT PSPRECOMP_BETA_UNTIL MATCHES "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$")
+        message(FATAL_ERROR "PSPRECOMP_BETA_UNTIL: '${PSPRECOMP_BETA_UNTIL}' is not YYYY-MM-DDTHH:MM:SSZ")
+    endif()
+    set_source_files_properties(src/psp_beta.cpp PROPERTIES
+        COMPILE_DEFINITIONS "PSPRECOMP_BETA_UNTIL=\"${PSPRECOMP_BETA_UNTIL}\"")
+    message(STATUS "psprecomp: beta build, plays until ${PSPRECOMP_BETA_UNTIL}")
+endif()
+
 target_include_directories(psprecomp_runtime PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb  # stb_image (texture replacement PNGs)
@@ -631,6 +645,13 @@ add_executable(test_rtc_fixed tests/test_rtc_fixed.cpp src/psp_rtc.cpp)
 target_include_directories(test_rtc_fixed PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_rtc_fixed PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME rtc_fixed_tests COMMAND test_rtc_fixed)
+
+# Beta builds: ISO UTC end date parse and the expiry rule (PSPRECOMP_BETA_UNTIL).
+add_executable(test_beta tests/test_beta.cpp src/psp_beta.cpp src/psp_rtc.cpp)
+target_include_directories(test_beta PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${SDL2_INCLUDE_DIRS})
+target_compile_options(test_beta PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(test_beta PRIVATE ${PSP_SDL2_LIBS})
+add_test(NAME beta_tests COMMAND test_beta)
 
 # Sub-interrupt handler table unit test (pure bookkeeping, no guest code).
 add_executable(test_subintr tests/test_subintr.cpp src/psp_subintr.cpp)

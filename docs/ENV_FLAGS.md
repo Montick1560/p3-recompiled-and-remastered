@@ -555,6 +555,18 @@ launcher's Saves screen sets this variable. Unset or missing save: the newest, a
 - **Set it when:** testing with a local server (`python -I tools/infra_server.py`, then `tcp://127.0.0.1` or
   `ws://127.0.0.1:27321/infra`), or playing on another server.
 
+### `PSPRECOMP_INFRA_INVITE`
+- **Read in:** `runtime/src/hle/psp_hle_np_matching2.cpp` (`ensure_connected`, through `infra::login_fields`), at
+  each infrastructure login.
+- **Type:** env (invite code, e.g. `P3-K7QF-2MXD`; case, spaces and dashes do not matter).
+- **Default:** unset — the login carries no invite.
+- **Effect:** The beta invite code sent in the login (`"invite"`), next to `"proto": 2`. A server started with
+  `--beta` refuses a login without a valid code; the refusal is logged by name, e.g.
+  `[INFRA] login to ... failed: INVITE_UNKNOWN {...}` (also `INVITE_DISABLED`, `BETA_CLOSED`, `OUTDATED`,
+  `INVITE_IN_USE`). A server without `--beta` ignores it.
+- **Set it when:** the launcher sets it from `settings.ini` `[online] invite`; by hand for a test instance
+  against a gated server.
+
 ### `PSPRECOMP_INFRA_STATS`
 - **Read in:** `runtime/src/net/infra_stats.cpp` (`infra::stats::enabled()`), once, at the first infrastructure
   datagram or stream segment.
@@ -643,6 +655,15 @@ Passed at configure time: `cmake -B <dir> -S runtime -D<NAME>=<VALUE>`.
 - **Effect:** Turns the configure-time output-staleness fingerprint mismatch
   into a warning instead of a fatal error.
 - **Set it when:** intentionally configuring against a stale `output/`.
+
+### `PSPRECOMP_BETA_UNTIL`
+- **Defined in:** `runtime/CMakeLists.txt` (compile definition of `runtime/src/psp_beta.cpp`).
+- **Type:** cmake (`STRING`, cache variable), ISO UTC `YYYY-MM-DDTHH:MM:SSZ`; any other form fails configure.
+- **Default:** empty — not a beta build, never expires.
+- **Effect:** A beta build of the online mode: after that instant (UTC) the exe shows "La beta de Patapon 3
+  terminó..." and exits with code 12 before opening a window (the launcher shows its "the beta ended" screen).
+  While it plays, the log says `[RT] beta build: plays until <date>`.
+- **Set it when:** building the beta package (`-DPSPRECOMP_BETA_UNTIL=2026-10-26T05:59:59Z` for beta 1).
 
 > Internal CMake locals (`PSPRECOMP_REGEN_CMD`, `PSPRECOMP_FP_RESULT`,
 > `PSPRECOMP_FP_OUTPUT`, `PSPRECOMP_FP_ERROR`) are not user-settable; they hold

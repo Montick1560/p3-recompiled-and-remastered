@@ -1,3 +1,4 @@
+#include "psp_beta.h"
 #include "psp_cpu.h"
 #include "psp_host_io.h"
 #include "recomp.h"
@@ -118,6 +119,8 @@ int main(int argc, char* argv[]) {
         psp_settings_apply(psp_settings_parse_args(argc, argv), base);
         SDL_free(base);
     }
+    // Beta builds (PSPRECOMP_BETA_UNTIL) refuse to start after their end date, before any window opens.
+    if (int rc = psp_beta_check_at_start()) return rc;
 #ifdef _WIN32
     SetUnhandledExceptionFilter(psp_crash_filter);
 #endif
