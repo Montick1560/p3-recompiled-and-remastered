@@ -40,6 +40,7 @@ DGRAM_PER_S = 400
 STREAM_BYTES_PER_S = 2 * 1024 * 1024  # game stream sockets (kind 3): over this the session is closed
 WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 ONLINE_ID = re.compile(r"[A-Za-z0-9_-]{3,16}")
+CONSOLE_ID = re.compile(r"[0-9a-f]{12}")  # the 6-byte MAC that starts the OpenPSID
 VIP_BASE = 0x0A500000        # 10.80.0.0
 FIRST_MEMBER_ID = 0x10
 
@@ -47,6 +48,7 @@ FIRST_MEMBER_ID = 0x10
 BAD_REQUEST = 0x80550D01
 SERVICE_UNAVAILABLE = 0x80550D02
 FORBIDDEN = 0x80550D07
+DUPLICATE_CONSOLE = FORBIDDEN  # a member of the room already has this console id
 NO_SUCH_ROOM = 0x80550D13
 ROOM_FULL = 0x80550D19
 NO_SUCH_USER = 0x80550D1C
@@ -193,6 +195,7 @@ class Conn:
         self.last = time.monotonic()
         self.bytes_in = self.bytes_out = 0
         self.online_id = None
+        self.console = None         # console id from the login, None for older runtimes
         self.session = None
         self.vip = 0
         self.port = 0
@@ -555,12 +558,16 @@ class Server:
         oid = msg["online_id"]
         if not isinstance(oid, str) or not ONLINE_ID.fullmatch(oid):
             raise Err(BAD_REQUEST)
+        console = msg.get("console")
+        if console is not None and (not isinstance(console, str) or not CONSOLE_ID.fullmatch(console)):
+            raise Err(BAD_REQUEST)
         n = 1
         while VIP_BASE + n in self.by_vip:
             n += 1
         if n > 0xFFFE:
             raise Err(SERVICE_UNAVAILABLE)
         conn.online_id, conn.session, conn.vip = oid, secrets.token_hex(8), VIP_BASE + n
+        conn.console = console
         self.by_vip[conn.vip] = conn
         self.log("login %s" % conn.label())
         return {"session": conn.session, "vip": conn.vip}
@@ -647,6 +654,12 @@ class Server:
             raise Err(NO_SUCH_ROOM)
         if len(room.members) >= room.max_slot:
             raise Err(ROOM_FULL)
+        # The game tells players apart by the OpenPSID built from the console
+        # MAC: a second member with the same one would also be "player 1".
+        twin = next((m for m in room.members if conn.console and m.conn.console == conn.console), None)
+        if twin is not None:
+            self.log("%s join room %d refused: same console id as %s" % (conn.label(), room.id, twin.conn.label()))
+            raise Err(DUPLICATE_CONSOLE)
         opt = hex_bytes(msg.get("opt", ""), 16)
         member = Member(conn, room.next_member_id, bin_attrs(msg.get("member_bins", [])))
         room.next_member_id += 1
@@ -1117,6 +1130,27 @@ def selftest():
     assert q.is_closed(), "stream flood closes the session"
     p.close()
     q.close()
+    srv.running = False
+    th.join(timeout=2)
+
+    # ---- one console id per room: a copied MAC file must not make two player 1s ----
+    srv = Server("127.0.0.1", 0, None, max_per_addr=16, logger=quiet)
+    th = run(srv)
+    ca, cb, cc, cd, ce = (TestClient(srv.port) for _ in range(5))
+    ca.ok("login", online_id="CONA", console="02000000000a")
+    cb.ok("login", online_id="CONB", console="02000000000a")
+    cc.ok("login", online_id="CONC", console="02000000000b")
+    cd.ok("login", online_id="COND")  # an older runtime sends no console id
+    r4 = ca.ok("create", max_slot=4)["room"]
+    dup = cb.req("join", room_id=r4["id"])
+    assert not dup["ok"] and dup["error"] == DUPLICATE_CONSOLE, dup
+    assert any("refused: same console id as CONA" in l for l in lines), "refusal logged"
+    cc.ok("join", room_id=r4["id"])
+    cd.ok("join", room_id=r4["id"])
+    bad = ce.req("login", online_id="CONE", console="xyz")
+    assert not bad["ok"] and bad["error"] == BAD_REQUEST, bad
+    for cl in (ca, cb, cc, cd, ce):
+        cl.close()
     srv.running = False
     th.join(timeout=2)
     print("selftest OK")

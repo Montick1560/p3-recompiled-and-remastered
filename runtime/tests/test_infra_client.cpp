@@ -152,6 +152,17 @@ static void login_sets_vip() {
     CHECK(!off.configured() && !off.connect("P3A", 100), "off: never connects");
 }
 
+static void login_carries_extra_fields() {
+    FakeInfraServer s;
+    s.start();
+    infra::Client c(s.address(), fast());
+    CHECK(c.connect("P3A", 2000, {{"console", "02000000000a"}}), "connect with extra login fields");
+    std::lock_guard<std::mutex> lock(s.mu);
+    CHECK(!s.got.empty() && s.got[0].json["op"] == "login" && s.got[0].json["online_id"] == "P3A" &&
+              s.got[0].json.value("console", "") == "02000000000a",
+          "login carries the console id");
+}
+
 static void request_answer_matched_by_id() {
     FakeInfraServer s;
     nlohmann::json first;
@@ -380,6 +391,7 @@ static void ws_against_real_server() {
 int main() {
     parse_address_forms();
     login_sets_vip();
+    login_carries_extra_fields();
     request_answer_matched_by_id();
     request_times_out();
     disconnect_fails_pending();

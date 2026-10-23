@@ -224,7 +224,7 @@ Client::Client(Address addr, Options opt) : addr_(std::move(addr)), opt_(opt) {}
 
 Client::~Client() { disconnect(); }
 
-bool Client::connect(const std::string& online_id, int timeout_ms) {
+bool Client::connect(const std::string& online_id, int timeout_ms, const nlohmann::json& login_extra) {
     std::lock_guard<std::mutex> clock(connect_mu_);
     if (connected_) return true;
     if (!configured()) return false;
@@ -256,7 +256,10 @@ bool Client::connect(const std::string& online_id, int timeout_ms) {
     std::condition_variable wcv;
     bool done = false;
     nlohmann::json answer;
-    request({{"op", "login"}, {"online_id", online_id}},
+    nlohmann::json login = login_extra.is_object() ? login_extra : nlohmann::json::object();
+    login["op"] = "login";
+    login["online_id"] = online_id;
+    request(std::move(login),
             [&](const nlohmann::json& j) {
                 std::lock_guard<std::mutex> l(wmu);
                 answer = j;

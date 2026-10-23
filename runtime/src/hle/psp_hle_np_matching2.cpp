@@ -14,6 +14,7 @@
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_np.h"
 #include "hle/psp_hle_inet.h"
+#include "hle/psp_hle_net.h"
 #include "psp_memory.h"
 #include "recomp.h"
 #include "net/guest_callbacks.h"
@@ -43,6 +44,8 @@ constexpr uint32_t kNullPage = 0x00010000U;
 
 // Request events (PSP numbering, checked against the game's handlers).
 constexpr uint16_t kEvServerInfo = 0x0001, kEvWorldInfoList = 0x0002, kEvRoomDataExternalList = 0x0007;
+// Server answer to a join from a console id already in the room (FORBIDDEN).
+constexpr uint32_t kErrDuplicateConsole = 0x80550D07;
 constexpr uint16_t kEvCreateJoinRoom = 0x0101, kEvJoinRoom = 0x0102, kEvLeaveRoom = 0x0103;
 constexpr uint16_t kEvKickout = 0x0105, kEvSearchRoom = 0x0106, kEvSetRoomDataInternal = 0x0109;
 // Room events.
@@ -170,7 +173,10 @@ bool ensure_connected() {
     if (c.connected()) return true;
     static std::once_flag hooked;
     std::call_once(hooked, [&c] { c.on_event(on_event); });
-    return c.connect(psp_np_online_id(), 10000);
+    // The console id (the MAC that starts the OpenPSID) lets the server refuse
+    // a second member that the game would also take for player 1.
+    const AdhocMac& mac = psp_net_config().mac;
+    return c.connect(psp_np_online_id(), 10000, {{"console", infra::to_hex(mac.data(), mac.size())}});
 }
 
 // ---- requests ----
@@ -231,9 +237,15 @@ void send_request(const Reply& r, nlohmann::json req, Make make) {
             post_reply(r, infra::kErrTimeout, 0);
             return;
         }
-        infra::client().request(std::move(req), [r, make](const nlohmann::json& a) {
+        const bool join = req.value("op", "") == "join";
+        infra::client().request(std::move(req), [r, make, join](const nlohmann::json& a) {
             if (!a.value("ok", false)) {
-                post_reply(r, a.value("error", infra::kErrTimeout), 0);
+                const uint32_t error = a.value("error", infra::kErrTimeout);
+                if (join && error == kErrDuplicateConsole) {
+                    std::fprintf(stderr, "[NP2] join refused: another player in the room has this console id "
+                                         "(copied adhoc_mac.txt or same PSPRECOMP_ADHOC_MAC)\n");
+                }
+                post_reply(r, error, 0);
                 return;
             }
             uint32_t data = 0;

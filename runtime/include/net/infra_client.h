@@ -84,7 +84,9 @@ public:
     const Address& address() const { return addr_; }
     // Opens the connection and logs in (blocking up to timeout_ms; call it off
     // the guest CPU). true when logged in, also when already connected.
-    bool connect(const std::string& online_id, int timeout_ms);
+    // login_extra's fields are merged into the login request (e.g. "console").
+    bool connect(const std::string& online_id, int timeout_ms,
+                 const nlohmann::json& login_extra = nlohmann::json::object());
     void disconnect();
     bool connected() const { return connected_; }
 
