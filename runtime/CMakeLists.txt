@@ -197,6 +197,7 @@ set(RUNTIME_SOURCES
     src/net/relay_conn.cpp
     src/net/infra_protocol.cpp
     src/net/infra_client.cpp
+    src/net/infra_stats.cpp
     src/net/np2_structs.cpp
     src/net/p2p_stream.cpp
     src/net/pro_client.cpp
@@ -1042,13 +1043,22 @@ target_compile_options(test_infra_protocol PRIVATE -O2 -Wall -Wextra -Wno-unused
 add_test(NAME infra_protocol_tests COMMAND test_infra_protocol)
 
 # Infrastructure-mode client against an in-process fake server.
-add_executable(test_infra_client tests/test_infra_client.cpp src/net/infra_client.cpp src/net/infra_protocol.cpp
-               src/net/relay_conn.cpp src/net/relay_protocol.cpp)
+add_executable(test_infra_client tests/test_infra_client.cpp src/net/infra_client.cpp src/net/infra_stats.cpp
+               src/net/infra_protocol.cpp src/net/relay_conn.cpp src/net/relay_protocol.cpp)
 target_include_directories(test_infra_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
                            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
 target_compile_options(test_infra_client PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(test_infra_client PRIVATE pthread ${PSP_SOCKET_LIBS} ${PSP_WINHTTP_LIBS})
 add_test(NAME infra_client_tests COMMAND test_infra_client)
+
+# PSPRECOMP_INFRA_STATS network event CSV, and the queue age a pop reports.
+add_executable(test_infra_stats tests/test_infra_stats.cpp src/net/infra_stats.cpp src/net/infra_client.cpp
+               src/net/infra_protocol.cpp src/net/relay_conn.cpp src/net/relay_protocol.cpp)
+target_include_directories(test_infra_stats PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                           ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
+target_compile_options(test_infra_stats PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(test_infra_stats PRIVATE pthread ${PSP_SOCKET_LIBS} ${PSP_WINHTTP_LIBS})
+add_test(NAME infra_stats_tests COMMAND test_infra_stats)
 
 # sceNpMatching2 response structs written into guest memory.
 add_executable(test_np2_structs tests/test_np2_structs.cpp src/net/np2_structs.cpp src/net/infra_protocol.cpp)

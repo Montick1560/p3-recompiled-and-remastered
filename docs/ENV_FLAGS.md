@@ -555,6 +555,20 @@ launcher's Saves screen sets this variable. Unset or missing save: the newest, a
 - **Set it when:** testing with a local server (`python -I tools/infra_server.py`, then `tcp://127.0.0.1` or
   `ws://127.0.0.1:27321/infra`), or playing on another server.
 
+### `PSPRECOMP_INFRA_STATS`
+- **Read in:** `runtime/src/net/infra_stats.cpp` (`infra::stats::enabled()`), once, at the first infrastructure
+  datagram or stream segment.
+- **Type:** env (file path).
+- **Default:** off.
+- **Effect:** Writes a CSV row `t_us,ev,kind,vip,src,dst,len,hash,extra_us` for every game datagram (kind 2) and
+  stream segment (kind 3) the client sends (`tx_call` before the send, `tx_done` after it), receives (`rx`),
+  hands to the game (`pop`, `extra_us` = time it waited in the queue) or drops (`drop`). `t_us` is steady_clock
+  microseconds, one clock for every process of the PC, and `hash` is FNV-1a 32 of the payload, so
+  `tools/infra_lagjoin.py` can match the logs of two instances. With `PSPRECOMP_FRAMELOG` the instance also logs
+  `[FRAMELOG] start steady_us=N`, which places the frame log on the same clock. A path that cannot be created is
+  logged (`[INFRA] stats: cannot open ...`) and leaves it off.
+- **Set it when:** measuring online lag (`build/infra/two.py` with `LAG_DIR`).
+
 ### `PSPRECOMP_INFRA_TRACE`
 - **Read in:** `runtime/src/hle/psp_hle_np.cpp`, `psp_hle_np_matching2.cpp`, `psp_hle_inet.cpp`.
 - **Type:** env (`=1` to enable).

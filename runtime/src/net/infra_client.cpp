@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "net/infra_stats.h"
 #include "net/relay_conn.h"
 
 #ifdef _WIN32
@@ -363,7 +364,10 @@ void Client::on_event(EventFn fn) {
 }
 
 void Client::send_datagram(uint32_t vip, uint16_t dst_port, uint16_t src_port, const uint8_t* data, size_t len) {
-    if (connected_) send(encode_datagram(vip, dst_port, src_port, data, len));
+    if (!connected_) return;
+    stats::record(stats::Ev::TxCall, kKindDatagram, vip, src_port, dst_port, data, len);
+    send(encode_datagram(vip, dst_port, src_port, data, len));
+    stats::record(stats::Ev::TxDone, kKindDatagram, vip, src_port, dst_port, data, len);
 }
 
 bool Client::pop_datagram(uint16_t local_port, Datagram* out) {
@@ -373,6 +377,9 @@ bool Client::pop_datagram(uint16_t local_port, Datagram* out) {
     *out = std::move(it->second.front());
     it->second.pop_front();
     queued_bytes_ -= out->payload.size();
+    if (stats::enabled())
+        stats::record(stats::Ev::Pop, kKindDatagram, out->vip, out->src_port, out->dst_port, out->payload.data(),
+                      out->payload.size(), stats::now_us() - out->rx_us);
     return true;
 }
 
@@ -387,7 +394,10 @@ size_t Client::queued_stream_bytes() const {
 }
 
 void Client::send_stream(uint32_t vip, uint16_t dst_port, uint16_t src_port, const uint8_t* data, size_t len) {
-    if (connected_) send(encode_segment(kKindStream, vip, dst_port, src_port, data, len));
+    if (!connected_) return;
+    stats::record(stats::Ev::TxCall, kKindStream, vip, src_port, dst_port, data, len);
+    send(encode_segment(kKindStream, vip, dst_port, src_port, data, len));
+    stats::record(stats::Ev::TxDone, kKindStream, vip, src_port, dst_port, data, len);
 }
 
 bool Client::pop_stream(Datagram* out) {
@@ -396,6 +406,9 @@ bool Client::pop_stream(Datagram* out) {
     *out = std::move(streams_.front());
     streams_.pop_front();
     stream_bytes_ -= out->payload.size();
+    if (stats::enabled())
+        stats::record(stats::Ev::Pop, kKindStream, out->vip, out->src_port, out->dst_port, out->payload.data(),
+                      out->payload.size(), stats::now_us() - out->rx_us);
     return true;
 }
 
@@ -474,23 +487,34 @@ void Client::reader() {
                 on_json(f.json);
                 continue;
             }
+            const int64_t rx_us = stats::now_us();
+            stats::record(stats::Ev::Rx, f.kind, f.vip, f.src_port, f.dst_port, f.payload.data(), f.payload.size());
             std::lock_guard<std::mutex> lock(mu_);
             if (f.kind == kKindStream) {
                 if (streams_.size() >= kStreamQueueCap || stream_bytes_ + f.payload.size() > kMaxStreamBytes) {
                     static int logged = 0;
                     if (logged++ < 4) std::fprintf(stderr, "[INFRA] stream queue full: a game stream lost data\n");
+                    stats::record(stats::Ev::Drop, f.kind, f.vip, f.src_port, f.dst_port, f.payload.data(),
+                                  f.payload.size());
                     continue;
                 }
                 stream_bytes_ += f.payload.size();
-                streams_.push_back(Datagram{f.vip, f.src_port, f.dst_port, std::move(f.payload)});
+                streams_.push_back(Datagram{f.vip, f.src_port, f.dst_port, std::move(f.payload), rx_us});
                 continue;
             }
-            if (queued_bytes_ + f.payload.size() > kMaxQueuedBytes) continue;  // nobody reads them: drop new
+            if (queued_bytes_ + f.payload.size() > kMaxQueuedBytes) {  // nobody reads them: drop new
+                stats::record(stats::Ev::Drop, f.kind, f.vip, f.src_port, f.dst_port, f.payload.data(),
+                              f.payload.size());
+                continue;
+            }
             auto& q = queues_[f.dst_port];
             queued_bytes_ += f.payload.size();
-            q.push_back(Datagram{f.vip, f.src_port, f.dst_port, std::move(f.payload)});
+            q.push_back(Datagram{f.vip, f.src_port, f.dst_port, std::move(f.payload), rx_us});
             if (q.size() > kQueueCap) {
-                queued_bytes_ -= q.front().payload.size();
+                const Datagram& old = q.front();
+                stats::record(stats::Ev::Drop, kKindDatagram, old.vip, old.src_port, old.dst_port,
+                              old.payload.data(), old.payload.size(), rx_us - old.rx_us);
+                queued_bytes_ -= old.payload.size();
                 q.pop_front();
             }
         }

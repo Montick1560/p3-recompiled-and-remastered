@@ -113,7 +113,14 @@ void perf_frame_end() {
         return out;
     }();
     if (f == nullptr) return;
-    static const clock::time_point start = clock::now();
+    static const clock::time_point start = [] {
+        const clock::time_point t = clock::now();
+        // The steady clock is system-wide (QueryPerformanceCounter): tools/infra_lagjoin.py places t_ms = 0 on it.
+        std::fprintf(stderr, "[FRAMELOG] start steady_us=%lld\n",
+                     static_cast<long long>(
+                         std::chrono::duration_cast<std::chrono::microseconds>(t.time_since_epoch()).count()));
+        return t;
+    }();
     static clock::time_point last = start;
     static PerfSnapshot prev = perf_snapshot();
     static int rows = 0;

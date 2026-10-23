@@ -66,6 +66,7 @@ public:
         uint16_t src_port = 0;
         uint16_t dst_port = 0;
         std::vector<uint8_t> payload;
+        int64_t rx_us = 0;  // infra::stats::now_us() when the reader got it
     };
     using Done = std::function<void(const nlohmann::json& answer)>;
     using EventFn = std::function<void(const nlohmann::json& event)>;
