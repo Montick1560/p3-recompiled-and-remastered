@@ -15,6 +15,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -124,6 +125,7 @@ private:
         Done done;
         std::chrono::steady_clock::time_point deadline;
         std::string op;
+        int64_t room_id = 0;  // of a leave
     };
     struct Outgoing {
         std::vector<uint8_t> bytes;
@@ -162,7 +164,7 @@ private:
     size_t queued_bytes_ = 0, stream_bytes_ = 0;
     std::deque<int> rtts_;
     std::string session_, online_id_;
-    int64_t room_id_ = 0;  // joined room, for the room_destroyed synthesised on loss
+    std::set<int64_t> rooms_;  // joined rooms (hideout + VS), for the room_destroyed synthesised on loss
 };
 
 // Process-wide client for PSPRECOMP_INFRA_SERVER (read once).

@@ -199,6 +199,7 @@ set(RUNTIME_SOURCES
     src/net/infra_client.cpp
     src/net/infra_stats.cpp
     src/net/np2_structs.cpp
+    src/net/np2_rooms.cpp
     src/net/p2p_stream.cpp
     src/net/pro_client.cpp
     src/net/adhocctl.cpp
@@ -1066,6 +1067,13 @@ target_include_directories(test_np2_structs PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/
                            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
 target_compile_options(test_np2_structs PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME np2_structs_tests COMMAND test_np2_structs)
+
+# Matching2 state of every room the game is in (hideout + VS), by room id (pure).
+add_executable(test_np2_rooms tests/test_np2_rooms.cpp src/net/np2_rooms.cpp)
+target_include_directories(test_np2_rooms PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                           ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
+target_compile_options(test_np2_rooms PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME np2_rooms_tests COMMAND test_np2_rooms)
 
 # sceNetInet errno -> sceNetInetGetPspError (pure).
 add_executable(test_inet_errno tests/test_inet_errno.cpp)

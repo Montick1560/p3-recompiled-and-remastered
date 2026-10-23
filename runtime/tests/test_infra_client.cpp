@@ -3,6 +3,7 @@
 // tools/infra_server.py speaking the net/infra_protocol frames over TCP.
 #include "net/infra_client.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -170,6 +171,47 @@ static void disconnect_fails_pending() {
     bool destroyed = false;
     for (const auto& e : events) destroyed |= e.value("ev", "") == "room_destroyed" && e.value("room_id", 0) == 5;
     CHECK(destroyed, "room_destroyed synthesised for the joined room");
+}
+
+// The game is in its hideout room and a VS room: a lost connection destroys both, once each.
+static void loss_destroys_every_room() {
+    FakeInfraServer s;
+    s.on_frame = [](FakeInfraServer& srv, const infra::Frame& f) {
+        const std::string op = f.json.value("op", "");
+        if (op == "join")
+            srv.send_json({{"id", f.json["id"]}, {"ok", true}, {"room", {{"id", f.json["room_id"]}, {"me", 0x11}}}});
+        else if (op == "create")
+            srv.send_json({{"id", f.json["id"]}, {"ok", true}, {"room", {{"id", 8}, {"me", 0x10}}}});
+        else if (op == "leave")
+            srv.send_json({{"id", f.json["id"]}, {"ok", true}});
+        else if (op == "hang")
+            srv.close_client();
+    };
+    s.start();
+    infra::Client c(s.address(), fast());
+    std::mutex mu;
+    std::vector<int64_t> destroyed;
+    std::atomic<int> answers{0};
+    c.on_event([&](const nlohmann::json& e) {
+        std::lock_guard<std::mutex> l(mu);
+        if (e.value("ev", "") == "room_destroyed") destroyed.push_back(e.value("room_id", int64_t{0}));
+    });
+    CHECK(c.connect("P3A", 2000), "connect");
+    auto ok = [&](const nlohmann::json& j) { if (j.value("ok", false)) answers++; };
+    c.request({{"op", "join"}, {"room_id", 5}}, ok, 2000);
+    c.request({{"op", "create"}, {"max_slot", 4}}, ok, 2000);
+    c.request({{"op", "join"}, {"room_id", 9}}, ok, 2000);
+    c.request({{"op", "leave"}, {"room_id", 9}}, ok, 2000);
+    const auto t = Clock::now();
+    while (answers < 4 && ms_since(t) < 2000) sleep_ms(10);
+    CHECK(answers == 4, "joined 5, created 8, joined and left 9");
+    c.request({{"op", "hang"}}, [](const nlohmann::json&) {}, 2000);
+    const auto t2 = Clock::now();
+    while (c.connected() && ms_since(t2) < 2000) sleep_ms(10);
+    sleep_ms(100);
+    std::lock_guard<std::mutex> l(mu);
+    std::sort(destroyed.begin(), destroyed.end());
+    CHECK(destroyed == (std::vector<int64_t>{5, 8}), "one room_destroyed per room still joined, lost() once");
 }
 
 static void datagram_queue_per_port() {
@@ -511,6 +553,7 @@ int main() {
     request_answer_matched_by_id();
     request_times_out();
     disconnect_fails_pending();
+    loss_destroys_every_room();
     datagram_queue_per_port();
     stream_segments_in_order();
     queues_bounded_in_bytes();

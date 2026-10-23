@@ -7,6 +7,9 @@
 // peers to the signaling callback cb(ctxId, 0, roomId lo, roomId hi,
 // memberId, event, errorCode, arg). Event numbers and the PSP differences are
 // in docs/superpowers/specs/2026-10-22-p3-infrastructure-mode-design.md.
+// On VS the game is in two rooms at once (its hideout room and a VS room):
+// the state is kept per room (net/np2_rooms.h) and every event or call uses
+// the room it names.
 //
 // The guest CPU never waits on the network: a request is parsed and given
 // its id on the guest thread, sent from a worker thread, and its answer is
@@ -20,6 +23,7 @@
 #include "net/guest_callbacks.h"
 #include "net/infra_client.h"
 #include "net/infra_protocol.h"
+#include "net/np2_rooms.h"
 #include "net/np2_structs.h"
 
 #include <atomic>
@@ -31,7 +35,6 @@
 #include <cstring>
 #include <deque>
 #include <functional>
-#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -142,21 +145,13 @@ Worker& worker() {
     return *w;
 }
 
-struct Peer {
-    uint32_t vip = 0;
-    uint16_t port = 0;
-};
-
 struct State {
     std::mutex mu;
     uint32_t next_req = 0;
     bool started = false;  // between ContextStart and ContextStop/Term
     uint16_t ctx_id = 1;
-    uint32_t room_cb = 0, room_arg = 0;
     uint32_t sig_cb = 0, sig_arg = 0;
-    uint64_t room_id = 0;
-    uint16_t me = 0;
-    std::map<uint16_t, Peer> peers;  // room members by member id, me included
+    np2::Rooms rooms;  // every room the game is in
 };
 
 State& st() {
@@ -314,48 +309,42 @@ std::string read_opt(uint8_t* rdram, uint32_t p) {
 
 std::vector<uint8_t> opt_bytes(const nlohmann::json& e) { return infra::from_hex(e.value("opt", "")); }
 
-// Remembers the room the game is in after a create/join answer.
-void enter_room(const nlohmann::json& room) {
+// Remembers a room the game entered after a create/join answer.
+void enter_room(const nlohmann::json& room, np2::RoomCallback cb) {
     std::lock_guard<std::mutex> lock(st().mu);
-    State& s = st();
-    s.room_id = room.value("id", uint64_t{0});
-    s.me = room.value("me", uint16_t{0});
-    s.peers.clear();
-    for (const auto& m : room.value("members", nlohmann::json::array()))
-        s.peers[m.value("member_id", uint16_t{0})] = Peer{m.value("vip", 0u), m.value("port", uint16_t{0})};
+    st().rooms.enter(room, cb);
+    std::fprintf(stderr, "[NP2] in %zu room(s)\n", st().rooms.ids().size());
 }
 
 // ---- pushed events ----
-void post_room_event(uint16_t event, uint32_t data) {
+void post_room_event(uint64_t room, uint16_t event, uint32_t data) {
     State& s = st();
-    uint32_t cb, arg;
-    uint64_t room;
+    np2::RoomCallback cb;
     {
         std::lock_guard<std::mutex> lock(s.mu);
-        cb = s.room_cb;
-        arg = s.room_arg;
-        room = s.room_id;
+        cb = s.rooms.callback(room);
     }
     std::fprintf(stderr, "[NP2] room event 0x%04X room %llu\n", event, static_cast<unsigned long long>(room));
-    if (!cb || !data) return;
+    if (!cb.cb || !data) return;
     GuestCall c;
-    c.fn = cb;
+    c.fn = cb.cb;
     c.a[0] = s.ctx_id;
     c.a[1] = 0;
     c.a[2] = static_cast<uint32_t>(room);
     c.a[3] = static_cast<uint32_t>(room >> 32);
     c.a[4] = event;
     c.a[5] = data;
-    c.a[6] = arg;
+    c.a[6] = cb.arg;
     guest_callbacks_post(g_rdram, std::move(c));
 }
 
 void handle_event(const nlohmann::json& e) {
     State& s = st();
     const std::string ev = e.value("ev", "");
+    const uint64_t room = e.value("room_id", uint64_t{0});
     {
         std::lock_guard<std::mutex> lock(s.mu);
-        if (!s.started || e.value("room_id", uint64_t{0}) != s.room_id || s.room_id == 0) {
+        if (!s.started || !s.rooms.has(room)) {
             if (trace()) std::fprintf(stderr, "[NP2] event %s ignored\n", e.dump().c_str());
             return;
         }
@@ -366,35 +355,34 @@ void handle_event(const nlohmann::json& e) {
         {
             std::lock_guard<std::mutex> lock(s.mu);
             if (ev == "member_joined")
-                s.peers[id] = Peer{m.value("vip", 0u), m.value("port", uint16_t{0})};
+                s.rooms.member_joined(room, id, np2::Peer{m.value("vip", 0u), m.value("port", uint16_t{0})});
             else
-                s.peers.erase(id);
+                s.rooms.member_left(room, id);
         }
         const uint8_t cause = static_cast<uint8_t>(e.value("cause", 0));
         const std::vector<uint8_t> opt = opt_bytes(e);
-        post_room_event(ev == "member_joined" ? kEvMemberJoined : kEvMemberLeft,
+        post_room_event(room, ev == "member_joined" ? kEvMemberJoined : kEvMemberLeft,
                         build([&](np2::GuestBuf& b) { return np2::write_member_update(b, m, cause, opt); }));
     } else if (ev == "kicked" || ev == "room_destroyed") {
         const uint8_t cause = static_cast<uint8_t>(e.value("cause", 0));
         const std::vector<uint8_t> opt = opt_bytes(e);
-        post_room_event(ev == "kicked" ? kEvKickedOut : kEvRoomDestroyed,
+        post_room_event(room, ev == "kicked" ? kEvKickedOut : kEvRoomDestroyed,
                         build([&](np2::GuestBuf& b) { return np2::write_room_update(b, cause, 0, opt); }));
         std::lock_guard<std::mutex> lock(s.mu);
-        s.room_id = 0;
-        s.peers.clear();
+        s.rooms.leave(room);
     } else if (ev == "signaling") {
         const uint16_t id = e.value("member_id", uint16_t{0});
         const uint16_t event = e.value("event", uint16_t{0});
         uint32_t cb, arg;
-        uint64_t room;
         {
             std::lock_guard<std::mutex> lock(s.mu);
-            if (event == 0x5102) s.peers[id] = Peer{e.value("vip", 0u), e.value("port", uint16_t{0})};
+            if (event == 0x5102)
+                s.rooms.signaled(room, id, np2::Peer{e.value("vip", 0u), e.value("port", uint16_t{0})});
             cb = s.sig_cb;
             arg = s.sig_arg;
-            room = s.room_id;
         }
-        std::fprintf(stderr, "[NP2] signaling 0x%04X member 0x%X\n", event, id);
+        std::fprintf(stderr, "[NP2] signaling 0x%04X member 0x%X room %llu\n", event, id,
+                     static_cast<unsigned long long>(room));
         if (!cb) return;
         GuestCall c;
         c.fn = cb;
@@ -435,8 +423,7 @@ void leave_server() {
     {
         std::lock_guard<std::mutex> lock(st().mu);
         st().started = false;
-        st().room_id = 0;
-        st().peers.clear();
+        st().rooms.clear();
     }
     worker().post([] { infra::client().disconnect(); });
 }
@@ -540,6 +527,10 @@ void hle_sceNpMatching2SearchRoom(uint8_t* rdram, recomp_context* ctx) {
         if (start == 0) start = 1;
         req["start"] = start;
         req["max"] = psp_mem_read<uint32_t>(rdram, p + 0x14);
+        if (const uint32_t flag_filter = psp_mem_read<uint32_t>(rdram, p + 0x18)) {
+            req["flag_filter"] = flag_filter;
+            req["flag_attr"] = psp_mem_read<uint32_t>(rdram, p + 0x1C);
+        }
         const uint32_t f = psp_mem_read<uint32_t>(rdram, p + 0x20), n = psp_mem_read<uint32_t>(rdram, p + 0x24);
         if (n <= 16 && valid_range(f, n * 12))
             for (uint32_t i = 0; i < n; i++)
@@ -580,17 +571,16 @@ void hle_sceNpMatching2GetRoomDataExternalList(uint8_t* rdram, recomp_context* c
 }
 
 // Room event callback struct (CreateJoinRoom/JoinRoom 4th argument): {cb, arg, ...}
-void save_room_callback(uint8_t* rdram, uint32_t p) {
-    if (!valid_range(p, 8)) return;
-    std::lock_guard<std::mutex> lock(st().mu);
-    st().room_cb = psp_mem_read<uint32_t>(rdram, p);
-    st().room_arg = psp_mem_read<uint32_t>(rdram, p + 4);
+np2::RoomCallback read_room_callback(uint8_t* rdram, uint32_t p) {
+    if (!valid_range(p, 8)) return {};
+    return np2::RoomCallback{psp_mem_read<uint32_t>(rdram, p), psp_mem_read<uint32_t>(rdram, p + 4)};
 }
 
-Make room_answer() {
-    return [](np2::GuestBuf& b, const nlohmann::json& a) {
+// A room's events go to the callback its own create/join request named.
+Make room_answer(np2::RoomCallback cb) {
+    return [cb](np2::GuestBuf& b, const nlohmann::json& a) {
         const nlohmann::json room = a.value("room", nlohmann::json::object());
-        enter_room(room);
+        enter_room(room, cb);
         return np2::write_room_int_response(b, room);
     };
 }
@@ -603,7 +593,7 @@ Make room_answer() {
 void hle_sceNpMatching2CreateJoinRoom(uint8_t* rdram, recomp_context* ctx) {
     log_call("CreateJoinRoom", ctx);
     const uint32_t p = static_cast<uint32_t>(ctx->r[5]);
-    save_room_callback(rdram, static_cast<uint32_t>(ctx->r[7]));
+    const np2::RoomCallback cb = read_room_callback(rdram, static_cast<uint32_t>(ctx->r[7]));
     const Reply r = begin_request(rdram, ctx, kEvCreateJoinRoom, 9);
     nlohmann::json req = {{"op", "create"}, {"max_slot", 4}};
     if (valid_range(p, 0x68)) {
@@ -617,7 +607,7 @@ void hle_sceNpMatching2CreateJoinRoom(uint8_t* rdram, recomp_context* ctx) {
         if (u(0x2C)) std::fprintf(stderr, "[NP2] CreateJoinRoom: %u searchable bin attrs not published\n", u(0x2C));
     }
     if (trace()) std::fprintf(stderr, "[NP2] create %s\n", req.dump().c_str());
-    send_request(r, std::move(req), room_answer());
+    send_request(r, std::move(req), room_answer(cb));
     ctx->r[2] = SCE_OK;
 }
 
@@ -627,7 +617,7 @@ void hle_sceNpMatching2CreateJoinRoom(uint8_t* rdram, recomp_context* ctx) {
 void hle_sceNpMatching2JoinRoom(uint8_t* rdram, recomp_context* ctx) {
     log_call("JoinRoom", ctx);
     const uint32_t p = static_cast<uint32_t>(ctx->r[5]);
-    save_room_callback(rdram, static_cast<uint32_t>(ctx->r[7]));
+    const np2::RoomCallback cb = read_room_callback(rdram, static_cast<uint32_t>(ctx->r[7]));
     const Reply r = begin_request(rdram, ctx, kEvJoinRoom, 9);
     nlohmann::json req = {{"op", "join"}, {"room_id", 0}};
     if (valid_range(p, 0x30)) {
@@ -637,7 +627,7 @@ void hle_sceNpMatching2JoinRoom(uint8_t* rdram, recomp_context* ctx) {
         req["opt"] = read_opt(rdram, p + 0x18);
     }
     std::fprintf(stderr, "[NP2] join room %llu\n", static_cast<unsigned long long>(req["room_id"].get<uint64_t>()));
-    send_request(r, std::move(req), room_answer());
+    send_request(r, std::move(req), room_answer(cb));
     ctx->r[2] = SCE_OK;
 }
 
@@ -646,12 +636,11 @@ void hle_sceNpMatching2LeaveRoom(uint8_t* rdram, recomp_context* ctx) {
     log_call("LeaveRoom", ctx);
     const uint32_t p = static_cast<uint32_t>(ctx->r[5]);
     const Reply r = begin_request(rdram, ctx, kEvLeaveRoom, 7);
-    nlohmann::json req = {{"op", "leave"}, {"room_id", valid_range(p, 0x1C) ? read_u64(rdram, p) : 0},
-                          {"opt", read_opt(rdram, p + 8)}};
-    send_request(r, std::move(req), [](np2::GuestBuf& b, const nlohmann::json&) {
+    const uint64_t room = valid_range(p, 0x1C) ? read_u64(rdram, p) : 0;
+    nlohmann::json req = {{"op", "leave"}, {"room_id", room}, {"opt", read_opt(rdram, p + 8)}};
+    send_request(r, std::move(req), [room](np2::GuestBuf& b, const nlohmann::json&) {
         std::lock_guard<std::mutex> lock(st().mu);
-        st().room_id = 0;
-        st().peers.clear();
+        st().rooms.leave(room);  // the game's other rooms stay
         return b.alloc(4);  // the game's handler reads no data; any non-null block
     });
     ctx->r[2] = SCE_OK;
@@ -682,28 +671,29 @@ void hle_sceNpMatching2SetRoomDataInternal(uint8_t* rdram, recomp_context* ctx) 
     if (valid_range(p, 0x18)) {
         req["room_id"] = read_u64(rdram, p);
         req["bins"] = read_bin_attrs(rdram, psp_mem_read<uint32_t>(rdram, p + 0x10), psp_mem_read<uint32_t>(rdram, p + 0x14));
-        if (psp_mem_read<uint32_t>(rdram, p + 8))
-            std::fprintf(stderr, "[NP2] SetRoomDataInternal: flag filter %08X attr %08X not sent\n",
-                         psp_mem_read<uint32_t>(rdram, p + 8), psp_mem_read<uint32_t>(rdram, p + 0xC));
+        if (const uint32_t flag_filter = psp_mem_read<uint32_t>(rdram, p + 8)) {
+            req["flag_filter"] = flag_filter;
+            req["flag_attr"] = psp_mem_read<uint32_t>(rdram, p + 0xC);
+        }
     }
+    if (trace()) std::fprintf(stderr, "[NP2] set_internal %s\n", req.dump().c_str());
     send_request(r, std::move(req), [](np2::GuestBuf& b, const nlohmann::json&) { return b.alloc(4); });
     ctx->r[2] = SCE_OK;
 }
 
 // SignalingGetConnectionStatus(ctxId, -, roomId lo, roomId hi, memberId, int* status,
-// in_addr* addr, u16* port): the member's virtual IP and game port, both in network order.
+// in_addr* addr, u16* port): the member's virtual IP and game port in that room, both in network order.
 void hle_sceNpMatching2SignalingGetConnectionStatus(uint8_t* rdram, recomp_context* ctx) {
     log_call("SignalingGetConnectionStatus", ctx);
+    const uint64_t room = static_cast<uint32_t>(ctx->r[6]) | (static_cast<uint64_t>(static_cast<uint32_t>(ctx->r[7])) << 32);
     const uint16_t member = static_cast<uint16_t>(ctx->r[8]);
     const uint32_t status = static_cast<uint32_t>(ctx->r[9]), addr = static_cast<uint32_t>(ctx->r[10]),
                    port = static_cast<uint32_t>(ctx->r[11]);
-    Peer peer;
+    np2::Peer peer;
     bool known;
     {
         std::lock_guard<std::mutex> lock(st().mu);
-        auto it = st().peers.find(member);
-        known = it != st().peers.end() && it->second.vip != 0;
-        if (known) peer = it->second;
+        known = st().rooms.peer(room, member, &peer);
     }
     if (valid_range(status, 4)) psp_mem_write<int32_t>(rdram, status, known ? kSignalingActive : 0);
     if (known && valid_range(addr, 4)) {
@@ -714,8 +704,8 @@ void hle_sceNpMatching2SignalingGetConnectionStatus(uint8_t* rdram, recomp_conte
         const uint8_t b[2] = {uint8_t(peer.port >> 8), uint8_t(peer.port)};
         std::memcpy(rdram + (port & kAddrMask), b, 2);
     }
-    std::fprintf(stderr, "[NP2] connection status member 0x%X: %s %u.%u.%u.%u:%u\n", member,
-                 known ? "active" : "unknown", peer.vip >> 24, (peer.vip >> 16) & 255, (peer.vip >> 8) & 255,
+    std::fprintf(stderr, "[NP2] connection status room %llu member 0x%X: %s %u.%u.%u.%u:%u\n",
+                 static_cast<unsigned long long>(room), member, known ? "active" : "unknown", peer.vip >> 24, (peer.vip >> 16) & 255, (peer.vip >> 8) & 255,
                  peer.vip & 255, peer.port);
     ctx->r[2] = SCE_OK;
 }

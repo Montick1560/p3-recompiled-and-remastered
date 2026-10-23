@@ -246,7 +246,7 @@ bool Client::connect(const std::string& online_id, int timeout_ms, const nlohman
     }
     {
         std::lock_guard<std::mutex> lock(mu_);
-        room_id_ = 0;
+        rooms_.clear();
         rtts_.clear();
         connected_ = true;
     }
@@ -312,7 +312,7 @@ void Client::fail(Done& done) {
 
 void Client::lost(const char* why) {
     std::map<uint32_t, Pending> pending;
-    int64_t room = 0;
+    std::set<int64_t> rooms;
     EventFn fn;
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -320,8 +320,7 @@ void Client::lost(const char* why) {
         if (!connected_) return;
         connected_ = false;
         pending.swap(pending_);
-        room = room_id_;
-        room_id_ = 0;
+        rooms.swap(rooms_);
         fn = on_event_;
         queues_.clear();
         streams_.clear();
@@ -337,7 +336,9 @@ void Client::lost(const char* why) {
     if (transport_) transport_->close();
     if (std::strcmp(why, "disconnect") != 0) std::fprintf(stderr, "[INFRA] connection lost: %s\n", why);
     for (auto& [id, p] : pending) fail(p.done);
-    if (room && fn) fn(nlohmann::json{{"ev", "room_destroyed"}, {"room_id", room}, {"cause", kCauseConnectionError}});
+    if (fn)
+        for (int64_t room : rooms)
+            fn(nlohmann::json{{"ev", "room_destroyed"}, {"room_id", room}, {"cause", kCauseConnectionError}});
 }
 
 void Client::send(Outgoing o) {
@@ -393,6 +394,7 @@ void Client::request(nlohmann::json req, Done done, int timeout_ms) {
             p.done = std::move(done);
             p.deadline = Clock::now() + std::chrono::milliseconds(timeout_ms);
             p.op = req.value("op", "");
+            if (p.op == "leave") p.room_id = req.value("room_id", int64_t{0});
         }
     }
     if (id == 0) {
@@ -489,8 +491,7 @@ void Client::on_json(const nlohmann::json& j) {
         {
             std::lock_guard<std::mutex> lock(mu_);
             const std::string ev = j.value("ev", "");
-            if ((ev == "room_destroyed" || ev == "kicked") && j.value("room_id", int64_t{0}) == room_id_)
-                room_id_ = 0;
+            if (ev == "room_destroyed" || ev == "kicked") rooms_.erase(j.value("room_id", int64_t{0}));
             fn = on_event_;
         }
         if (fn) fn(j);
@@ -505,8 +506,8 @@ void Client::on_json(const nlohmann::json& j) {
         const bool ok = j.value("ok", false);
         if (ok && (it->second.op == "create" || it->second.op == "join") && j.contains("room") &&
             j["room"].is_object())
-            room_id_ = j["room"].value("id", int64_t{0});
-        if (ok && it->second.op == "leave") room_id_ = 0;
+            rooms_.insert(j["room"].value("id", int64_t{0}));
+        if (ok && it->second.op == "leave") rooms_.erase(it->second.room_id);
         done = std::move(it->second.done);
         pending_.erase(it);
     }
