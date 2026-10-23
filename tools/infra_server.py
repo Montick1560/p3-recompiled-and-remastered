@@ -22,6 +22,7 @@ import base64
 import hashlib
 import heapq
 import json
+import queue
 import random
 import re
 import secrets
@@ -65,6 +66,55 @@ OPS = {1: lambda a, b: a == b, 2: lambda a, b: a != b, 3: lambda a, b: a < b,
 
 def log(msg):
     print(time.strftime("%H:%M:%S"), msg, flush=True)
+
+
+class AsyncLog:
+    """The server's logger: lines are stamped when logged and written by a thread of their own, so a console that
+    blocks (Windows QuickEdit selection pauses every write to it) or a stalled disk never stops the server. Over
+    10000 lines waiting, new lines are dropped and counted."""
+
+    def __init__(self, sink=None, max_lines=10000):
+        self.sink = sink or (lambda line: print(line, flush=True))
+        self.q = queue.Queue(max_lines)
+        self.dropped = 0
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def __call__(self, msg):
+        try:
+            self.q.put_nowait("%s %s" % (time.strftime("%H:%M:%S"), msg))
+        except queue.Full:
+            self.dropped += 1
+
+    def _run(self):
+        while True:
+            line = self.q.get()
+            if self.dropped:
+                n, self.dropped = self.dropped, 0
+                self.sink("%s log: %d lines dropped while the output was blocked" % (time.strftime("%H:%M:%S"), n))
+            try:
+                self.sink(line)
+            except OSError:
+                pass
+            self.q.task_done()
+
+    def flush(self, timeout=5.0):
+        deadline = time.monotonic() + timeout
+        while self.q.unfinished_tasks and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+
+def disable_quick_edit():
+    """Windows: a click in the server's console window starts a text selection, and while it lasts every write to
+    the console (each log line) blocks the server. Turn QuickEdit off for this console; True when it was on."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    k32 = ctypes.windll.kernel32
+    h = k32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+    mode = ctypes.c_uint32()
+    if not k32.GetConsoleMode(h, ctypes.byref(mode)) or not mode.value & 0x40:  # no console / already off
+        return False
+    return bool(k32.SetConsoleMode(h, (mode.value & ~0x40) | 0x80))  # ENABLE_EXTENDED_FLAGS keeps it applied
 
 
 class Err(Exception):
@@ -1153,6 +1203,29 @@ def selftest():
         cl.close()
     srv.running = False
     th.join(timeout=2)
+
+    # A log that cannot be written (a console in QuickEdit selection, a stalled disk) never stops the server.
+    gate = threading.Event()
+    got = []
+
+    def stuck(line):
+        gate.wait()
+        got.append(line)
+    alog = AsyncLog(sink=stuck)
+    t0 = time.monotonic()
+    for i in range(2000):
+        alog("line %d" % i)
+    assert time.monotonic() - t0 < 0.5, "logging waited for a blocked sink"
+    srv5 = Server("127.0.0.1", 0, None, logger=alog)
+    th5 = run(srv5)
+    q = TestClient(srv5.port)
+    assert q.ok("login", online_id="P3Q")["vip"] == 0x0A500001, "served while the log is blocked"
+    q.close()
+    gate.set()
+    alog.flush(timeout=3)
+    assert len(got) >= 2001 and got[0].endswith(" line 0") and any("login P3Q" in l for l in got), got[:2]
+    srv5.running = False
+    th5.join(timeout=2)
     print("selftest OK")
 
 
@@ -1174,9 +1247,12 @@ def main():
     args = ap.parse_args()
     if args.selftest:
         return selftest()
+    alog = AsyncLog()
     srv = Server(args.host, args.port, args.ws_port, args.ws_path, args.max_rooms, args.idle, args.stats_every,
-                 args.delay_ms, args.max_per_addr, signal_timeout=args.signal_timeout, loss=args.loss)
-    log("infrastructure server: tcp %s:%d, ws %s:%d%s" % (args.host, srv.port, args.host, srv.ws_port, args.ws_path))
+                 args.delay_ms, args.max_per_addr, signal_timeout=args.signal_timeout, loss=args.loss, logger=alog)
+    if disable_quick_edit():
+        alog("console QuickEdit turned off: a click in this window no longer pauses the server")
+    alog("infrastructure server: tcp %s:%d, ws %s:%d%s" % (args.host, srv.port, args.host, srv.ws_port, args.ws_path))
     try:
         srv.serve()
     except KeyboardInterrupt:
