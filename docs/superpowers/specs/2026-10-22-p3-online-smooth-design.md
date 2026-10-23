@@ -84,11 +84,28 @@ What the evidence turned out to be:
   the public server runs on another machine.
 - The e2e12 "before" video: B's runs of identical shots were the recorder's 5 s socket timeouts filled with the
   previous frame, plus one 1.5 s gap that did not reproduce.
-- Not measured: the public server (the tunnel was down), so the WebSocket transport fix (design item 5) and the
-  stale-datagram drop (item 3, queue waits stayed far under 200 ms) were not needed or not decidable yet.
+- The stale-datagram drop (design item 3) was not needed: queue waits stayed far under 200 ms on one PC.
+
 - Outside this design, found on the way: with the launcher, stderr goes to `logs/game.log` and the game thread logs
   thousands of lines, so on a disk like this one a log line can stall the game. A log writer off the game thread
   would remove that.
+
+## Result over the public server (23 Oct 2026, 03:30-04:15)
+Both instances on this PC, both over `wss://online.montick.app/infra` (ping RTT 62 ms). From this PC a datagram
+crosses the internet twice (to the server and back), so the delivery bound is RTT + 50 = 112 ms, not RTT/2 + 50
+(for players on two machines it is the mean of their RTTs + 50 ms). `infra_lagjoin.py --total-ms` sets it.
+
+| run | send_block p99 | wire p50 / p99 (dgram) | wire p99 (stream) | total p99 (dgram) |
+|---|---|---|---|---|
+| hideout together (lag_pub_hideout) | 0.2-0.3 ms | 62-64 / 64-75 ms | 65-70 ms | 108 ms A->B (PASS) |
+| co-op mission (lag_pub) | 0.2-0.3 ms | 62-63 / 64-65 ms | 66-82 ms | 127-148 ms (FAIL, see below) |
+
+- The WebSocket path adds nothing visible on top of the RTT: datagram wire p99 is 2-13 ms over the ping, no bursts in
+  multiples of 200 ms (one 202 ms stream segment in 3749). The own WebSocket transport (design item 5) is not needed.
+- Sends never wait for the internet: send_block p99 0.3 ms over TLS.
+- The mission run's delivery tail and its end (the visitor gave up on the host and left the room) come from this
+  PC's disk: both games froze together for 47, 11, 11 and 6 s while the datagrams kept arriving, which the queue
+  waits (up to 37 s) show. That is not the network and would not happen on two healthy machines.
 
 ## Out of scope
 Direct UDP between players (hole punching) or a UDP relay: the Cloudflare tunnel carries only HTTP/WebSocket, so

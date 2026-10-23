@@ -181,7 +181,7 @@ def metric(recs, a, b):
     return [getattr(r, b) - getattr(r, a) for r in recs if getattr(r, a) is not None and getattr(r, b) is not None]
 
 
-def report(net, frames=None, driver=None):
+def report(net, frames=None, driver=None, total_ms=50):
     """Returns (markdown lines, verdicts [(name, ok)], numbers dict for tests)."""
     recs, stray = join(net)
     sides = list(net)
@@ -222,7 +222,8 @@ def report(net, frames=None, driver=None):
             if kind == 2:
                 p99 = m['total'][99]
                 qmax = m['queue'][100]
-                verdicts.append((f'{d} dgram total p99 < 50 ms ({fmt_ms(p99)})', p99 is not None and p99 < 50_000))
+                verdicts.append((f'{d} dgram total p99 < {total_ms} ms ({fmt_ms(p99)})',
+                                 p99 is not None and p99 < total_ms * 1000))
                 verdicts.append((f'{d} dgram queue max <= 200 ms ({fmt_ms(qmax)})',
                                  qmax is None or qmax <= 200_000))
     lines.append('')
@@ -308,6 +309,8 @@ def selftest():
     assert n[('A->B', 'dgram')]['sent'] == 3, n  # sends inside the window only
     assert any(l.startswith('| 0.00 | 150 |') for l in lines), '\n'.join(lines)
     assert ('A frames over 100 ms <= 1 (1)', True) in verdicts, verdicts
+    v = report({'A': read_net(pa), 'B': read_net(pb)}, total_ms=2)[1]
+    assert v[0] == ('A->B dgram total p99 < 2 ms (4.0)', False), v  # totals 1.5, 0.9 and 4.0 ms
     # Driver: a beat_sync that started 2 ms before the 150 ms frame overlaps it; a press 1 s later does not.
     drv = [(1000, 'A', 'sync'), (1_003_000, 'A', 'press'), (2900, 'B', 'shot'), (9_000_000, '*', 'disk_stall:500')]
     assert driver_during(drv, 'A', 3000, 150) == ['sync'], driver_during(drv, 'A', 3000, 150)
@@ -323,6 +326,9 @@ def main():
     ap.add_argument('net', nargs='*', help='A_net.csv B_net.csv')
     ap.add_argument('--frames', nargs=2, metavar='FRAMES.csv:LOG', help='frame log and stderr log, A then B')
     ap.add_argument('--driver', help="build/infra/two.py's driver.csv")
+    ap.add_argument('--total-ms', type=int, default=50,
+                    help='delivery p99 bound: 50 on one PC with a local server; through an internet server a '
+                         'datagram crosses two legs, so (RTT of A + RTT of B) / 2 + 50')
     ap.add_argument('--md', help='also write the report here')
     ap.add_argument('--selftest', action='store_true')
     args = ap.parse_args()
@@ -333,7 +339,7 @@ def main():
         ap.error('two network logs (A then B)')
     net = {'A': read_net(args.net[0]), 'B': read_net(args.net[1])}
     frames = {s: read_frames(f) for s, f in zip('AB', args.frames)} if args.frames else None
-    lines, verdicts, _ = report(net, frames, read_driver(args.driver) if args.driver else None)
+    lines, verdicts, _ = report(net, frames, read_driver(args.driver) if args.driver else None, args.total_ms)
     text = '\n'.join(lines) + '\n'
     sys.stdout.write(text)
     if args.md:
