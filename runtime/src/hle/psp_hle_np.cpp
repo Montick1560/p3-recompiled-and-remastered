@@ -29,6 +29,8 @@ static bool valid_range(uint32_t addr, uint32_t len) {
 }
 
 static void log_call(const char* name, const recomp_context* ctx) {
+    static const bool trace = std::getenv("PSPRECOMP_INFRA_TRACE") != nullptr;
+    if (!trace) return;
     std::fprintf(stderr, "[NP] %s(a0=%08X a1=%08X a2=%08X a3=%08X t0=%08X t1=%08X) ra=%08X\n", name,
                  (uint32_t)ctx->r[4], (uint32_t)ctx->r[5], (uint32_t)ctx->r[6], (uint32_t)ctx->r[7],
                  (uint32_t)ctx->r[8], (uint32_t)ctx->r[9], (uint32_t)ctx->r[31]);

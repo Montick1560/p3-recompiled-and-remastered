@@ -531,6 +531,30 @@ launcher's Saves screen sets this variable. Unset or missing save: the newest, a
   relay for tests. Logged as `[ADHOC] relay: ...` on connection problems.
 - **Set it when:** the server uses the relay; every player of the session must use the same mode.
 
+### `PSPRECOMP_INFRA_SERVER`
+- **Read in:** `runtime/src/net/infra_client.cpp` (`infra::client()`, `parse_address`), once, the first time the
+  game reaches infrastructure mode (netconf dialog with an infrastructure action, or a Matching2 call).
+- **Type:** env. `host[:port]` or `tcp://host[:port]` (raw TCP, port 27320 by default),
+  `ws://host[:port][/path]` (80) or `wss://host[:port][/path]` (443) (WebSocket through WinHTTP, Windows only;
+  path `/infra` by default), or `off`.
+- **Default:** `wss://online.montick.app/infra` (the public server behind a Cloudflare Tunnel).
+- **Effect:** The server of Patapon 3's "Modo Infraestructura" (`tools/infra_server.py`): rooms, search,
+  join/leave, signaling and the relay of the game's P2P sockets. Nothing connects until the player picks
+  infrastructure mode; with `off` the netconf dialog aborts infrastructure actions as before. A malformed value
+  is logged and means `off`. Logged as `[INFRA] connected to ... virtual IP 10.80.0.n`, `[INFRA] connection lost: ...`,
+  `[NP2] 0x0106 req N ok`, `[NP2] room event 0x1101 ...`.
+- **Set it when:** testing with a local server (`python -I tools/infra_server.py`, then `tcp://127.0.0.1` or
+  `ws://127.0.0.1:27321/infra`), or playing on another server.
+
+### `PSPRECOMP_INFRA_TRACE`
+- **Read in:** `runtime/src/hle/psp_hle_np.cpp`, `psp_hle_np_matching2.cpp`, `psp_hle_inet.cpp`.
+- **Type:** env (`=1` to enable).
+- **Default:** off.
+- **Effect:** Logs every sceNp*/sceNpMatching2 call with its arguments, the Matching2 requests as JSON, every
+  sceNetInet send/receive (sizes and peers), socket options, and on `sceNetInetClose` the guest callers found on
+  the stack. Noisy (several lines per frame in a mission).
+- **Set it when:** debugging infrastructure mode.
+
 ### `PSPRECOMP_DEBUG_PORT`
 - **Read in:** `runtime/src/main.cpp` (debug socket start).
 - **Type:** env (TCP port).

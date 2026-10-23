@@ -213,3 +213,13 @@
 - [ ] **Step 4: Hosting:** `tools/run_infra_server.bat` (starts the server with the public defaults, both listeners on 127.0.0.1) and a Spanish guide for the user, `build/autopilot/SERVIDOR_ONLINE.md`: install and run `cloudflared` (the user installs it; the agent installs nothing), create the tunnel `online.montick.app → http://localhost:27321`, start the server with the .bat, what friends need (nothing: the default address), how to move it to a cloud machine later (move the tunnel), how to read the traffic lines.
 - [ ] **Step 5 (with the user):** after the user brings the tunnel up, an instance with the default address (no `PSPRECOMP_INFRA_SERVER`) lists a room opened by another instance through `wss://online.montick.app/infra`; record the RTT the meter shows.
 - [ ] **Step 6: Commit.** Then ask the user before any push.
+
+## Evidence (2026-10-22, executed inline)
+
+- Task 1 `3d82946`: `infra_server --selftest` OK (mutations fail it).
+- Task 2 `1ecf7a1`, Task 3 `7fb310a`/`8009037`, Task 4 `415efa6`: ctest green; WinHTTP WebSocket checked against the real server (`INFRA_WS_URL`).
+- Task 5 `fe5a687`: `build/infra/e2e5` — game room list shows the host's room (`v3_B.png`), join, server killed (`k2_*`), stale room (`n1_B`), purpose filter (`f1_B`); tour `build/tour/infra5` RT_REGRESS PASS.
+- Task 6 `66f4ebd`: the game uses PSP P2P sockets (UDP type 6 + virtual port, TCP type 10); `build/infra/e2e7` together in the hideout with a meter each (`tot0_B.png`), leave (0x1102), `e2e7c`/`e2e7d` dissolve (0x1104); tour `infra6b` PASS.
+- Task 7 `4ef58c4`: `build/infra/e2e14` co-op quest start to results for both and back to the hideout (`q3_*`, `h2_*`); recording `build/infra/e2e12/rec/session.mp4`; traffic in the spec; idle-visitor rule (e2e8/10/11/13); tour `infra7` PASS.
+- Task 8 `f052242`: GetInfo(STRENGTH) from RTT; meter recon `e2e15`/`e2e16`/`e2e17` (full bars regardless); tour `infra8` PASS.
+- Task 9: recon code removed, logs behind `PSPRECOMP_INFRA_TRACE`, docs, `tools/run_infra_server.bat`, guide `build/autopilot/SERVIDOR_ONLINE.md`, hand-off `build/autopilot/EN_QUE_NOS_QUEDAMOS_2026-10-22d.md`; ad hoc smoke `build/infra/adhoc9` (lobby lists the host, `ah2_B.png`); deployed to `build/e2e_portable(3)` (backup `build/backup_pre_infra_2026-10-22/`, cmp identical); tour `infra9b` PASS. Step 5 (public tunnel) waits for the user.

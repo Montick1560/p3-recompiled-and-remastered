@@ -363,16 +363,6 @@ static int g_unimpl_slot_count = 0;
 static void hle_unimpl_call(int slot, uint8_t* rdram, recomp_context* ctx) {
     (void)rdram;
     HleUnimplSlot& s = g_unimpl_slots[slot];
-    static const bool recon = std::getenv("PSPRECOMP_INFRA_RECON") != nullptr;
-    if (recon && s.logged) {
-        const char* m = s.stub->module_name;
-        if (!std::strncmp(m, "sceNp", 5) || !std::strncmp(m, "sceNet", 6) || !std::strncmp(m, "sceUtility", 10) ||
-            !std::strncmp(m, "sceHttp", 7) || !std::strncmp(m, "sceSsl", 6)) {
-            std::fprintf(stderr, "[RECON] %s/%s a0=%08X a1=%08X a2=%08X a3=%08X t0=%08X t1=%08X ra=%08X\n",
-                         m, s.stub->func_name, ctx->r[4], ctx->r[5], ctx->r[6], ctx->r[7], ctx->r[8], ctx->r[9],
-                         ctx->r[31]);
-        }
-    }
     if (!s.logged) {
         s.logged = true;
         std::fprintf(stderr,

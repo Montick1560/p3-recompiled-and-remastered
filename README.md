@@ -290,6 +290,16 @@ aemu_postoffice relay that PPSSPP uses for "server-provided packet relay" (`PSPR
 verified through `tools/postoffice_server.py` between two runtime instances and with PPSSPP 1.20.4 in
 relay mode hosting).
 
+Infrastructure mode (Patapon 3's "Modo Infraestructura", verified on one PC between two runtime instances, one
+over raw TCP and one over WebSocket): the game's own online lobby works against our server instead of Sony's —
+opening a hideout with a purpose, level and comment, finding it in the game's room list, entering it, both heroes
+together in the hideout, a co-op quest started by the host and played by both, back to the hideout together.
+Run the server with `python -I tools/infra_server.py` (TCP 27320, WebSocket 27321 on `/infra`) or
+`tools/run_infra_server.bat`; the runtime connects to `PSPRECOMP_INFRA_SERVER` (default
+`wss://online.montick.app/infra`, `off` to disable) only after the player picks infrastructure mode
+([docs/ENV_FLAGS.md](docs/ENV_FLAGS.md)). Play across machines is not tested yet; the signal meter under each hero
+always shows full bars (see the spec).
+
 ### Prerequisites
 
 Build toolchain (macOS / Homebrew):
