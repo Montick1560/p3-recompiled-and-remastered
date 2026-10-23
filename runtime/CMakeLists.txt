@@ -19,7 +19,7 @@ if(WIN32)
     FetchContent_MakeAvailable(zlib)
     target_include_directories(zlibstatic INTERFACE ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR})
     add_library(ZLIB::ZLIB ALIAS zlibstatic)
-    set(PSP_SOCKET_LIBS ws2_32)
+    set(PSP_SOCKET_LIBS ws2_32 advapi32)  # advapi32: MachineGuid for the ad hoc MAC file
     set(PSP_WINHTTP_LIBS winhttp)  # infrastructure-mode WebSocket transport
 else()
     # Find SDL2 via pkg-config (Homebrew installs pkg-config file)
@@ -140,6 +140,7 @@ set(RUNTIME_SOURCES
     src/psp_backtrace.cpp
     src/psp_cpu.cpp
     src/psp_host_io.cpp
+    src/psp_machine_id.cpp
     src/psp_perf.cpp
     src/psp_scheduler.cpp
     src/psp_render_queue.cpp
@@ -1327,6 +1328,7 @@ add_executable(test_hle_net
     src/hle/psp_hle_net_matching.cpp
     src/net/adhoc_config.cpp
     src/psp_host_io.cpp
+    src/psp_machine_id.cpp
     src/net/adhocctl.cpp
     src/net/pdp.cpp
     src/net/ptp.cpp

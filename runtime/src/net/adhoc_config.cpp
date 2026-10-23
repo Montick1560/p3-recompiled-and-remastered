@@ -57,22 +57,41 @@ static AdhocMac generate_mac(uint32_t seed) {
     return mac;
 }
 
-static bool read_mac_file(const std::string& path, AdhocMac* out) {
-    std::ifstream in(path);
-    std::string line;
-    if (!in || !std::getline(in, line)) return false;
-    while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
-    return adhoc_parse_mac(line, out);
+std::string adhoc_machine_hash(const std::string& machine_id) {
+    const std::string id = machine_id.empty() ? std::string("unknown") : machine_id;
+    uint64_t h = 0xCBF29CE484222325ull;
+    for (unsigned char c : id) {
+        h ^= c;
+        h *= 0x100000001B3ull;
+    }
+    char buf[17];
+    std::snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(h));
+    return buf;
 }
 
-static void write_mac_file(const std::string& path, const AdhocMac& mac) {
+enum class MacFile { Missing, Valid, Stale };
+
+// Valid only when the line is "<mac> <hash>" with this machine's hash; a file
+// without a hash (older runtime) or with another machine's hash is Stale.
+static MacFile read_mac_file(const std::string& path, const std::string& hash, AdhocMac* out) {
+    std::ifstream in(path);
+    std::string line;
+    if (!in || !std::getline(in, line)) return MacFile::Missing;
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+    const size_t space = line.find(' ');
+    if (space == std::string::npos || line.substr(space + 1) != hash) return MacFile::Stale;
+    return adhoc_parse_mac(line.substr(0, space), out) ? MacFile::Valid : MacFile::Stale;
+}
+
+static void write_mac_file(const std::string& path, const AdhocMac& mac, const std::string& hash) {
     PspHostWriteScope host_write;
     std::ofstream out(path, std::ios::trunc);
-    if (out) out << adhoc_format_mac(mac) << "\n";
+    if (out) out << adhoc_format_mac(mac) << " " << hash << "\n";
 }
 
 AdhocConfig adhoc_config_load(const std::function<const char*(const char*)>& getenv_fn,
-                              const std::string& mac_file, uint32_t random_seed) {
+                              const std::string& mac_file, uint32_t random_seed,
+                              const std::string& machine_id) {
     AdhocConfig cfg;
     if (const char* server = getenv_fn("PSPRECOMP_ADHOC_SERVER"); server && *server) {
         std::string s = server;
@@ -105,10 +124,20 @@ AdhocConfig adhoc_config_load(const std::function<const char*(const char*)>& get
         const long v = std::strtol(rport, &end, 10);
         if (end != rport && *end == 0 && v > 0 && v <= 65535) cfg.relay_port = static_cast<uint16_t>(v);
     }
+    const char* env_machine = getenv_fn("PSPRECOMP_ADHOC_MACHINE_ID");
+    cfg.machine_hash = adhoc_machine_hash(env_machine && *env_machine ? env_machine : machine_id);
     const char* env_mac = getenv_fn("PSPRECOMP_ADHOC_MAC");
     if (env_mac && adhoc_parse_mac(env_mac, &cfg.mac)) return cfg;
-    if (!mac_file.empty() && read_mac_file(mac_file, &cfg.mac)) return cfg;
-    cfg.mac = generate_mac(random_seed);
-    if (!mac_file.empty()) write_mac_file(mac_file, cfg.mac);
+    const MacFile state = mac_file.empty() ? MacFile::Missing
+                                           : read_mac_file(mac_file, cfg.machine_hash, &cfg.mac);
+    if (state == MacFile::Valid) return cfg;
+    if (state == MacFile::Stale) {
+        std::fprintf(stderr, "[ADHOC] new MAC for this machine (file was from another machine or older)\n");
+    }
+    // The hash goes into the seed too, so two machines that start at the same
+    // instant still differ.
+    const auto hash_bits = static_cast<uint32_t>(std::strtoull(cfg.machine_hash.c_str(), nullptr, 16));
+    cfg.mac = generate_mac(random_seed ^ hash_bits);
+    if (!mac_file.empty()) write_mac_file(mac_file, cfg.mac, cfg.machine_hash);
     return cfg;
 }

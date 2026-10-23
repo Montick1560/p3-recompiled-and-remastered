@@ -5,6 +5,7 @@
 #include "hle/psp_hle_intr.h"
 #include "hle/psp_hle_net.h"
 #include "psp_cpu.h"
+#include "psp_machine_id.h"
 #include "psp_memory.h"
 #include "recomp.h"
 #include "net/adhoc_config.h"
@@ -43,10 +44,11 @@ const AdhocConfig& psp_net_config() {
             std::chrono::steady_clock::now().time_since_epoch().count() ^
             std::chrono::system_clock::now().time_since_epoch().count());
         AdhocConfig c = adhoc_config_load([](const char* n) { return std::getenv(n); },
-                                          mac_file ? mac_file : "psprecomp_adhoc_mac.txt", seed);
-        std::fprintf(stderr, "[ADHOC] config: server %s:%u nick \"%s\" mac %s port offset %u\n",
+                                          mac_file ? mac_file : "psprecomp_adhoc_mac.txt", seed,
+                                          psp_machine_id());
+        std::fprintf(stderr, "[ADHOC] config: server %s:%u nick \"%s\" mac %s port offset %u machine %s\n",
                      c.server_host.c_str(), c.server_port, c.nickname.c_str(),
-                     adhoc_format_mac(c.mac).c_str(), c.port_offset);
+                     adhoc_format_mac(c.mac).c_str(), c.port_offset, c.machine_hash.c_str());
         return c;
     }();
     return cfg;
