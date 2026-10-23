@@ -295,6 +295,9 @@ SIGNUP_PAGE = """<!doctype html><html lang="es"><head><meta charset="utf-8">
 <h1>Beta del modo online de Patapon 3</h1>
 <p>Fin de semana de pruebas del modo online del port nativo para PC: del viernes 23 de octubre a las 21:00 al domingo
 25 de octubre a las 23:59 (hora CDMX). Es para personas que tienen su propia copia (ISO) de Patapon 3.</p>
+<p><strong>Qué ISO sirve:</strong> la versión europea (UCES01421) o la de Patapon 3 DxD. La versión americana
+(UCUS98751) y la japonesa todavía no se pueden instalar; si solo tienes una de esas, mejor espera a la siguiente
+ronda.</p>
 <p>Apúntate con tu correo. Haremos un sorteo entre las personas apuntadas; si sales, te llegará un correo con tu
 código de invitación y el enlace de descarga. No te mandaremos nada más.</p>
 <form id="f" novalidate>
@@ -452,6 +455,7 @@ def selftest():
         st, text = req("GET", "/", host="beta.montick.app")
         assert st == 200 and CONSENT in text and 'name="website"' in text and "Apuntarme" in text, (st, text[:200])
         assert "/cola" in text
+        assert "UCES01421" in text and "DxD" in text and "UCUS98751" in text, "which ISO works is said up front"
         st, _ = req("GET", "/nada", host="beta.montick.app")
         assert st == 404, st
 
