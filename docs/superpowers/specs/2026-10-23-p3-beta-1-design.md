@@ -4,7 +4,9 @@
 The online (infrastructure) mode works on one PC: lobby, shared hideouts, co-op, VS between parties. What one PC
 cannot show is real use: real latency, many players at once, people in other places, 2v2 with real input. The user
 invites about 25 people who already own the game ISO to use the online mode hard for one weekend, to see how the
-server and the online mode behave, and to collect problems with enough data to fix them.
+server and the online mode behave, and to collect problems with enough data to fix them. Players are not chosen
+up front: people sign up in a public queue with only their email, the user draws invitees from it (a raffle, in one
+or more batches) and sends each one their code by hand.
 
 ## Window (decided by the user)
 - Opens **Friday 23 Oct 2026, 21:00** CDMX (UTC-6, no DST) = `2026-10-24T03:00:00Z`.
@@ -13,26 +15,32 @@ server and the online mode behave, and to collect problems with enough data to f
   (another round ships a new beta package).
 
 ## Goals
-1. **Only invited people play.** Each invitee gets a personal invite code by email. A code works for one person on up
+1. **A sign-up queue and a raffle.** `beta.montick.app` is a one-field page (email + consent checkbox "Acepto que
+   guarden mi correo solo para esta beta y lo borren al terminar"); signing up shows "¡Listo! Si sales en el sorteo te
+   llegará un correo con tu código." and sends nothing. Basic protection: email format, duplicates answered the same
+   way but not stored twice, per-address rate limit, a hidden honeypot field. The user runs a script on the server
+   machine to list the queue and draw N people at random among those not yet invited; each drawn person gets a code
+   (activated on the server live, no restart) and the script writes a CSV `correo,codigo` for the user to email by
+   hand with a ready-made Spanish template. Further batches can be drawn during the weekend.
+2. **Only invited people play.** Each invitee gets a personal invite code by email (sent by the user). A code works for one person on up
    to 2 PCs at once (my call). Codes can be disabled live without restarting anything.
-2. **The window is enforced in three layers**: the server (authoritative: refuses logins outside the window), the
+3. **The window is enforced in three layers**: the server (authoritative: refuses logins outside the window), the
    launcher (asks the server whether the round is open; does not start the game when it is closed), and the beta
    runtime (the end date is built in; after it, it refuses to start).
-3. **Clear refusals.** A wrong or disabled code, an outdated runtime, or a closed window each get their own Spanish
+4. **Clear refusals.** A wrong or disabled code, an outdated runtime, or a closed window each get their own Spanish
    message in the launcher, before the game starts.
-4. **The server is ready for public use**: a protocol/version check in the login (older runtimes get "actualiza"),
+5. **The server is ready for public use**: a protocol/version check in the login (older runtimes get "actualiza"),
    rooms per address capped, capacity for 25-50 players with margin, proven by a load test with synthetic clients.
-5. **Observe the beta**: the server records sessions, rooms, co-op/VS starts and ends, errors and disconnects with
+6. **Observe the beta**: the server records sessions, rooms, co-op/VS starts and ends, errors and disconnects with
    their cause, per invite code (no other personal data), in SQLite. A report script turns it into a summary.
-6. **Problem reports, two doors, one store**:
+7. **Problem reports, two doors, one store**:
    - a "Reportar problema" button in the launcher: short form (what happened, roughly when, mode: hideout / co-op /
      VS / other) plus, attached automatically, the tail of `logs/game.log` (and `game.prev.log`), runtime version,
      nick, invite code and machine id;
    - `report.montick.app`: a basic web form (same fields, no log) for when the launcher does not open or from a phone.
    Both store into the same SQLite. The user reads them with a local script on the server machine (not exposed).
-7. **Distribution**: one zip of the portable launcher (the three game releases with the beta runtime) on Cloudflare
-   R2 behind `descargas.montick.app`, its SHA-256 in the email. One Gmail **draft** per invitee with their code,
-   which the user reviews and sends.
+8. **Distribution**: one zip of the portable launcher (the three game releases with the beta runtime) on Cloudflare
+   R2 behind `descargas.montick.app`, its SHA-256 in the email template the user sends with each code.
 
 ## Non-goals
 - Player accounts, passwords, cloud saves, progress storage (later rounds, if the beta goes well).
@@ -40,6 +48,7 @@ server and the online mode behave, and to collect problems with enough data to f
 - Anti-cheat or protection against a determined person changing their clock or patching the exe: the server window
   is the real lock; the launcher and exe checks stop normal use.
 - A public dashboard. The summary is for the user.
+- Sending email automatically (no confirmation mails, no invitations sent by the system).
 
 ## Anti-goals (would make it a failure even if it works)
 - An invitee cannot play during the window because of the new gates (wrong clock zone, a code typed with spaces or
@@ -47,7 +56,9 @@ server and the online mode behave, and to collect problems with enough data to f
 - Reports without the log, so problems cannot be diagnosed.
 - The user's own local testing (e2e with the local server, two.py, rt_regress) breaks: with no beta configuration the
   server and runtime behave as today.
-- Sending anything on the user's behalf: emails are drafts only; nothing is pushed or published without the user.
+- Sending anything on the user's behalf: the user sends the invitations; nothing is pushed or published without
+  the user.
+- Keeping emails longer than needed: the queue is deleted after the beta (a script command does it).
 
 ## Constraints
 - Today is Friday 23 Oct; the beta opens at 21:00 the same day. The plan is ordered so the must-haves (gates, codes,
@@ -83,7 +94,11 @@ server and the online mode behave, and to collect problems with enough data to f
   the server's existing log thread pattern (a queue + one writer thread) so a slow disk never blocks the server.
 - **Report service**: `tools/beta_report_server.py`, stdlib HTTP on `127.0.0.1:27322`, routes `GET /` (form, Spanish),
   `POST /report` (JSON; log tail up to 512 KiB, gzip+base64), same `beta.db`. Per-address rate limit. The tunnel maps
-  `report.montick.app` to it. `tools/beta_summary.py` writes a local HTML summary (reports + metrics).
+  `report.montick.app` to it. The same service serves the queue: requests whose Host is `beta.montick.app` get the
+  sign-up page (`GET /`, `POST /cola`), stored in a `queue` table of `beta.db`; the tunnel maps `beta.montick.app` to
+  the same port. `tools/beta_cola.py` (run by the user on the server machine) lists, draws, exports and finally
+  deletes the queue, appending each drawn code's hash and label to the server's beta config file.
+  `tools/beta_summary.py` writes a local HTML summary (reports + metrics + queue counts).
 - **Load test**: `tools/infra_loadtest.py` drives N synthetic clients (login with staff codes, hideout rooms of 4,
   VS rooms across parties, datagrams at the game's rate) against the local server and, before opening, briefly
   against the public one.
@@ -100,4 +115,5 @@ characters), the summary's layout.
   delay p99 under 50 ms on loopback; a 25-client burst against the public server works before opening.
 - Two real PCs (the user and one invitee or the user's second machine) connect through the public server with their
   codes before 21:00.
-- Package on R2, SHA-256 matches, 25 drafts in Gmail, runbook done by the user.
+- `beta.montick.app` takes sign-ups; a draw of 3 from a test queue gives 3 working codes without a server restart.
+- Package on R2, SHA-256 matches, email template ready, runbook done by the user.
