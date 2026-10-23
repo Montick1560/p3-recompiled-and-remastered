@@ -3,12 +3,14 @@
 // the in-process fake of tools/infra_server.py.
 #include "net/infra_stats.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "fake_infra_server.h"
@@ -96,10 +98,34 @@ static void pop_reports_queue_age() {
     std::filesystem::remove(path);
 }
 
+// A disk that stalls (the hook holds every file write for 500 ms) must not
+// stall the network threads that record rows: record() only queues them.
+static void stats_record_never_waits_for_disk() {
+    const std::string path = temp_csv("psprecomp_infra_stats_slow.csv");
+    CHECK(infra::stats::open(path.c_str()), "open");
+    std::atomic<int> writes{0};
+    infra::stats::set_write_hook_for_test([&] {
+        writes++;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    });
+    const uint8_t d[16] = {};
+    const auto t = std::chrono::steady_clock::now();
+    for (int i = 0; i < 5000; i++)
+        infra::stats::record(infra::stats::Ev::TxCall, infra::kKindDatagram, 1, 2, 3, d, sizeof(d));
+    const auto took = std::chrono::steady_clock::now() - t;
+    CHECK(took < std::chrono::milliseconds(100), "5000 rows recorded while the disk is stalled");
+    infra::stats::close();
+    infra::stats::set_write_hook_for_test(nullptr);
+    CHECK(writes > 0, "the file was written by the stats thread");
+    CHECK(read_rows(path).size() == 5001, "header and every row on close");
+    std::filesystem::remove(path);
+}
+
 int main() {
     stats_rows_and_hash();
     stats_bad_path_is_off();
     pop_reports_queue_age();
+    stats_record_never_waits_for_disk();
     if (failures) {
         std::printf("%d failure(s)\n", failures);
         return 1;
