@@ -55,7 +55,17 @@ struct FakeInfraServer {
     }
     void start() {
         th = std::thread([this] {
-            client = static_cast<int>(::accept(listen_fd, nullptr, nullptr));
+            do {
+                serve(static_cast<int>(::accept(listen_fd, nullptr, nullptr)));
+            } while (reaccept && !stop);
+        });
+    }
+    // reaccept: after a connection ends, accept the next one (a client that reconnects).
+    bool reaccept = false;
+    void serve(int fd) {
+        client = fd;
+        if (client < 0) return;
+        {
             infra::FrameReader r;
             uint8_t buf[8192];
             while (!stop && client >= 0) {
@@ -80,7 +90,8 @@ struct FakeInfraServer {
                     }
                 }
             }
-        });
+        }
+        if (reaccept) close_client();
     }
     void send_raw(const std::vector<uint8_t>& v) {
         if (client >= 0) ::send(client, reinterpret_cast<const char*>(v.data()), static_cast<int>(v.size()), 0);

@@ -4,7 +4,8 @@
 // server behind a Cloudflare Tunnel), JSON request/answer with timeouts,
 // pushed events, game datagrams queued per local port and the RTT from pings.
 // All network waits happen on the client's own threads, never on the guest
-// CPU; callbacks run on those threads. Thread-safe.
+// CPU: sends only queue a frame in the outbox, which a writer thread drains in
+// order. Callbacks run on the client's threads. Thread-safe.
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -60,6 +61,8 @@ public:
     struct Options {
         int ping_interval_ms = 2000;
         int dead_after_ms = 10000;  // no frame from the server for this long -> connection lost
+        // Makes the transport of each connection; empty -> make_transport (tests inject slow ones).
+        std::function<std::unique_ptr<Transport>(Address::Kind)> transport_factory;
     };
     struct Datagram {
         uint32_t vip = 0;
@@ -76,6 +79,11 @@ public:
     // segments not yet taken by the game. Over the cap new data is dropped.
     static constexpr size_t kMaxQueuedBytes = 1024 * 1024;
     static constexpr size_t kMaxStreamBytes = 8 * 1024 * 1024;
+    // Outbox while the transport is slower than the game: over the datagram cap the oldest queued
+    // datagrams are dropped (as a full socket buffer would); stream segments and requests are never
+    // dropped, and a backlog of them over its cap loses the connection.
+    static constexpr size_t kMaxOutboxDgramBytes = 256 * 1024;
+    static constexpr size_t kMaxOutboxStreamBytes = 8 * 1024 * 1024;
 
     explicit Client(Address addr) : Client(std::move(addr), Options()) {}
     Client(Address addr, Options opt);
@@ -117,9 +125,17 @@ private:
         std::chrono::steady_clock::time_point deadline;
         std::string op;
     };
+    struct Outgoing {
+        std::vector<uint8_t> bytes;
+        uint8_t kind = 0;  // kKindDatagram / kKindStream (stats rows), 0 for JSON
+        uint32_t vip = 0;
+        uint16_t src = 0, dst = 0;
+    };
+    static constexpr size_t kFrameHeader = 13;  // u32 length | u8 kind | u32 vip | u16 dst | u16 src
     void reader();
     void ticker();
-    bool send(const std::vector<uint8_t>& frame);
+    void writer();
+    void send(Outgoing o);
     void on_json(const nlohmann::json& j);
     void lost(const char* why);
     void fail(Done& done);
@@ -127,12 +143,15 @@ private:
     Address addr_;
     Options opt_;
     std::unique_ptr<Transport> transport_;
-    std::thread reader_, ticker_;
+    std::thread reader_, ticker_, writer_;
     std::atomic<bool> running_{false}, connected_{false};
     std::atomic<uint32_t> vip_{0};
     std::atomic<int64_t> last_rx_ms_{0};
     std::mutex connect_mu_;  // one connect / disconnect at a time
-    std::mutex send_mu_;
+    std::mutex out_mu_;  // the outbox; never held while taking mu_
+    std::condition_variable out_cv_;
+    std::deque<Outgoing> out_;
+    size_t out_dgram_bytes_ = 0, out_stream_bytes_ = 0;
     mutable std::mutex mu_;
     std::condition_variable cv_;
     uint32_t next_id_ = 0;

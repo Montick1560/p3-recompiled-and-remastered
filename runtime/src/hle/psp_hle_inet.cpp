@@ -12,7 +12,6 @@
 // Core/HLE/sceNetInet.cpp (GPL-2.0-or-later).
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_inet.h"
-#include "psp_cpu.h"
 #include "psp_memory.h"
 #include "recomp.h"
 #include "net/inet_errno.h"
@@ -131,7 +130,6 @@ void write_sockaddr(uint8_t* rdram, uint32_t p, const Sockaddr& a) {
 bool virtual_ip(uint32_t ip) { return (ip & kVipMask) == kVipNet; }
 
 void report_bound(uint16_t port) {
-    PspCpuReleaseScope release;  // a send on the server connection
     infra::client().request({{"op", "bound"}, {"port", port}}, [](const nlohmann::json&) {}, 5000);
 }
 
@@ -149,7 +147,6 @@ void flush_streams() {
         out.swap(g_outbox);
     }
     if (out.empty()) return;
-    PspCpuReleaseScope release;
     for (const Out& o : out) infra::client().send_stream(o.vip, o.dst, o.src, o.bytes.data(), o.bytes.size());
 }
 
@@ -267,10 +264,7 @@ void hle_sceNetInetSendto(uint8_t* rdram, recomp_context* ctx) {
         fail(ctx, inet_errno::kENETUNREACH);
         return;
     }
-    {
-        PspCpuReleaseScope release;
-        infra::client().send_datagram(to.ip, dst, src, rdram + (buf & kAddrMask), len);
-    }
+    infra::client().send_datagram(to.ip, dst, src, rdram + (buf & kAddrMask), len);  // queues, never waits
     if (trace()) std::fprintf(stderr, "[INET] Sendto(%d) %u bytes to %08X:%u/%u\n", s, len, to.ip, to.port, to.vport);
     ctx->r[2] = static_cast<int32_t>(len);
 }

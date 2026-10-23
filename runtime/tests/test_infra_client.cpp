@@ -5,9 +5,11 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -289,6 +291,200 @@ static void silent_server_is_dead() {
     CHECK(failed == 1, "its pending request fails");
 }
 
+// A real TCP transport whose sends can be held: each send waits delay_ms, then
+// while blocked; fail_at = n fails the n-th send. close() wakes a held send.
+struct SlowTransport : infra::Transport {
+    std::unique_ptr<infra::Transport> inner = infra::make_transport(infra::Address::Tcp);
+    std::mutex mu;
+    std::condition_variable cv;
+    bool closed = false, blocked = false;
+    int delay_ms = 0, fail_at = 0;
+    std::atomic<int> sends{0}, waiting{0};
+
+    bool open(const infra::Address& a, int timeout_ms) override { return inner->open(a, timeout_ms); }
+    bool send_frame(const std::vector<uint8_t>& f) override {
+        const int n = ++sends;
+        {
+            std::unique_lock<std::mutex> l(mu);
+            if (fail_at && n == fail_at) return false;
+            waiting++;
+            if (delay_ms) cv.wait_for(l, std::chrono::milliseconds(delay_ms), [&] { return closed; });
+            cv.wait(l, [&] { return !blocked || closed; });
+            waiting--;
+            if (closed) return false;
+        }
+        return inner->send_frame(f);
+    }
+    bool recv(std::vector<uint8_t>* bytes, int timeout_ms) override { return inner->recv(bytes, timeout_ms); }
+    void close() override {
+        {
+            std::lock_guard<std::mutex> l(mu);
+            closed = true;
+        }
+        cv.notify_all();
+        inner->close();
+    }
+    void set(bool block, int delay = 0) {
+        {
+            std::lock_guard<std::mutex> l(mu);
+            blocked = block;
+            delay_ms = delay;
+        }
+        cv.notify_all();
+    }
+};
+
+// Options whose transports are SlowTransports; *last is the newest one.
+static infra::Client::Options slow_opts(SlowTransport** last, int fail_first_at = 0) {
+    infra::Client::Options o = fast();
+    auto made = std::make_shared<int>(0);
+    o.transport_factory = [last, made, fail_first_at](infra::Address::Kind) {
+        auto t = std::make_unique<SlowTransport>();
+        if ((*made)++ == 0) t->fail_at = fail_first_at;
+        *last = t.get();
+        return std::unique_ptr<infra::Transport>(std::move(t));
+    };
+    return o;
+}
+
+static bool wait_until(const std::function<bool()>& f, int ms) {
+    const auto t = Clock::now();
+    while (!f()) {
+        if (ms_since(t) > ms) return false;
+        sleep_ms(2);
+    }
+    return true;
+}
+
+static void send_never_blocks() {
+    FakeInfraServer s;
+    s.start();
+    SlowTransport* slow = nullptr;
+    infra::Client c(s.address(), slow_opts(&slow));
+    CHECK(c.connect("P3A", 2000), "connect");
+    slow->set(false, 300);
+    const uint8_t d[8] = {};
+    const auto t = Clock::now();
+    for (int i = 0; i < 50; i++) c.send_datagram(0x0A500002, 3658, 3658, d, sizeof(d));
+    CHECK(ms_since(t) < 20, "50 sends over a 300 ms transport return at once");
+}
+
+static void outbox_keeps_order() {
+    FakeInfraServer s;
+    s.on_frame = [](FakeInfraServer&, const infra::Frame&) {};
+    s.start();
+    SlowTransport* slow = nullptr;
+    infra::Client c(s.address(), slow_opts(&slow));
+    CHECK(c.connect("P3A", 2000), "connect");
+    slow->set(true);
+    for (int i = 0; i < 30; i++) {
+        const uint8_t b[2] = {static_cast<uint8_t>(i), 0};
+        if (i % 3 == 0) c.send_datagram(0x0A500002, 3658, 3658, b, 2);
+        if (i % 3 == 1) c.send_stream(0x0A500002, 7000, 7001, b, 2);
+        if (i % 3 == 2) c.request({{"op", "x"}, {"i", i}}, [](const nlohmann::json&) {}, 5000);
+    }
+    slow->set(false);
+    CHECK(wait_until([&] { std::lock_guard<std::mutex> l(s.mu); return s.got.size() >= 31; }, 2000), "all arrive");
+    std::lock_guard<std::mutex> l(s.mu);
+    int next = 0;
+    bool ordered = true;
+    for (const auto& f : s.got) {
+        if (f.kind == infra::kKindJson && f.json.value("op", "") != "x") continue;  // login, pings
+        const int i = f.kind == infra::kKindJson ? f.json.value("i", -1) : f.payload[0];
+        const uint8_t want = static_cast<uint8_t>(i % 3 == 0 ? infra::kKindDatagram
+                                                  : i % 3 == 1 ? infra::kKindStream : infra::kKindJson);
+        ordered &= i == next && f.kind == want;
+        next++;
+    }
+    CHECK(ordered && next == 30, "datagrams, stream segments and requests leave in call order");
+}
+
+static void outbox_drops_oldest_datagrams() {
+    FakeInfraServer s;
+    s.start();
+    SlowTransport* slow = nullptr;
+    infra::Client c(s.address(), slow_opts(&slow));
+    CHECK(c.connect("P3A", 2000), "connect");
+    slow->set(true);
+    std::vector<uint8_t> big(1024, 0);
+    big[2] = 1;  // the probe the writer holds
+    c.send_datagram(0x0A500002, 3658, 3658, big.data(), big.size());
+    CHECK(wait_until([&] { return slow->waiting == 1; }, 2000), "the writer holds a send");
+    big[2] = 0;
+    for (int i = 0; i < 300; i++) {  // 300 KiB of datagrams queued behind it
+        big[0] = static_cast<uint8_t>(i);
+        big[1] = static_cast<uint8_t>(i >> 8);
+        c.send_datagram(0x0A500002, 3658, 3658, big.data(), big.size());
+    }
+    const uint8_t seg[3] = {9, 9, 9};
+    c.send_stream(0x0A500002, 7000, 7001, seg, 3);
+    slow->set(false);
+    CHECK(wait_until([&] {
+              std::lock_guard<std::mutex> l(s.mu);
+              for (const auto& f : s.got) if (f.kind == infra::kKindStream) return true;
+              return false;
+          }, 3000), "the stream segment arrives");
+    std::lock_guard<std::mutex> l(s.mu);
+    std::vector<int> seen;
+    for (const auto& f : s.got)
+        if (f.kind == infra::kKindDatagram && f.payload.size() == 1024 && f.payload[2] == 0)
+            seen.push_back(f.payload[0] | (f.payload[1] << 8));
+    CHECK(!seen.empty() && seen.front() > 0 && seen.back() == 299, "the oldest datagrams dropped, the newest kept");
+    CHECK(seen.size() < 300 && seen.size() >= 200, "about 256 KiB of datagrams kept");
+}
+
+static void disconnect_unblocks_writer() {
+    FakeInfraServer s;
+    s.start();
+    SlowTransport* slow = nullptr;
+    infra::Client c(s.address(), slow_opts(&slow));
+    CHECK(c.connect("P3A", 2000), "connect");
+    slow->set(true);
+    const uint8_t d[4] = {};
+    c.send_datagram(0x0A500002, 3658, 3658, d, 4);
+    CHECK(wait_until([&] { return slow->waiting == 1; }, 2000), "a send is held");
+    const auto t = Clock::now();
+    c.disconnect();
+    CHECK(ms_since(t) < 1000, "disconnect returns while the writer is blocked in a send");
+    CHECK(!c.connected(), "disconnected");
+}
+
+static void outbox_reconnect_after_loss() {
+    FakeInfraServer s;
+    s.reaccept = true;
+    s.on_frame = [](FakeInfraServer& srv, const infra::Frame& f) {
+        if (f.kind == infra::kKindJson && f.json["op"] == "join")
+            srv.send_json({{"id", f.json["id"]}, {"ok", true}, {"room", {{"id", 5}, {"me", 0x11}}}});
+    };
+    s.start();
+    SlowTransport* slow = nullptr;
+    infra::Client::Options o = slow_opts(&slow, 3);  // 1 login, 2 join, 3 fails
+    o.ping_interval_ms = 100000;
+    infra::Client c(s.address(), o);
+    std::atomic<int> destroyed{0};
+    c.on_event([&](const nlohmann::json& e) { if (e.value("ev", "") == "room_destroyed") destroyed++; });
+    CHECK(c.connect("P3A", 2000), "connect");
+    std::atomic<int> joined{0};
+    c.request({{"op", "join"}, {"room_id", 5}}, [&](const nlohmann::json& j) { if (j.value("ok", false)) joined++; },
+              2000);
+    CHECK(wait_until([&] { return joined == 1; }, 2000), "joined");
+    const uint8_t d[4] = {1, 2, 3, 4};
+    c.send_datagram(0x0A500002, 3658, 3658, d, 4);
+    CHECK(wait_until([&] { return !c.connected(); }, 2000), "a failed send loses the connection");
+    sleep_ms(200);
+    CHECK(destroyed == 1, "lost() ran once (one room_destroyed)");
+    CHECK(c.connect("P3A", 2000), "a second connect works");
+    const uint8_t e[4] = {5, 6, 7, 8};
+    c.send_datagram(0x0A500002, 3658, 3658, e, 4);
+    CHECK(wait_until([&] {
+              std::lock_guard<std::mutex> l(s.mu);
+              for (const auto& f : s.got)
+                  if (f.kind == infra::kKindDatagram && f.payload == std::vector<uint8_t>({5, 6, 7, 8})) return true;
+              return false;
+          }, 2000), "and sends");
+    CHECK(destroyed == 1, "still one room_destroyed");
+}
+
 // Optional: INFRA_WS_URL=ws://127.0.0.1:27321/infra with tools/infra_server.py
 // running exercises the WebSocket transport against the real server.
 static void ws_against_real_server() {
@@ -320,6 +516,11 @@ int main() {
     queues_bounded_in_bytes();
     rtt_from_ping();
     silent_server_is_dead();
+    send_never_blocks();
+    outbox_keeps_order();
+    outbox_drops_oldest_datagrams();
+    disconnect_unblocks_writer();
+    outbox_reconnect_after_loss();
     ws_against_real_server();
     if (failures) {
         std::printf("%d failure(s)\n", failures);

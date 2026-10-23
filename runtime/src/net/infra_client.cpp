@@ -232,12 +232,14 @@ bool Client::connect(const std::string& online_id, int timeout_ms, const nlohman
     // Threads of a connection lost earlier are done or finishing: reap them.
     running_ = false;
     cv_.notify_all();
+    {
+        std::lock_guard<std::mutex> olock(out_mu_);  // the writer checks running_ under out_mu_
+    }
+    out_cv_.notify_all();
     if (reader_.joinable()) reader_.join();
     if (ticker_.joinable()) ticker_.join();
-    {
-        std::lock_guard<std::mutex> slock(send_mu_);
-        transport_ = make_transport(addr_.kind);
-    }
+    if (writer_.joinable()) writer_.join();
+    transport_ = opt_.transport_factory ? opt_.transport_factory(addr_.kind) : make_transport(addr_.kind);
     if (!transport_->open(addr_, timeout_ms)) {
         std::fprintf(stderr, "[INFRA] cannot reach %s\n", to_string(addr_).c_str());
         return false;
@@ -248,10 +250,16 @@ bool Client::connect(const std::string& online_id, int timeout_ms, const nlohman
         rtts_.clear();
         connected_ = true;
     }
+    {
+        std::lock_guard<std::mutex> olock(out_mu_);  // frames queued after the last loss belong to no one
+        out_.clear();
+        out_dgram_bytes_ = out_stream_bytes_ = 0;
+    }
     running_ = true;
     last_rx_ms_ = now_ms();
     reader_ = std::thread([this] { reader(); });
     ticker_ = std::thread([this] { ticker(); });
+    writer_ = std::thread([this] { writer(); });  // the login below goes through the outbox
 
     std::mutex wmu;
     std::condition_variable wcv;
@@ -291,10 +299,10 @@ bool Client::connect(const std::string& online_id, int timeout_ms, const nlohman
 
 void Client::disconnect() {
     std::lock_guard<std::mutex> clock(connect_mu_);
-    lost("disconnect");
+    lost("disconnect");  // closing the transport also unblocks a writer stuck in a send
     if (reader_.joinable()) reader_.join();
     if (ticker_.joinable()) ticker_.join();
-    std::lock_guard<std::mutex> slock(send_mu_);
+    if (writer_.joinable()) writer_.join();
     transport_.reset();
 }
 
@@ -320,20 +328,57 @@ void Client::lost(const char* why) {
         queued_bytes_ = stream_bytes_ = 0;
     }
     cv_.notify_all();
+    {
+        std::lock_guard<std::mutex> olock(out_mu_);
+        out_.clear();
+        out_dgram_bytes_ = out_stream_bytes_ = 0;
+    }
+    out_cv_.notify_all();
     if (transport_) transport_->close();
     if (std::strcmp(why, "disconnect") != 0) std::fprintf(stderr, "[INFRA] connection lost: %s\n", why);
     for (auto& [id, p] : pending) fail(p.done);
     if (room && fn) fn(nlohmann::json{{"ev", "room_destroyed"}, {"room_id", room}, {"cause", kCauseConnectionError}});
 }
 
-bool Client::send(const std::vector<uint8_t>& frame) {
-    bool ok;
+void Client::send(Outgoing o) {
+    bool backlog = false;
     {
-        std::lock_guard<std::mutex> lock(send_mu_);
-        ok = transport_ && transport_->send_frame(frame);
+        std::lock_guard<std::mutex> lock(out_mu_);
+        const bool dgram = o.kind == kKindDatagram;
+        (dgram ? out_dgram_bytes_ : out_stream_bytes_) += o.bytes.size();
+        out_.push_back(std::move(o));
+        while (dgram && out_dgram_bytes_ > kMaxOutboxDgramBytes) {  // a full socket buffer drops datagrams
+            auto it = std::find_if(out_.begin(), out_.end(), [](const Outgoing& x) { return x.kind == kKindDatagram; });
+            stats::record(stats::Ev::Drop, it->kind, it->vip, it->src, it->dst, it->bytes.data() + kFrameHeader,
+                          it->bytes.size() - kFrameHeader);
+            out_dgram_bytes_ -= it->bytes.size();
+            out_.erase(it);
+        }
+        backlog = out_stream_bytes_ > kMaxOutboxStreamBytes;
     }
-    if (!ok) lost("send failed");
-    return ok;
+    out_cv_.notify_one();
+    if (backlog) lost("send backlog");
+}
+
+void Client::writer() {
+    for (;;) {
+        Outgoing o;
+        {
+            std::unique_lock<std::mutex> lock(out_mu_);
+            out_cv_.wait(lock, [this] { return !out_.empty() || !running_; });
+            if (!running_) return;
+            o = std::move(out_.front());
+            out_.pop_front();
+            (o.kind == kKindDatagram ? out_dgram_bytes_ : out_stream_bytes_) -= o.bytes.size();
+        }
+        if (!transport_->send_frame(o.bytes)) {
+            lost("send failed");
+            return;
+        }
+        if (o.kind)
+            stats::record(stats::Ev::TxDone, o.kind, o.vip, o.src, o.dst, o.bytes.data() + kFrameHeader,
+                          o.bytes.size() - kFrameHeader);
+    }
 }
 
 void Client::request(nlohmann::json req, Done done, int timeout_ms) {
@@ -355,7 +400,7 @@ void Client::request(nlohmann::json req, Done done, int timeout_ms) {
         return;
     }
     req["id"] = id;
-    send(encode_json(req));
+    send(Outgoing{encode_json(req)});
 }
 
 void Client::on_event(EventFn fn) {
@@ -366,8 +411,7 @@ void Client::on_event(EventFn fn) {
 void Client::send_datagram(uint32_t vip, uint16_t dst_port, uint16_t src_port, const uint8_t* data, size_t len) {
     if (!connected_) return;
     stats::record(stats::Ev::TxCall, kKindDatagram, vip, src_port, dst_port, data, len);
-    send(encode_datagram(vip, dst_port, src_port, data, len));
-    stats::record(stats::Ev::TxDone, kKindDatagram, vip, src_port, dst_port, data, len);
+    send(Outgoing{encode_datagram(vip, dst_port, src_port, data, len), kKindDatagram, vip, src_port, dst_port});
 }
 
 bool Client::pop_datagram(uint16_t local_port, Datagram* out) {
@@ -396,8 +440,8 @@ size_t Client::queued_stream_bytes() const {
 void Client::send_stream(uint32_t vip, uint16_t dst_port, uint16_t src_port, const uint8_t* data, size_t len) {
     if (!connected_) return;
     stats::record(stats::Ev::TxCall, kKindStream, vip, src_port, dst_port, data, len);
-    send(encode_segment(kKindStream, vip, dst_port, src_port, data, len));
-    stats::record(stats::Ev::TxDone, kKindStream, vip, src_port, dst_port, data, len);
+    send(Outgoing{encode_segment(kKindStream, vip, dst_port, src_port, data, len), kKindStream, vip, src_port,
+                  dst_port});
 }
 
 bool Client::pop_stream(Datagram* out) {
