@@ -45,15 +45,17 @@ def read_driver(path):
 
 
 def driver_during(driver, side, t_end, dt_ms):
-    """What the driver did to side during the frame ending at t_end (sync: a beat_sync window overlaps it)."""
+    """What the driver did to side during the frame ending at t_end: events at a time, a beat_sync window
+    ('sync', SYNC_US long) or a disk stall of the PC ('*' target, 'disk_stall:<ms>' long) overlapping it."""
     lo = t_end - int(dt_ms * 1000) - 50_000
     seen = []
     for t, target, ev in driver:
-        if target != side:
+        if target not in (side, '*'):
             continue
-        hit = lo <= t <= t_end if ev != 'sync' else t <= t_end and t + SYNC_US >= lo
-        if hit and ev not in seen:
-            seen.append(ev)
+        name, _, ms = ev.partition(':')
+        span = SYNC_US if name == 'sync' else int(ms) * 1000 if ms.isdigit() else 0
+        if t <= t_end and t + span >= lo and name not in seen:
+            seen.append(name)
     return seen
 
 
@@ -307,9 +309,10 @@ def selftest():
     assert any(l.startswith('| 0.00 | 150 |') for l in lines), '\n'.join(lines)
     assert ('A frames over 100 ms <= 1 (1)', True) in verdicts, verdicts
     # Driver: a beat_sync that started 2 ms before the 150 ms frame overlaps it; a press 1 s later does not.
-    drv = [(1000, 'A', 'sync'), (1_003_000, 'A', 'press'), (2900, 'B', 'shot')]
+    drv = [(1000, 'A', 'sync'), (1_003_000, 'A', 'press'), (2900, 'B', 'shot'), (9_000_000, '*', 'disk_stall:500')]
     assert driver_during(drv, 'A', 3000, 150) == ['sync'], driver_during(drv, 'A', 3000, 150)
     assert driver_during(drv, 'A', 10_000_000, 30) == []
+    assert driver_during(drv, 'B', 9_400_000, 30) == ['disk_stall'], driver_during(drv, 'B', 9_400_000, 30)
     lines, verdicts, n = report({'A': read_net(pa), 'B': read_net(pb)}, {'A': fr}, drv)
     assert n[('stalls_driver', 'A')] == 1 and any(l.endswith('| sync |') for l in lines), '\n'.join(lines)
     print('selftest OK')
