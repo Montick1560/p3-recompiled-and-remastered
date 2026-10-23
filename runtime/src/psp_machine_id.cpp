@@ -19,7 +19,7 @@ static std::string utf8_of(const wchar_t* w) {
 std::string psp_machine_id() {
     wchar_t guid[128];
     DWORD size = sizeof(guid);
-    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\Microsoft\Cryptography", L"MachineGuid",
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Cryptography", L"MachineGuid",
                      RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY, nullptr, guid, &size) == ERROR_SUCCESS) {
         std::string id = utf8_of(guid);
         if (!id.empty()) return id;

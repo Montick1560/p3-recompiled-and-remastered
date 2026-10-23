@@ -1022,7 +1022,9 @@ target_include_directories(test_stack_layout PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 target_compile_options(test_stack_layout PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME stack_layout_tests COMMAND test_stack_layout)
 
-add_executable(test_adhoc_config tests/test_adhoc_config.cpp src/net/adhoc_config.cpp src/psp_host_io.cpp)
+add_executable(test_adhoc_config tests/test_adhoc_config.cpp src/net/adhoc_config.cpp src/psp_host_io.cpp
+    src/psp_machine_id.cpp)
+target_link_libraries(test_adhoc_config PRIVATE ${PSP_SOCKET_LIBS})
 target_include_directories(test_adhoc_config PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_adhoc_config PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME adhoc_config_tests COMMAND test_adhoc_config)

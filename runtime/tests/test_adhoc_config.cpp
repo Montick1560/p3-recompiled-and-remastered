@@ -1,5 +1,6 @@
 // adhoc_config: server/nickname/MAC/port-offset settings from the environment.
 #include "net/adhoc_config.h"
+#include "psp_machine_id.h"
 
 #include <cstdio>
 #include <fstream>
@@ -193,6 +194,18 @@ static void unwritable_mac_file_still_gives_mac() {
     CHECK((c.mac[0] & 0x03) == 0 && c.mac != AdhocMac{}, "unwritable file: a valid MAC in memory");
 }
 
+static void host_machine_id() {
+    const std::string id = psp_machine_id();
+#ifdef _WIN32
+    // The MachineGuid value, not the computer-name fallback.
+    CHECK(id.size() == 36 && id[8] == '-' && id[13] == '-' && id[18] == '-' && id[23] == '-',
+          "Windows machine id is the MachineGuid");
+#else
+    CHECK(!id.empty(), "machine id found");
+#endif
+    CHECK(id == psp_machine_id(), "machine id is stable");
+}
+
 int main() {
     defaults();
     relay_parsed();
@@ -209,6 +222,7 @@ int main() {
     env_mac_wins();
     machine_id_env_override();
     unwritable_mac_file_still_gives_mac();
+    host_machine_id();
     if (failures) {
         std::printf("%d failure(s)\n", failures);
         return 1;
