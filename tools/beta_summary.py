@@ -55,6 +55,16 @@ def peak(intervals):
     return best
 
 
+def hardware(log_text):
+    """The runtime's "[RT] hardware: ..." line of a game log (the last one), without its prefix; None if absent."""
+    found = None
+    for line in log_text.splitlines():
+        i = line.find("[RT] hardware: ")
+        if i >= 0:
+            found = line[i + len("[RT] hardware: "):].strip()
+    return found
+
+
 def summarize(db, logs_dir=None, now=None):
     now = time.time() if now is None else now
     c = sqlite3.connect(db)
@@ -130,8 +140,12 @@ def summarize(db, logs_dir=None, now=None):
 
     parts.append("<h2>Reportes</h2>")
     rows = []
+    cpus = collections.Counter()
     for rid, t_utc, source, label, nick, mode, when_text, what, version, log_z in reports:
         log_cell = "-"
+        hw = hardware(zlib.decompress(log_z).decode("utf-8", "replace")) if log_z is not None else None
+        if hw:
+            cpus[hw[4:].split(" (")[0] if hw.startswith("CPU ") else "?"] += 1
         if log_z is not None and logs_dir:
             os.makedirs(logs_dir, exist_ok=True)
             name = "report_%d.log" % rid
@@ -142,9 +156,11 @@ def summarize(db, logs_dir=None, now=None):
         elif log_z is not None:
             log_cell = "sí"
         rows.append((rid, esc(t_utc), esc(label or "-"), esc(nick or "-"), esc(mode), esc(when_text),
-                     '<div class="what">%s</div>' % esc(what), esc(source), esc(version or "-"), log_cell))
+                     '<div class="what">%s</div>' % esc(what), esc(source), esc(version or "-"),
+                     '<div class="hw">%s</div>' % esc(hw or "-"), log_cell))
     parts.append(table(["#", "Hora (UTC)", "Código", "Nick", "Modo", "Cuándo", "Qué pasó", "Origen", "Versión",
-                        "Log"], rows))
+                        "Equipo", "Log"], rows))
+    stats["hardware"] = dict(cpus)
     c.close()
 
     page = PAGE % {"generated": esc(time.strftime("%Y-%m-%d %H:%M", time.localtime(now))),
@@ -167,6 +183,7 @@ margin-top:16px}.card{background:var(--card);border:1px solid var(--line);border
 table{width:100%%;border-collapse:collapse;background:var(--card);border:1px solid var(--line)}
 th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
 th{font-weight:600}td{font-variant-numeric:tabular-nums}.what{white-space:pre-wrap;max-width:420px}
+.hw{max-width:280px;font-size:.85em;color:var(--muted)}
 a{color:var(--accent)}div.scroll{overflow-x:auto}
 </style></head><body><main>
 <h1>Resumen de la beta online</h1>
@@ -212,7 +229,9 @@ def selftest():
     c.execute("INSERT INTO reports(t_utc, source, label, nick, mode, when_text, what, version, log_z) "
               "VALUES (?,?,?,?,?,?,?,?,?)", ("2026-10-24T04:00:00Z", "launcher", "invitado 01", "<b>Edson</b>", "vs",
                                              "21:30", "<script>alert(1)</script> se trabó", "0.2.0-beta.1",
-                                             zlib.compress(b"linea del log\nINVITE_UNKNOWN\n")))
+                                             zlib.compress(b"linea del log\n[RT] hardware: CPU Intel(R) Core(TM) i3-6100 (4 threads), RAM 8192 MB, "
+                                                           b"OS Windows 10 (build 19045), GPU Intel <HD> 530, GL 3.3, display "
+                                                           b"1366x768 60 Hz\nINVITE_UNKNOWN\n")))
     c.execute("INSERT INTO reports(t_utc, source, mode, when_text, what) VALUES (?,?,?,?,?)",
               ("2026-10-24T05:00:00Z", "web", "otro", "", "no abre"))
     c.commit()
@@ -228,8 +247,12 @@ def selftest():
     assert "<td>invitado 01</td><td>2</td><td>30</td>" in page, "per-code row"
     assert "a@x.com" not in page and "b@x.com" not in page, "no email on the page"
     with open(os.path.join(tmp, "logs", "report_1.log"), "rb") as f:
-        assert f.read() == b"linea del log\nINVITE_UNKNOWN\n"
+        assert f.read().endswith(b"60 Hz\nINVITE_UNKNOWN\n")
     assert 'href="logs/report_1.log"' in page, "log link"
+    # report_hardware: the runtime's hardware line from the log, escaped, in the report's row
+    assert "Intel(R) Core(TM) i3-6100 (4 threads), RAM 8192 MB" in page and "GPU Intel &lt;HD&gt; 530" in page, \
+        "hardware of the report"
+    assert st["hardware"] == {"Intel(R) Core(TM) i3-6100": 1}, st
     # summary_escapes_html
     assert "<script>alert(1)" not in page and "&lt;script&gt;alert(1)&lt;/script&gt;" in page
     assert "<b>Edson</b>" not in page and "&lt;b&gt;Edson&lt;/b&gt;" in page
