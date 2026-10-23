@@ -55,6 +55,41 @@ On one PC (local server, A tcp://, B ws://), in a 60 s co-op mission with drums 
 
 Over the public server: the same frame criterion, and delivery p99 under RTT/2 + 50 ms.
 
+## Result (23 Oct 2026, one PC, local server)
+Measured with `PSPRECOMP_INFRA_STATS`, the frame logs and `tools/infra_lagjoin.py` over a ~60-70 s marked window
+of a co-op mission with drums on both instances (A tcp://, B ws://; reports in `build/infra/lag_*/REPORT.md`,
+findings in `build/infra/lag_tcpws/FINDINGS.md`):
+
+| run | frames > 100 ms A / B | send_block p99 | wire p99 | queue p99 / max | total p99 A->B / B->A | lost / dropped |
+|---|---|---|---|---|---|---|
+| before (lag_tcpws) | 3 / 2 | 0.2-0.3 ms | 0.4-0.5 ms | 34.2 / 74.9 ms | 34.5 / 34.1 ms | 0 / 0 |
+| after the outbox (lag_tcpws2) | 1 / 0 | 0.2-0.3 ms | 0.5-0.6 ms | 36.9 / 66.2 ms | 37.2 / 35.9 ms | 0 / 0 |
+| final, no screenshot polling in the window (lag_tcpws_final) | 0 / 0 | 0.2 ms | 0.4-0.5 ms | 21.2 / 21.3 ms | 21.5 / 16.1 ms | 0 / 0 |
+| final build, while recording both windows at 60 fps (lag_final) | 0 / 0 | 0.2 ms | 0.4-0.5 ms | 30.7 / 31.4 ms | 31.1 / 21.3 ms | 0 / 0 |
+
+Final windows: 30.0 fps on both instances, longest frame 37-57 ms. Acceptance on one PC: met.
+
+What the evidence turned out to be:
+- The four suspects were not the cause locally: sends returned in 0.1-0.3 ms, the wire took under 1 ms on both
+  transports, a datagram waited at most one game frame in its queue, and nothing was lost or dropped.
+- Every frame over 100 ms in the earlier windows overlapped the test driver's beat sync, which takes a full
+  debug-socket screenshot (a 522 KB TGA file) about 80 times a second for 4 s on each instance.
+- The PC's system disk (a DRAM-less QLC SSD, 89 % full) stalls writes for up to 42 s under that load or while
+  Windows Search indexes the test output; every thread that writes a file stops meanwhile (frame log on the game
+  thread, the stats writers, the server log). Two discarded runs froze all three processes together for 12-36 s.
+  The e2e driver now probes the disk and waits for it to be quiet, and syncs to the beat once before the window.
+- The stats log itself made that worse: it wrote on the client's reader and writer threads, so a stalled disk
+  stopped them, pings stayed queued and the client dropped a live server after 10 s. Its rows now go to memory and
+  a stats thread writes the file. The local test server also stops while its log write is stalled (48 s once);
+  the public server runs on another machine.
+- The e2e12 "before" video: B's runs of identical shots were the recorder's 5 s socket timeouts filled with the
+  previous frame, plus one 1.5 s gap that did not reproduce.
+- Not measured: the public server (the tunnel was down), so the WebSocket transport fix (design item 5) and the
+  stale-datagram drop (item 3, queue waits stayed far under 200 ms) were not needed or not decidable yet.
+- Outside this design, found on the way: with the launcher, stderr goes to `logs/game.log` and the game thread logs
+  thousands of lines, so on a disk like this one a log line can stall the game. A log writer off the game thread
+  would remove that.
+
 ## Out of scope
 Direct UDP between players (hole punching) or a UDP relay: the Cloudflare tunnel carries only HTTP/WebSocket, so
 UDP would need a forwarded port on the server machine. That is the user's decision, to be asked with the

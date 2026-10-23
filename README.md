@@ -302,6 +302,10 @@ always shows full bars (see the spec). The game tells players apart by the conso
 its own on its first start (the MAC file is bound to the machine, so a copied game folder gets a new one), and two
 instances on one PC need their own `PSPRECOMP_ADHOC_MAC`; the server refuses a second player with the same MAC in a
 room instead of making two "player 1"s.
+Sending never blocks the game: the client queues frames for a writer thread. Measured on one PC with a local server
+(`PSPRECOMP_INFRA_STATS` + `tools/infra_lagjoin.py`), a 60 s co-op mission runs at a steady 30 fps on both
+instances with no frame over 100 ms, and a datagram reaches the other game in under 32 ms (p99, most of it waiting
+for the game's next read); the internet path is not measured yet.
 
 ### Prerequisites
 
