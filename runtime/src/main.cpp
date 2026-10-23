@@ -179,7 +179,9 @@ int main(int argc, char* argv[]) {
         const int v = std::atoi(p);
         if (v > 0 && v < 65536) debug_port = v;
     }
-    psp_debug_socket_start(rdram, PSP_MEM_SIZE, debug_port);
+    // Beta builds (players' packages) have no debug socket.
+    if (psp_beta_debug_socket_allowed(psp_beta_until())) psp_debug_socket_start(rdram, PSP_MEM_SIZE, debug_port);
+    else std::fprintf(stderr, "[RT] beta build: debug socket off\n");
     {
         PspDebugHooks hooks;
         hooks.ge_stats           = ge_draw_get_stats;
@@ -216,7 +218,12 @@ int main(int argc, char* argv[]) {
 
     // 3a. Opt-in patch sets (PSPRECOMP_PATCHES): replace generated entries
     //     before the HLE layer and the game hooks wrap them.
-    psp_patch_sets_apply(std::getenv("PSPRECOMP_PATCHES"));
+    if (psp_beta_debug_socket_allowed(psp_beta_until())) {
+        psp_patch_sets_apply(std::getenv("PSPRECOMP_PATCHES"));
+    } else {  // beta build: never the community debug menu
+        const std::string patches = psp_beta_filter_patches(std::getenv("PSPRECOMP_PATCHES"), psp_beta_until());
+        psp_patch_sets_apply(patches.empty() ? nullptr : patches.c_str());
+    }
 
     // 3b. Initialize I/O subsystem (disc0 path mapping)
     //     PSPRECOMP_DISC0 env var overrides default ./disc0 path

@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <string>
 
 static int failures = 0;
 #define CHECK(cond, msg) \
@@ -34,8 +35,26 @@ static void empty_never_expires() {
     CHECK(!psp_beta_expired(4102444800, "not a date"), "invalid until never blocks");
 }
 
+static void beta_builds_have_no_debug_socket() {
+    CHECK(psp_beta_debug_socket_allowed(""), "normal build: debug socket as before");
+    CHECK(psp_beta_debug_socket_allowed(nullptr), "null until: normal build");
+    CHECK(!psp_beta_debug_socket_allowed("2026-10-26T05:59:59Z"), "beta build: no debug socket");
+}
+
+static void beta_builds_drop_the_debug_menu() {
+    const char* until = "2026-10-26T05:59:59Z";
+    CHECK(psp_beta_filter_patches("60fps,debug_menu", until) == "60fps", "beta: debug_menu dropped");
+    CHECK(psp_beta_filter_patches("debug_menu", until) == "", "beta: only debug_menu -> nothing");
+    CHECK(psp_beta_filter_patches("debug_menu,60fps", until) == "60fps", "beta: first in the list");
+    CHECK(psp_beta_filter_patches(nullptr, until) == "", "beta: unset");
+    CHECK(psp_beta_filter_patches("60fps,debug_menu", "") == "60fps,debug_menu", "normal build: unchanged");
+    CHECK(psp_beta_filter_patches("60fps", until) == "60fps", "beta: others stay");
+}
+
 int main() {
     parse_utc();
+    beta_builds_have_no_debug_socket();
+    beta_builds_drop_the_debug_menu();
     expired_after_until();
     empty_never_expires();
     if (failures) {

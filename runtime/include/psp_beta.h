@@ -6,6 +6,7 @@
 // "the beta ended" screen. The server's window is the real lock; this only
 // stops normal use of an old beta package.
 #include <cstdint>
+#include <string>
 
 constexpr int kPspBetaEndedExit = 12;
 
@@ -17,6 +18,13 @@ bool psp_beta_expired(int64_t now_unix_s, const char* until_iso);
 
 // The built-in end date ("" when not a beta build).
 const char* psp_beta_until();
+
+// Beta builds ship to players: no loopback debug socket (it reads and writes guest memory) and no community
+// debug-menu patch set, whatever the environment says. until_iso = psp_beta_until().
+bool psp_beta_debug_socket_allowed(const char* until_iso);
+// PSPRECOMP_PATCHES as a beta build applies it: "debug_menu" removed from the comma list (unchanged otherwise;
+// nullptr -> "").
+std::string psp_beta_filter_patches(const char* patches, const char* until_iso);
 
 // 0, or shows the "beta ended" message box and returns kPspBetaEndedExit.
 int psp_beta_check_at_start();
