@@ -294,6 +294,9 @@ Infrastructure mode (Patapon 3's "Modo Infraestructura", verified on one PC betw
 over raw TCP and one over WebSocket): the game's own online lobby works against our server instead of Sony's —
 opening a hideout with a purpose, level and comment, finding it in the game's room list, entering it, both heroes
 together in the hideout, a co-op quest started by the host and played by both, back to the hideout together.
+VS between two parties also works (one PC, four instances for 2v2 and two for a full 1v1): each host picks VS at
+the "Puerta combate", the game finds the other side's VS room while staying in its own hideout room, the battle
+starts on every instance and runs to the results and back to the hideouts.
 Run the server with `python -I tools/infra_server.py` (TCP 27320, WebSocket 27321 on `/infra`) or
 `tools/run_infra_server.bat`; the runtime connects to `PSPRECOMP_INFRA_SERVER` (default
 `wss://online.montick.app/infra`, `off` to disable) only after the player picks infrastructure mode

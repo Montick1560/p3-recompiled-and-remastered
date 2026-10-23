@@ -46,3 +46,19 @@ matchmaking runs as it did on PSN, and the VS starts.
 
 ## Out of scope
 Changing the game. Matchmaking quality (ranking, regions). More than two parties at once.
+
+## Result (23 Oct 2026)
+- Server: up to 4 rooms per connection and room flags (964991b); runtime: `np2::Rooms` by room id, flags sent
+  (7013744). No further gap was found in the e2e: no fix beyond these two commits.
+- One party (build/infra/vs1): the host hides its hideout (`0x54000000`/`0x14000000`), searches with 7 int filters,
+  creates the VS room while in the hideout room (server: `create` ok, runtime `in 2 room(s)`), no ALREADY_JOINED,
+  the search stops and both show "Buscando oponente.".
+- Two parties, four instances (build/infra/vs2): the second host's 7-filter searches miss (they require attr
+  `0x52 == 2`, which the VS room never sets), the game relaxes to 5 filters, finds the first host's VS room and
+  joins it; its visitor and the first host's visitor join it too (4/4). All four show "Info. oponente de enfrent."
+  (blue P3A + P3B, red P3C + P3D) and the VS map with the same clock.
+- Without input, the three non-owners leave after 60 s ("Se ha agotado el tiempo de conexion"): the game's idle
+  rule, as in co-op. With drums (build/infra/vs5, 1v1) the match runs to 0:00, DERROTA / VICTORIA, rewards, and both
+  return to their hideouts, which become visible again (`0x04000000`).
+- Regressions: hideout co-op + mission (0 datagrams lost), ad hoc smoke, identity ("2.Edson"); ctest 106/106; 30 fps
+  RT_REGRESS PASS; server selftest OK. Hand-off: build/autopilot/EN_QUE_NOS_QUEDAMOS_2026-10-23b.md.
