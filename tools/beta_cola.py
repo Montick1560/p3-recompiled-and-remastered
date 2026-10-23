@@ -8,6 +8,8 @@ machine, next to infra_server.py and beta_report_server.py).
                                                                 draw N people not invited yet: one code each, added to
                                                                 the config (the running server takes them live), CSV
                                                                 correo,codigo,label to email by hand
+    python beta_cola.py codigos beta_config.json 15 --out directos.csv [--prefijo directo]
+                                                                N codes outside the queue ("directo 01"..), live
     python beta_cola.py desactivar beta_config.json "invitado 07"  disable a code (live)
     python beta_cola.py borrar-cola beta.db                     after the beta: delete every email of the queue
     python beta_cola.py --selftest
@@ -127,6 +129,26 @@ def draw(db, config, n, out):
         w.writerow(["correo", "codigo", "label"])
         w.writerows([(email, code, label) for _, email, code, label in rows])
     return [(email, code, label) for _, email, code, label in rows], len(free)
+
+
+def direct_codes(config, n, out, prefix="directo"):
+    """N invite codes outside the queue (people the organiser invites directly): labels "<prefix> NN" continue
+    that prefix's numbering; CSV codigo,label."""
+    if os.path.exists(out):
+        raise SystemExit("%s already exists: not overwritten" % out)
+    cfg = read_config(config)
+    taken = {c["sha256"] for c in cfg["codes"]}
+    pat = re.compile(re.escape(prefix) + r" (\d+)")
+    nxt = max((int(m.group(1)) for c in cfg["codes"] for m in [pat.fullmatch(c["label"])] if m), default=0) + 1
+    rows = [(new_code(taken), "%s %02d" % (prefix, nxt + i)) for i in range(n)]
+    cfg["codes"] += [{"label": label, "sha256": code_hash(code), "enabled": True, "staff": False}
+                     for code, label in rows]
+    write_config(config, cfg)
+    with open(out, "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["codigo", "label"])
+        w.writerows(rows)
+    return rows
 
 
 def disable(config, label):
@@ -262,6 +284,23 @@ def selftest():
         raise AssertionError("disabled a missing label")
     except SystemExit:
         pass
+    # direct_codes: invitations outside the queue, numbered per prefix, live in the config
+    d1 = direct_codes(cfg_path, 3, os.path.join(tmp, "directos1.csv"), "directo")
+    assert [x[1] for x in d1] == ["directo 01", "directo 02", "directo 03"], d1
+    d2 = direct_codes(cfg_path, 2, os.path.join(tmp, "directos2.csv"), "directo")
+    assert [x[1] for x in d2] == ["directo 04", "directo 05"], d2
+    entries = {x["label"]: x for x in read_config(cfg_path)["codes"]}
+    for code, label in d1 + d2:
+        assert re.fullmatch(r"P3-[%s]{4}-[%s]{4}" % (ALPHABET, ALPHABET), code), code
+        e = entries[label]
+        assert e["sha256"] == code_hash(code) and e["enabled"] and not e["staff"], e
+    with open(os.path.join(tmp, "directos1.csv"), encoding="utf-8") as f:
+        assert list(csv.reader(f)) == [["codigo", "label"]] + [list(x) for x in d1]
+    try:
+        direct_codes(cfg_path, 1, os.path.join(tmp, "directos1.csv"), "directo")
+        raise AssertionError("direct codes overwrote a CSV")
+    except SystemExit:
+        pass
     # borrar-cola
     assert clear_queue(db) == 6
     assert list_queue(db) == []
@@ -286,6 +325,11 @@ def main():
     p.add_argument("config")
     p.add_argument("n", type=int)
     p.add_argument("--out", required=True)
+    p = sub.add_parser("codigos")
+    p.add_argument("config")
+    p.add_argument("n", type=int)
+    p.add_argument("--out", required=True)
+    p.add_argument("--prefijo", default="directo")
     p = sub.add_parser("desactivar")
     p.add_argument("config")
     p.add_argument("label")
@@ -308,6 +352,10 @@ def main():
         got, free = draw(args.db, args.config, args.n, args.out)
         print("Sorteo: %d de %d personas sin invitar. Códigos añadidos a %s (el servidor los toma solo). "
               "Correos en %s." % (len(got), free, args.config, args.out))
+    elif args.cmd == "codigos":
+        rows = direct_codes(args.config, args.n, args.out, args.prefijo)
+        print("%d códigos (%s .. %s) añadidos a %s (el servidor los toma solo). Códigos en %s."
+              % (len(rows), rows[0][1], rows[-1][1], args.config, args.out) if rows else "0 códigos")
     elif args.cmd == "desactivar":
         disable(args.config, args.label)
         print("%s desactivado (el servidor lo aplica en un segundo; las sesiones abiertas siguen)." % args.label)
