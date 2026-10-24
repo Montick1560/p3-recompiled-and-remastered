@@ -69,6 +69,44 @@ int main() {
         CHECK(psp_ge_blend_lists(j, j, 2, 0.5f, out) == 0, "JUMP refused");
         CHECK(psp_ge_blend_lists(o, o, 2, 0.5f, out) == 0, "ORIGIN refused");
     }
+    // A whole world matrix (0x3A + 12 x 0x3B): basis vectors x, y, z (3 words each), then translation.
+    auto matrix = [](uint32_t* l, const float m[12]) {
+        l[0] = cmd(0x3A, 0);
+        for (int i = 0; i < 12; i++) l[1 + i] = cmd(0x3B, f24(m[i]));
+        l[13] = cmd(0x0B, 0);
+    };
+    {   // an axis that flips (180 degrees, the Wooyari Hero Mode fire wheel from one key to the next) would
+        // lerp through zero: the list is not blended
+        const float ma[12] = {1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 6, 7};
+        const float mb[12] = {1, 0, 0, 0, -1, 0, 0, 0, 1, 5, 6, 7};
+        uint32_t a[14], b[14], out[14] = {};
+        matrix(a, ma);
+        matrix(b, mb);
+        CHECK(psp_ge_blend_lists(a, b, 14, 0.5f, out) == 0, "flipped axis refused");
+    }
+    {   // a 90 degree turn about z keeps the axes' length (a plain lerp draws the model at 71 %)
+        const float ma[12] = {2, 0, 0, 0, 2, 0, 0, 0, 2, 1, 1, 1};
+        const float mb[12] = {0, 2, 0, -2, 0, 0, 0, 0, 2, 3, 1, 1};
+        uint32_t a[14], b[14], out[14] = {};
+        matrix(a, ma);
+        matrix(b, mb);
+        CHECK(psp_ge_blend_lists(a, b, 14, 0.5f, out) == 14, "turned matrix blended");
+        const float x0 = from24(out[1]), x1 = from24(out[2]), y0 = from24(out[4]), y1 = from24(out[5]);
+        CHECK(std::fabs(std::sqrt(x0 * x0 + x1 * x1) - 2.0f) < 1e-3f && std::fabs(x0 - x1) < 1e-3f,
+              "x axis halfway round at full length");
+        CHECK(std::fabs(std::sqrt(y0 * y0 + y1 * y1) - 2.0f) < 1e-3f && std::fabs(y0 + y1) < 1e-3f,
+              "y axis halfway round at full length");
+        CHECK(std::fabs(from24(out[10]) - 2.0f) < 1e-3f, "translation lerped");
+    }
+    {   // a scale change still lerps the length (2 -> 4 is 3 halfway)
+        const float ma[12] = {2, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0};
+        const float mb[12] = {4, 0, 0, 0, 4, 0, 0, 0, 4, 0, 0, 0};
+        uint32_t a[14], b[14], out[14] = {};
+        matrix(a, ma);
+        matrix(b, mb);
+        CHECK(psp_ge_blend_lists(a, b, 14, 0.5f, out) == 14 && std::fabs(from24(out[1]) - 3.0f) < 1e-3f,
+              "scale lerped");
+    }
     if (failures == 0) std::printf("ge_list_blend: all tests passed\n");
     return failures == 0 ? 0 : 1;
 }

@@ -860,7 +860,10 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   lies between the drawn frame and the next, the two frames' lists are blended
   (`runtime/include/psp_ge_list_blend.h`: world/bone matrix data and material alpha;
   texture offsets stay, they flip atlas cells) into a 1 MB ring at guest `0x0F000000`
-  and that copy is called instead. Without it the Patapons' bodies and eyes stepped at
+  and that copy is called instead. Each matrix axis keeps its lerped length (a plain lerp
+  drew a model turning 72 degrees a key at 81 % halfway); a list whose axis turns past 120
+  degrees between the two frames is drawn unblended (the Wooyari Hero Mode fire wheel flips
+  180 degrees a key and collapsed to nothing halfway). Without it the Patapons' bodies and eyes stepped at
   the key rate (~every second vblank at 60 fps) while their equipment moved every vblank.
   Install prints `[P3] smooth animation: baked frame lists blended too (Patapon bodies and eyes)`.
 - **Set it when:** `0` to compare against the stepped bodies (A/B).
