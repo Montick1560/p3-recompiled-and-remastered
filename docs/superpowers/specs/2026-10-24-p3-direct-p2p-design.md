@@ -272,21 +272,21 @@ Field (beta, Phase 3):
 **On by default.** The option must explain what turning it on or off means and how the player's IP is protected.
 The text sits next to the switch in the online options. Final Spanish copy (user-facing):
 
-> **Conexión directa entre jugadores** (activada por defecto)
+> **Conexión directa entre jugadores** (recomendada)
 >
-> **Activada:** tu juego se conecta directo con los jugadores de tu sala, como hacía la PSP en PSN. Hay menos
-> retraso y todos ven lo mismo en pantalla. Para eso, los jugadores de tu sala reciben tu dirección IP mientras
-> jueguen juntos.
+> **Activada:** tu juego se conecta directo con los jugadores de tu sala, como en PSN y en la mayoría de los juegos
+> en línea. Hay menos retraso y todos ven la misma partida.
 >
-> **Desactivada:** todo pasa por nuestro servidor, como antes. Nadie de la partida ve tu IP, pero con jugadores
-> lejanos puede haber más retraso y cosas distintas en cada pantalla.
+> **Desactivada:** todo pasa por nuestro servidor. Se puede jugar igual, pero con jugadores lejanos puede haber más
+> retraso y diferencias entre pantallas.
 >
-> **Cómo protegemos tu IP:**
-> - Solo la reciben los jugadores de tu sala, y solo mientras juegan juntos; al salir se borra.
-> - Nunca se muestra en pantalla ni se guarda en registros, reportes ni en el servidor.
-> - La conexión directa va cifrada y firmada: nadie puede leerla ni hacerse pasar por otro jugador.
-> - Tu juego no responde a nadie que no tenga la clave de tu partida.
-> - Una IP solo indica tu ciudad o tu proveedor de internet aproximados, no tu domicilio.
+> **Privacidad:** para conectarse directo, los juegos de una sala intercambian su dirección de conexión, como
+> cualquier juego en línea. Solo se comparte con tu sala mientras juegan juntos, la conexión va cifrada y no se
+> muestra en pantalla ni se guarda en ningún registro.
+
+The copy stays honest (it says the connection address is shared and with whom) without alarming detail. Disclosure
+is a requirement: the paragraph may be reworded later, but it can't drop the fact that the address is shared with
+the room.
 
 Whether the switch can change while the game runs: no. It takes effect at the next game start, like the other
 online options, and the help text says so if the options screen shows that note for others.
