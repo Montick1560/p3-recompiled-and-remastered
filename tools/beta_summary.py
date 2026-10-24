@@ -31,6 +31,10 @@ def tables(c):
     return {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
 
+# Relay-link numbers per session (link_stats of the runtime), added by tools/infra_server.py; older files lack them.
+LINK_COLUMNS = ("pings", "slow_pings", "rtt_p50", "rtt_p95", "rtt_max", "max_rx_gap_ms")
+
+
 def esc(v):
     return html.escape("" if v is None else str(v))
 
@@ -75,13 +79,18 @@ def summarize(db, logs_dir=None, now=None):
     # sessions
     per_label = collections.OrderedDict()
     intervals = []
+    link_rows = []
     if "sessions" in have:
-        for label, staff, start, end, reason in c.execute(
-                "SELECT label, staff, start_utc, end_utc, end_reason FROM sessions ORDER BY id"):
+        cols = {r[1] for r in c.execute("PRAGMA table_info(sessions)")}
+        link_sql = ", ".join(k if k in cols else "NULL" for k in LINK_COLUMNS)
+        for row in c.execute("SELECT label, staff, start_utc, end_utc, end_reason, %s FROM sessions ORDER BY id"
+                             % link_sql):
+            label, staff, start, end, reason = row[:5]
             s, e = parse_utc(start), parse_utc(end) if end else now
             if s is None or e is None:
                 continue
             intervals.append((s, e))
+            link_rows.append((label, staff, start, round(max(0, e - s) / 60)) + tuple(row[5:]))
             key = (label or "(sin código)") + (" (staff)" if staff else "")
             d = per_label.setdefault(key, {"n": 0, "min": 0.0, "reasons": collections.Counter()})
             d["n"] += 1
@@ -91,6 +100,7 @@ def summarize(db, logs_dir=None, now=None):
     stats["peak"] = peak(intervals)
     stats["minutes"] = round(sum(d["min"] for d in per_label.values()))
     stats["players"] = sum(1 for k in per_label if not k.endswith("(staff)") and k != "(sin código)")
+    stats["link_sessions"] = sum(1 for r in link_rows if r[4] is not None)
 
     rooms = collections.Counter()
     if "rooms" in have:
@@ -129,6 +139,16 @@ def summarize(db, logs_dir=None, now=None):
     parts.append(table(["Código", "Sesiones", "Minutos", "Cierres"], [
         (esc(k), d["n"], round(d["min"]), esc(", ".join("%s %d" % kv for kv in d["reasons"].most_common())))
         for k, d in per_label.items()]))
+
+    parts.append("<h2>Red por sesión</h2>")
+    parts.append('<p class="muted">Lo que midió cada juego en su conexión con el servidor (sin direcciones). '
+                 'Lentos: pings de 250 ms o más. Corte: lo más largo sin recibir nada con un ping pendiente.</p>')
+    parts.append('<div class="scroll">' + table(
+        ["Código", "Inicio (UTC)", "Minutos", "Pings", "Lentos", "RTT p50 ms", "RTT p95 ms", "RTT máx ms",
+         "Corte más largo ms"],
+        [(esc((label or "(sin código)") + (" (staff)" if staff else "")), esc(start), minutes)
+         + tuple("-" if v is None else esc(v) for v in nums)
+         for label, staff, start, minutes, *nums in link_rows]) + "</div>")
 
     parts.append("<h2>Problemas de conexión</h2>")
     parts.append(table(["Qué", "Veces"], [(esc(k), n) for k, n in [
@@ -256,6 +276,25 @@ def selftest():
     # summary_escapes_html
     assert "<script>alert(1)" not in page and "&lt;script&gt;alert(1)&lt;/script&gt;" in page
     assert "<b>Edson</b>" not in page and "&lt;b&gt;Edson&lt;/b&gt;" in page
+    # link_old_file: a beta night 1/2 file (no link columns) shows the network table with "-"
+    assert "<h2>Red por sesión</h2>" in page, "network table"
+    assert "<td>invitado 01</td><td>2026-10-24T03:00:00Z</td><td>10</td>" + "<td>-</td>" * 6 in page, \
+        "no numbers yet: dashes"
+    assert st["link_sessions"] == 0, st
+    # link_numbers: the columns tools/infra_server.py adds, NULL until a client reports
+    c = sqlite3.connect(db)
+    for col in ("pings", "slow_pings", "rtt_p50", "rtt_p95", "rtt_max", "max_rx_gap_ms"):
+        c.execute("ALTER TABLE sessions ADD COLUMN %s INT" % col)
+    c.execute("UPDATE sessions SET pings=300, slow_pings=4, rtt_p50=48, rtt_p95=310, rtt_max=900, max_rx_gap_ms=650 "
+              "WHERE id=1")
+    c.commit()
+    c.close()
+    page, st = summarize(db, now=parse_utc("2026-10-24T06:00:00Z"))
+    assert ("<td>invitado 01</td><td>2026-10-24T03:00:00Z</td><td>10</td><td>300</td><td>4</td><td>48</td>"
+            "<td>310</td><td>900</td><td>650</td>") in page, "numbers of the reported session"
+    assert "<td>invitado 02</td><td>2026-10-24T03:08:00Z</td><td>30</td>" + "<td>-</td>" * 6 in page, \
+        "unreported session: dashes"
+    assert st["link_sessions"] == 1, st
     # a file with only the queue (the report service alone) still summarizes
     q = os.path.join(tmp, "solo_cola.db")
     c = sqlite3.connect(q)

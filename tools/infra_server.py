@@ -133,6 +133,9 @@ CREATE TABLE IF NOT EXISTS rooms(id INTEGER PRIMARY KEY, kind TEXT, owner_sessio
     closed_utc TEXT, max_members INT);
 CREATE TABLE IF NOT EXISTS events(t_utc TEXT, session INT, kind TEXT, room INT, detail TEXT);
 """
+# Relay-link numbers a client reports with link_stats (NULL until then). Added to older files in place.
+LINK_COLUMNS = ("pings", "slow_pings", "rtt_p50", "rtt_p95", "rtt_max", "max_rx_gap_ms")
+LINK_MAX = 600000
 
 
 class MetricsDb:
@@ -153,6 +156,10 @@ class MetricsDb:
         try:
             c.execute("PRAGMA journal_mode=WAL")
             c.executescript(METRICS_SCHEMA)
+            have = {r[1] for r in c.execute("PRAGMA table_info(sessions)")}
+            for col in LINK_COLUMNS:
+                if col not in have:
+                    c.execute("ALTER TABLE sessions ADD COLUMN %s INT" % col)
             now = iso_utc(time.time())
             # A server that died without stopping left these open: closed by this restart.
             n = c.execute("UPDATE sessions SET end_utc=?, end_reason='server_stop' WHERE end_utc IS NULL",
@@ -922,6 +929,20 @@ class Server:
             return None
         return {"t": msg.get("t")}
 
+    def op_link_stats(self, conn, msg):
+        # The session's relay-link numbers (client infra::LinkStats); a later report overwrites. Numbers only.
+        if set(msg) - {"id", "op"} != set(LINK_COLUMNS):
+            raise Err(BAD_REQUEST)
+        vals = [msg[k] for k in LINK_COLUMNS]
+        if not all(type(v) is int and 0 <= v <= LINK_MAX for v in vals):
+            raise Err(BAD_REQUEST)
+        self.metrics.put("UPDATE sessions SET " + ", ".join("%s=?" % k for k in LINK_COLUMNS) + " WHERE id=?",
+                         tuple(vals) + (conn.sid,))
+        n = dict(zip(LINK_COLUMNS, vals))
+        self.log("%s link: p50 %d p95 %d max %d slow %d/%d gap %d" % (
+            conn.label(), n["rtt_p50"], n["rtt_p95"], n["rtt_max"], n["slow_pings"], n["pings"], n["max_rx_gap_ms"]))
+        return {}
+
     def op_bound(self, conn, msg):
         port = int(msg["port"])
         if not 1 <= port <= 0xFFFF:
@@ -1639,7 +1660,76 @@ def selftest():
     th.join(timeout=2)
 
     beta_selftest(run, quiet, lines)
+    link_stats_selftest(run, quiet, lines)
     print("selftest OK")
+
+
+def link_stats_selftest(run, quiet, lines):
+    """Relay-link telemetry: link_stats stored on the session row, strict numbers, old databases migrated."""
+    import os
+    import sqlite3
+    import tempfile
+
+    tmp = tempfile.mkdtemp(prefix="p3link_")
+    db = os.path.join(tmp, "beta.db")
+
+    def q(sql, *params):
+        with sqlite3.connect(db) as c:
+            return c.execute(sql, params).fetchall()
+
+    def columns(path):
+        with sqlite3.connect(path) as c:
+            return [r[1] for r in c.execute("PRAGMA table_info(sessions)")]
+
+    six = ("pings", "slow_pings", "rtt_p50", "rtt_p95", "rtt_max", "max_rx_gap_ms")
+    # link_migration: a beta night 1/2 database (no link columns) gets them once, rows kept
+    with sqlite3.connect(db) as c:
+        c.executescript("""
+CREATE TABLE sessions(id INTEGER PRIMARY KEY, label TEXT, staff INT, online_id TEXT, transport TEXT,
+    proto INT, start_utc TEXT, end_utc TEXT, end_reason TEXT, bytes_in INT, bytes_out INT, dgrams_dropped INT);
+INSERT INTO sessions(id, label, online_id, end_utc) VALUES (1, 'invitado 01', 'OLD', '2026-10-23T03:00:00Z');
+""")
+    MetricsDb(db, quiet)
+    cols = columns(db)
+    assert all(cols.count(k) == 1 for k in six), cols
+    MetricsDb(db, quiet)
+    assert columns(db) == cols, "a migrated file is left alone"
+    assert q("SELECT online_id, pings, rtt_p95 FROM sessions WHERE id=1") == [("OLD", None, None)]
+
+    srv = Server("127.0.0.1", 0, None, logger=quiet, db_path=db)
+    th = run(srv)
+    a = TestClient(srv.port)
+    early = a.req("link_stats", pings=1, slow_pings=0, rtt_p50=1, rtt_p95=1, rtt_max=1, max_rx_gap_ms=1)
+    assert not early["ok"] and early["error"] == FORBIDDEN, early
+    a.ok("login", online_id="LINK_A", proto=2)
+    good = dict(pings=120, slow_pings=3, rtt_p50=48, rtt_p95=310, rtt_max=900, max_rx_gap_ms=650)
+    assert a.ok("link_stats", **good) == {"id": a.next_id, "ok": True}
+    srv.metrics.flush(3)
+
+    def row():
+        return q("SELECT " + ", ".join(six) + " FROM sessions WHERE online_id='LINK_A'")
+    assert row() == [(120, 3, 48, 310, 900, 650)], row()
+    assert any(" link: p50 48 p95 310 max 900 slow 3/120 gap 650" in l for l in lines), lines[-5:]
+    # link_overwrite: a second report replaces the first, no new row
+    again = dict(good, pings=200, rtt_max=950)
+    a.ok("link_stats", **again)
+    srv.metrics.flush(3)
+    assert row() == [(200, 3, 48, 310, 950, 650)], row()
+    assert q("SELECT COUNT(*) FROM sessions") == [(2,)]
+    # link_refuses_bad_numbers: refused with BAD_REQUEST and nothing stored
+    bad_forms = [dict(good, rtt_p50=-1), dict(good, rtt_max=600001), dict(good, rtt_p95=1.5),
+                 dict(good, pings="10"), dict(good, slow_pings=True), dict(good, ip="1.2.3.4"),
+                 {k: v for k, v in good.items() if k != "max_rx_gap_ms"}, dict(good, pings=None)]
+    for form in bad_forms:
+        ans = a.req("link_stats", **form)
+        assert not ans["ok"] and ans["error"] == BAD_REQUEST, (form, ans)
+    srv.metrics.flush(3)
+    assert row() == [(200, 3, 48, 310, 950, 650)], row()
+    dump = "\n".join(str(r) for r in q("SELECT * FROM sessions"))
+    assert "127.0.0.1" not in dump and "1.2.3.4" not in dump, "no address stored"
+    a.close()
+    srv.running = False
+    th.join(timeout=5)
 
 
 def beta_selftest(run, quiet, lines):
