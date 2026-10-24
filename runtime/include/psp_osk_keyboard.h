@@ -13,6 +13,7 @@ struct OskTarget {
     virtual ~OskTarget() = default;
     virtual void type(const std::string& utf8) = 0;
     virtual void backspace() = 0;
+    virtual void back() { backspace(); }  // pad B: delete one, or cancel an empty text
     virtual void move_cursor(int delta) = 0;
     virtual void accept() = 0;
     virtual void cancel() = 0;
@@ -27,7 +28,7 @@ struct OskKey {
     float width;        // in key units (a letter is 1)
 };
 
-enum class OskAction { Up, Down, Left, Right, Press, Backspace, Shift, Space, CursorLeft, CursorRight,
+enum class OskAction { Up, Down, Left, Right, Press, Backspace, Back, Shift, Space, CursorLeft, CursorRight,
                        Layer, Accept, Cancel };
 
 class OskKeyboard {

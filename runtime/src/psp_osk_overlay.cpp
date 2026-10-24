@@ -405,8 +405,8 @@ bool psp_osk_overlay_draw(int win_w, int win_h, int rx, int ry, int rw, int rh) 
     update_text(after, post, text_px);
     update_text(counter, std::to_string(v.length) + "/" + std::to_string(v.max_len), small_px);
     update_text(hint, ui_english()
-                          ? "Ⓐ type   Ⓑ delete   Ⓧ shift   Ⓨ space   LB/RB cursor   Select symbols   Start OK"
-                          : "Ⓐ escribir   Ⓑ borrar   Ⓧ mayús   Ⓨ espacio   LB/RB cursor   Select símbolos   Start aceptar",
+                          ? "Ⓐ type   Ⓑ delete / cancel   Ⓧ shift   Ⓨ space   LB/RB cursor   Select symbols   Start OK"
+                          : "Ⓐ escribir   Ⓑ borrar / cancelar   Ⓧ mayús   Ⓨ espacio   LB/RB cursor   Select símbolos   Start aceptar",
                hint_px);
     const bool blink = (SDL_GetTicks() / 500) % 2 == 0;
 

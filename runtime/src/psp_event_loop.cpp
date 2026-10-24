@@ -178,6 +178,7 @@ static void publish_wheel() {
 struct SessionTarget : OskTarget {
     void type(const std::string& s) override { osk_session().type(s); }
     void backspace() override { osk_session().backspace(); }
+    void back() override { osk_session().back(); }
     void move_cursor(int d) override { osk_session().move_cursor(d); }
     void accept() override { osk_session().confirm(); }
     void cancel() override { osk_session().cancel(); }
@@ -191,7 +192,8 @@ static float g_osk_axis_x = 0.0f, g_osk_axis_y = 0.0f;
 // (SDL_TEXTINPUT, accents and IME included), Backspace, arrows move the text
 // cursor, Enter = accept, Esc = cancel. Gamepad buttons follow the fixed
 // keyboard layout (Global Constraints): D-pad / left stick move, A press,
-// B backspace, X shift, Y space, LB/RB text cursor, back layer, Start accept.
+// B backspace (cancel on an empty text), X shift, Y space, LB/RB text cursor,
+// back layer, Start accept.
 // Returns true when the event was consumed.
 static bool handle_osk_event(const SDL_Event& ev) {
     OskSession& osk = osk_session();
@@ -217,7 +219,7 @@ static bool handle_osk_event(const SDL_Event& ev) {
         static const std::pair<int, OskAction> kPad[] = {
             {SDL_CONTROLLER_BUTTON_DPAD_UP, OskAction::Up}, {SDL_CONTROLLER_BUTTON_DPAD_DOWN, OskAction::Down},
             {SDL_CONTROLLER_BUTTON_DPAD_LEFT, OskAction::Left}, {SDL_CONTROLLER_BUTTON_DPAD_RIGHT, OskAction::Right},
-            {SDL_CONTROLLER_BUTTON_A, OskAction::Press}, {SDL_CONTROLLER_BUTTON_B, OskAction::Backspace},
+            {SDL_CONTROLLER_BUTTON_A, OskAction::Press}, {SDL_CONTROLLER_BUTTON_B, OskAction::Back},
             {SDL_CONTROLLER_BUTTON_X, OskAction::Shift}, {SDL_CONTROLLER_BUTTON_Y, OskAction::Space},
             {SDL_CONTROLLER_BUTTON_LEFTSHOULDER, OskAction::CursorLeft},
             {SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, OskAction::CursorRight},

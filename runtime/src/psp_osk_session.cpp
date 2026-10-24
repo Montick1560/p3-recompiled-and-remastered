@@ -27,6 +27,17 @@ void OskSession::backspace() {
     if (state_ == State::Editing) edit_.backspace();
 }
 
+void OskSession::back() {
+    std::lock_guard<std::mutex> lock(m_);
+    if (state_ != State::Editing) return;
+    if (edit_.length() > 0) {
+        edit_.backspace();
+        return;
+    }
+    result_ = initial_;  // cancel, like Esc
+    state_ = State::Done;
+}
+
 void OskSession::move_cursor(int delta) {
     std::lock_guard<std::mutex> lock(m_);
     if (state_ == State::Editing) edit_.move_cursor(delta);

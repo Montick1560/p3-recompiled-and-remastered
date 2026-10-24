@@ -62,7 +62,33 @@ static void cursor_editing() {
     CHECK(v.text == "Patxa" && v.cursor == 4, "typing inserts before the last character, view reports the cursor");
 }
 
+// Pad B (beta report #2: a gamepad could not leave "Conectar con ID online").
+static void b_on_empty_text_cancels() {
+    OskSession s;
+    s.open("ID online", "", 16);
+    s.back();
+    std::string out;
+    CHECK(!s.active(), "B on an empty text closes the keyboard");
+    CHECK(s.poll(&out) && out.empty(), "cancelled: the initial text comes back");
+    s.open("Nombre", "ab", 8);
+    s.back();
+    s.back();
+    CHECK(s.active(), "still open after deleting the last character");
+    s.back();
+    CHECK(s.poll(&out) && out == "ab", "B on the emptied text cancels with the initial text");
+}
+
+static void b_on_text_deletes_one() {
+    OskSession s;
+    s.open("Nombre", "abc", 8);
+    s.back();
+    CHECK(s.active(), "still open");
+    CHECK(s.view().text == "ab", "one character deleted");
+}
+
 int main() {
+    b_on_empty_text_cancels();
+    b_on_text_deletes_one();
     confirm_returns_typed_text();
     cancel_returns_initial_text();
     view_shows_title_and_text();

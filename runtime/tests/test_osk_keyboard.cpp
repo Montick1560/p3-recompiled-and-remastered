@@ -14,8 +14,9 @@ static int failures = 0;
 
 struct Fake : OskTarget {
     std::string text;
-    int cursor_moves = 0, accepted = 0, cancelled = 0;
+    int cursor_moves = 0, accepted = 0, cancelled = 0, backs = 0;
     void type(const std::string& s) override { text += s; }
+    void back() override { backs++; }
     void backspace() override {
         if (text.empty()) return;
         size_t i = text.size() - 1;
@@ -135,6 +136,19 @@ static void symbols_and_special_keys() {
     CHECK(go_to(en, g, "Cancel"), "cancel key (en label)");
 }
 
+// Pad B: the target's back() (delete one, or cancel on an empty text); a
+// pending accent is dropped first, like Backspace.
+static void pad_b_goes_back() {
+    OskKeyboard k("es");
+    Fake f;
+    k.act(OskAction::Back, f);
+    CHECK(f.backs == 1 && f.cancelled == 0, "B reaches the target's back()");
+    CHECK(go_to(k, f, "´"), "accent key");
+    k.act(OskAction::Press, f);
+    k.act(OskAction::Back, f);
+    CHECK(f.backs == 1 && k.pending_accent().empty(), "B drops a pending accent first");
+}
+
 static void stick_repeat() {
     OskStickRepeat s;
     CHECK(s.update(0.0f, -0.9f, 0) == OskAction::Up, "first push moves (SDL: -y is up)");
@@ -170,6 +184,7 @@ int main() {
     shift_then_caps();
     accents();
     symbols_and_special_keys();
+    pad_b_goes_back();
     stick_repeat();
     skins();
     std::printf("%d failure(s)\n", failures);

@@ -131,6 +131,10 @@ void OskKeyboard::act(OskAction a, OskTarget& t) {
         if (!accent_.empty()) accent_.clear();
         else t.backspace();
         break;
+    case OskAction::Back:
+        if (!accent_.empty()) accent_.clear();
+        else t.back();
+        break;
     case OskAction::Shift:
         if (caps_) { caps_ = false; shift_ = false; }
         else if (shift_) { caps_ = true; shift_ = false; }

@@ -27,6 +27,7 @@ public:
     // Main-thread side (no-ops while idle).
     void type(const std::string& utf8);
     void backspace();
+    void back();  // pad B: delete one character, or cancel when the text is empty
     void move_cursor(int delta);
     void confirm();
     void cancel();
