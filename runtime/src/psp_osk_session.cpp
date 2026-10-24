@@ -9,10 +9,11 @@ void OskSession::open(const std::string& title, const std::string& initial, uint
     state_ = State::Editing;
 }
 
-bool OskSession::poll(std::string* result) {
+bool OskSession::poll(std::string* result, bool* cancelled) {
     std::lock_guard<std::mutex> lock(m_);
     if (state_ != State::Done) return false;
     if (result) *result = result_;
+    if (cancelled) *cancelled = cancelled_;
     state_ = State::Idle;
     return true;
 }
@@ -35,6 +36,7 @@ void OskSession::back() {
         return;
     }
     result_ = initial_;  // cancel, like Esc
+    cancelled_ = true;
     state_ = State::Done;
 }
 
@@ -47,6 +49,7 @@ void OskSession::confirm() {
     std::lock_guard<std::mutex> lock(m_);
     if (state_ != State::Editing) return;
     result_ = edit_.utf8();
+    cancelled_ = false;
     state_ = State::Done;
 }
 
@@ -54,6 +57,7 @@ void OskSession::cancel() {
     std::lock_guard<std::mutex> lock(m_);
     if (state_ != State::Editing) return;
     result_ = initial_;
+    cancelled_ = true;
     state_ = State::Done;
 }
 

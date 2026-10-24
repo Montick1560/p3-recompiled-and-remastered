@@ -328,6 +328,26 @@ static void test_read_request() {
     ASSERT_TRUE(!osk::read_request(g.ram.data(), g.ram.size(), 0x0BFF0000u, &bad), "bad params pointer -> false");
 }
 
+// Beta report #17: backing out of the keyboard must reach the game as a cancel
+// (pspUtilityDialogCommon.result 1). Patapon 3's keyboard wrapper returns
+// base.result as its status and searches again on 0, so a cancel written as
+// "accepted, initial text" re-ran the online-id search forever.
+static void test_cancel_writes() {
+    Guest g;
+    make_params(g, 24, 0);
+    g.fill(kOuttext, 0xAA, 48);  // the text buffer is left alone
+    std::string summary = osk::cancel(g.ram.data(), g.ram.size(), kParams);
+    ASSERT_EQ(g.rd32(kParams + osk::off::kResult), 1, "common result CANCEL");
+    ASSERT_EQ(g.rd32(kFields + osk::off::kDataResult), osk::RESULT_CANCELLED,
+              "field result CANCELLED");
+    ASSERT_EQ(g.rd32(kParams + osk::off::kState), osk::STATE_FINISHED,
+              "params state FINISHED");
+    ASSERT_EQ(g.rd16(kOuttext + 0), 0xAAAA, "outtext untouched");
+    ASSERT_STR(summary, "field0 desc=\"Hero name\" cancelled", "summary line");
+    std::string bad = osk::cancel(g.ram.data(), g.ram.size(), 0);
+    ASSERT_STR(bad, "field0 error: bad params pointer", "bad params pointer");
+}
+
 int main() {
     test_layout_offsets();
     test_utf8_to_utf16();
@@ -344,6 +364,7 @@ int main() {
     test_bad_outtext_pointer();
     test_null_desc();
     test_read_request();
+    test_cancel_writes();
 
     std::printf("%d tests run, %d failures\n", tests_run, failures);
     return failures == 0 ? 0 : 1;

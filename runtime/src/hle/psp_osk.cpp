@@ -234,4 +234,21 @@ std::string complete(uint8_t* rdram, size_t ram_size, uint32_t params_addr,
            "\"";
 }
 
+std::string cancel(uint8_t* rdram, size_t ram_size, uint32_t params_addr) {
+    const Mem mem{rdram, ram_size};
+    if (!mem.valid(params_addr, off::kParamsSizeV1)) {
+        return "field0 error: bad params pointer";
+    }
+    const uint32_t field = mem.rd32(params_addr + off::kFields);  // field 0
+    if (!mem.valid(field, off::kDataSize)) {
+        return "field0 error: bad fields pointer";
+    }
+    mem.wr32(params_addr + off::kResult, 1);              // base.result: CANCEL
+    mem.wr32(field + off::kDataResult, RESULT_CANCELLED);  // field result
+    mem.wr32(params_addr + off::kState, STATE_FINISHED);   // params state
+    const std::string desc =
+        ucs2_to_utf8(mem, mem.rd32(field + off::kDataDesc));
+    return "field0 desc=\"" + desc + "\" cancelled";
+}
+
 }  // namespace psp_osk

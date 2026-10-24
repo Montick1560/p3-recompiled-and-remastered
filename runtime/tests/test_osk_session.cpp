@@ -86,7 +86,30 @@ static void b_on_text_deletes_one() {
     CHECK(s.view().text == "ab", "one character deleted");
 }
 
+// Beta report #17: the HLE must tell a cancel from an accepted text, also when
+// the game reopens the keyboard right after (search by online id, not found).
+static void poll_reports_cancel() {
+    OskSession s;
+    std::string out;
+    bool cancelled = false;
+    s.open("ID online", "P3Z", 16);
+    s.cancel();
+    CHECK(s.poll(&out, &cancelled) && cancelled && out == "P3Z", "Esc: cancelled, initial text");
+    s.open("ID online", "P3Z", 16);
+    CHECK(s.active(), "reopened");
+    s.confirm();
+    CHECK(s.poll(&out, &cancelled) && !cancelled && out == "P3Z", "confirm after a cancel is not a cancel");
+    s.open("ID online", "", 16);
+    s.back();
+    CHECK(s.poll(&out, &cancelled) && cancelled, "pad B on an empty text is a cancel");
+    s.open("ID online", "ab", 16);
+    s.type("c");
+    s.confirm();
+    CHECK(s.poll(&out, nullptr) && out == "abc", "the flag is optional");
+}
+
 int main() {
+    poll_reports_cancel();
     b_on_empty_text_cancels();
     b_on_text_deletes_one();
     confirm_returns_typed_text();

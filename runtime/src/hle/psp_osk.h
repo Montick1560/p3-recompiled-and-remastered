@@ -106,6 +106,16 @@ uint32_t field_max_length(uint32_t outtextlength, uint32_t outtextlimit);
 std::string complete(uint8_t* rdram, size_t ram_size, uint32_t params_addr,
                      const std::string& text);
 
+// The player backed out of the keyboard (Esc, or pad B on an empty text):
+// base.result = 1 (pspUtilityDialogCommon CANCEL), fields[0].result =
+// RESULT_CANCELLED, params state = STATE_FINISHED; the text buffer is left
+// alone. PPSSPP reports a cancelled input box as CHANGED with the initial
+// text ("Untested"); Patapon 3 returns base.result as its keyboard status
+// and goes back only on 1, so that answer re-ran the online-id search
+// (beta report #17). Same pointer checks as complete().
+// Returns: field0 desc="<desc as utf8>" cancelled.
+std::string cancel(uint8_t* rdram, size_t ram_size, uint32_t params_addr);
+
 // What a keyboard UI shows for field 0: its title (desc), the current text
 // (intext, also the result of a cancel, PPSSPP) and the character limit of
 // the output field. False when the params/fields pointers are invalid.

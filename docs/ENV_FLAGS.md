@@ -484,9 +484,22 @@ launcher's Saves screen sets this variable. Unset or missing save: the newest, a
 - **Default:** unset: the on-screen keyboard text box is shown.
 - **Effect:** When set (scripted/automated runs), no text box is shown: the OSK
   dialog's RUNNING poll completes field 0 at once with this text (UTF-8 converted
-  to UTF-16LE, truncated to the field limit, field result `CHANGED`). Without a
+  to UTF-16LE, truncated to the field limit, field result `CHANGED`). In the text
+  box, Esc and pad B on an empty text answer CANCEL instead (`PSPRECOMP_OSK_CANCEL`). Without a
   window the same fallback is used with `Hero`. Logged as `[HLE] sceUtilityOsk: ...`.
 - **Set it when:** driving the game with scripts (tools/to_square.py, flow.py).
+
+### `PSPRECOMP_OSK_CANCEL`
+- **Read in:** `runtime/src/hle/psp_hle_utility.cpp` (`osk_scripted_cancel`).
+- **Type:** env (`1` on; anything else or unset = off).
+- **Default:** off.
+- **Effect:** Scripted back-out: no text box is shown and every on-screen keyboard
+  is cancelled at once, the same answer the text box gives for Esc or pad B on an
+  empty text: `pspUtilityDialogCommon.result` = 1 (CANCEL), field result
+  `CANCELLED`, text buffer untouched (`psp_osk::cancel`). Takes precedence over
+  `PSPRECOMP_OSK_TEXT`. Logged as `[HLE] sceUtilityOsk: field0 desc="..." cancelled`.
+- **Set it when:** checking with a script that a game leaves its keyboard screen
+  when the player backs out (Patapon 3 search by online id, beta report #17).
 
 ### `PSPRECOMP_OSK_FONT`
 - **Read in:** `runtime/src/psp_osk_overlay.cpp` (first time the text box is drawn).
