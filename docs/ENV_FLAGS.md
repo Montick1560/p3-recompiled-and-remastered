@@ -565,7 +565,9 @@ launcher's Saves screen sets this variable. Unset or missing save: the newest, a
   join/leave, signaling and the relay of the game's P2P sockets. Nothing connects until the player picks
   infrastructure mode; with `off` the netconf dialog aborts infrastructure actions as before. A malformed value
   is logged and means `off`. Logged as `[INFRA] connected to ... virtual IP 10.80.0.n`, `[INFRA] connection lost: ...`,
-  `[NP2] 0x0106 req N ok`, `[NP2] room event 0x1101 ...`.
+  `[NP2] 0x0106 req N ok`, `[NP2] room event 0x1101 ...`. At the end of a session (and on a lost connection) one
+  `[INFRA] link: N pings, p50 X ms, p95 Y ms, max Z ms, S slow, longest gap G ms` line gives the relay link's
+  numbers; the same numbers go to the server as `link_stats` every minute and before a disconnect (no address).
 - **Set it when:** testing with a local server (`python -I tools/infra_server.py`, then `tcp://127.0.0.1` or
   `ws://127.0.0.1:27321/infra`), or playing on another server.
 

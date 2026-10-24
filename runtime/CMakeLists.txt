@@ -199,6 +199,7 @@ set(RUNTIME_SOURCES
     src/net/relay_conn.cpp
     src/net/infra_protocol.cpp
     src/net/infra_client.cpp
+    src/net/link_stats.cpp
     src/net/infra_stats.cpp
     src/net/np2_structs.cpp
     src/net/np2_rooms.cpp
@@ -972,6 +973,13 @@ target_include_directories(test_paced_step PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/i
 target_compile_options(test_paced_step PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME paced_step_tests COMMAND test_paced_step)
 
+# Relay-link telemetry of an infrastructure session (link_stats).
+add_executable(test_link_stats tests/test_link_stats.cpp src/net/link_stats.cpp)
+target_include_directories(test_link_stats PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                           ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
+target_compile_options(test_link_stats PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME link_stats_tests COMMAND test_link_stats)
+
 add_executable(test_once_per_count tests/test_once_per_count.cpp)
 target_include_directories(test_once_per_count PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_once_per_count PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
@@ -1083,6 +1091,7 @@ add_test(NAME infra_protocol_tests COMMAND test_infra_protocol)
 
 # Infrastructure-mode client against an in-process fake server.
 add_executable(test_infra_client tests/test_infra_client.cpp src/net/infra_client.cpp src/net/infra_stats.cpp
+               src/net/link_stats.cpp
                src/net/infra_protocol.cpp src/net/relay_conn.cpp src/net/relay_protocol.cpp)
 target_include_directories(test_infra_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
                            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
@@ -1092,6 +1101,7 @@ add_test(NAME infra_client_tests COMMAND test_infra_client)
 
 # PSPRECOMP_INFRA_STATS network event CSV, and the queue age a pop reports.
 add_executable(test_infra_stats tests/test_infra_stats.cpp src/net/infra_stats.cpp src/net/infra_client.cpp
+               src/net/link_stats.cpp
                src/net/infra_protocol.cpp src/net/relay_conn.cpp src/net/relay_protocol.cpp)
 target_include_directories(test_infra_stats PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
                            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)

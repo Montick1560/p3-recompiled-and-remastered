@@ -537,6 +537,118 @@ static void outbox_reconnect_after_loss() {
     CHECK(destroyed == 1, "still one room_destroyed");
 }
 
+static std::vector<nlohmann::json> link_frames(FakeInfraServer& s) {
+    std::lock_guard<std::mutex> l(s.mu);
+    std::vector<nlohmann::json> v;
+    for (const auto& f : s.got)
+        if (f.kind == infra::kKindJson && f.json.value("op", "") == "link_stats") v.push_back(f.json);
+    return v;
+}
+
+// The session's link numbers go to the server before a disconnect; a server that never answers
+// holds the disconnect 1 s at most.
+static void link_stats_sent_on_disconnect() {
+    FakeInfraServer s;
+    s.answer_link_stats = false;  // never answered
+    s.start();
+    infra::Client::Options o = fast();
+    o.ping_interval_ms = 50;
+    infra::Client c(s.address(), o);
+    CHECK(c.connect("P3A", 2000), "connect");
+    CHECK(wait_until([&] { return c.link_summary().pings >= 3; }, 2000), "three pings answered");
+    const auto t = Clock::now();
+    c.disconnect();
+    const long took = ms_since(t);
+    CHECK(took <= 1500, "disconnect within 1.5 s with an unanswered link_stats");
+    const auto v = link_frames(s);
+    CHECK(v.size() == 1, "one link_stats frame");
+    if (v.empty()) return;
+    const nlohmann::json& j = v[0];
+    CHECK(j.value("pings", 0) >= 3, "carries the answered pings");
+    bool keys = true;
+    for (const char* k : {"pings", "slow_pings", "rtt_p50", "rtt_p95", "rtt_max", "max_rx_gap_ms"})
+        keys &= j.contains(k) && j[k].is_number_integer();
+    CHECK(keys, "all six numbers");
+    CHECK(!j.contains("addr") && !j.contains("ip") && j.size() == 8, "op, id and the six numbers only");
+}
+
+static void no_link_stats_after_loss() {
+    FakeInfraServer s;
+    s.start();
+    infra::Client::Options o = fast();
+    o.ping_interval_ms = 50;
+    infra::Client c(s.address(), o);
+    CHECK(c.connect("P3A", 2000), "connect");
+    CHECK(wait_until([&] { return c.link_summary().pings >= 2; }, 2000), "pings answered");
+    s.close_client();
+    CHECK(wait_until([&] { return !c.connected(); }, 2000), "loss seen");
+    c.disconnect();
+    CHECK(link_frames(s).empty(), "a lost connection sends no link_stats");
+}
+
+static void no_link_stats_without_pings() {
+    FakeInfraServer s;
+    s.answer_pings = false;
+    s.start();
+    infra::Client c(s.address(), fast());
+    CHECK(c.connect("P3A", 2000), "connect");
+    sleep_ms(150);
+    const auto t = Clock::now();
+    c.disconnect();
+    CHECK(ms_since(t) < 500, "nothing to report: disconnect does not wait");
+    CHECK(link_frames(s).empty(), "no link_stats without an answered ping");
+}
+
+// Players often close the window instead of leaving online: the numbers are also refreshed while
+// connected (the server overwrites the session's row).
+static void link_stats_refreshed_while_connected() {
+    FakeInfraServer s;
+    s.start();
+    infra::Client::Options o = fast();
+    o.ping_interval_ms = 50;
+    o.link_report_ms = 200;
+    infra::Client c(s.address(), o);
+    CHECK(c.connect("P3A", 2000), "connect");
+    CHECK(wait_until([&] { return link_frames(s).size() >= 2; }, 2000), "refreshed every link_report_ms");
+    c.disconnect();
+}
+
+// A server without op_link_stats (BAD_REQUEST) is not asked again in that session.
+static void link_stats_stop_on_old_server() {
+    FakeInfraServer s;
+    s.answer_link_stats = false;
+    s.on_frame = [](FakeInfraServer& srv, const infra::Frame& f) {
+        if (f.json.value("op", "") == "link_stats")
+            srv.send_json({{"id", f.json["id"]}, {"ok", false}, {"error", 0x80550D01u}});
+    };
+    s.start();
+    infra::Client::Options o = fast();
+    o.ping_interval_ms = 50;
+    o.link_report_ms = 100;
+    infra::Client c(s.address(), o);
+    CHECK(c.connect("P3A", 2000), "connect");
+    CHECK(wait_until([&] { return link_frames(s).size() >= 1; }, 2000), "first report");
+    sleep_ms(500);
+    c.disconnect();
+    CHECK(link_frames(s).size() == 1, "refused once, never sent again");
+}
+
+// The gap counts from the oldest unanswered ping, not from the previous frame: on a quiet link a
+// ping answer after 100 ms is a 100 ms gap, not the ping interval.
+static void link_gap_counts_from_the_ping() {
+    FakeInfraServer s;
+    s.ping_delay_ms = 100;
+    s.start();
+    infra::Client::Options o = fast();
+    o.ping_interval_ms = 800;
+    infra::Client c(s.address(), o);
+    CHECK(c.connect("P3A", 2000), "connect");
+    CHECK(wait_until([&] { return c.link_summary().pings >= 3; }, 4000), "three pings answered");
+    const infra::LinkSummary l = c.link_summary();
+    CHECK(l.max_rx_gap_ms >= 90 && l.max_rx_gap_ms < 400, "gap near the ping delay, not the interval");
+    CHECK(l.rtt_p50 >= 90 && l.rtt_max < 400, "RTTs near the ping delay");
+}
+
 // Optional: INFRA_WS_URL=ws://127.0.0.1:27321/infra with tools/infra_server.py
 // running exercises the WebSocket transport against the real server.
 static void ws_against_real_server() {
@@ -575,6 +687,12 @@ int main() {
     outbox_drops_oldest_datagrams();
     disconnect_unblocks_writer();
     outbox_reconnect_after_loss();
+    link_stats_sent_on_disconnect();
+    no_link_stats_after_loss();
+    no_link_stats_without_pings();
+    link_stats_refreshed_while_connected();
+    link_stats_stop_on_old_server();
+    link_gap_counts_from_the_ping();
     ws_against_real_server();
     if (failures) {
         std::printf("%d failure(s)\n", failures);

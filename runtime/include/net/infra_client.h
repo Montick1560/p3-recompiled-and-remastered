@@ -22,6 +22,7 @@
 
 #include "json.hpp"
 #include "net/infra_protocol.h"
+#include "net/link_stats.h"
 
 namespace infra {
 
@@ -70,6 +71,7 @@ public:
     struct Options {
         int ping_interval_ms = 2000;
         int dead_after_ms = 10000;  // no frame from the server for this long -> connection lost
+        int link_report_ms = 60000;  // link_stats refresh while connected (the server overwrites the row)
         // Makes the transport of each connection; empty -> make_transport (tests inject slow ones).
         std::function<std::unique_ptr<Transport>(Address::Kind)> transport_factory;
     };
@@ -124,6 +126,7 @@ public:
     size_t queued_stream_bytes() const;
 
     int rtt_ms() const;  // median of the last 5 pings, -1 before the first answer
+    LinkSummary link_summary() const { return link_.summary(); }  // this session's relay-link numbers
     uint32_t vip() const { return vip_; }
     std::string session() const;
     std::string online_id() const;
@@ -148,6 +151,10 @@ private:
     void send(Outgoing o);
     void on_json(const nlohmann::json& j);
     void lost(const char* why);
+    // Sends this session's link numbers as link_stats; false (done not run) when there is
+    // nothing to report or the server refused the op before (an old server).
+    bool report_link(Done done, int timeout_ms);
+    void log_link() const;
     void fail(Done& done);
 
     Address addr_;
@@ -171,6 +178,9 @@ private:
     std::deque<Datagram> streams_;
     size_t queued_bytes_ = 0, stream_bytes_ = 0;
     std::deque<int> rtts_;
+    LinkStats link_;
+    std::multiset<int64_t> pings_out_;  // send times (now_ms) of the unanswered pings
+    std::atomic<bool> link_refused_{false};
     std::string session_, online_id_;
     std::set<int64_t> rooms_;  // joined rooms (hideout + VS), for the room_destroyed synthesised on loss
 };

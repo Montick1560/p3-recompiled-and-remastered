@@ -14,7 +14,7 @@
 
 inline void fake_sleep_ms(int ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
 
-// One-connection fake server. Answers login and ping by itself; every other
+// One-connection fake server. Answers login, ping and link_stats by itself; every other
 // frame goes to on_frame (on the server thread).
 struct FakeInfraServer {
     int listen_fd = -1, client = -1;
@@ -24,6 +24,7 @@ struct FakeInfraServer {
     std::function<void(FakeInfraServer&, const infra::Frame&)> on_frame;
     int ping_delay_ms = 0;
     bool answer_pings = true;
+    bool answer_link_stats = true;  // false: link_stats goes to on_frame like any other request
     uint32_t vip = 0x0A500003;
     std::mutex mu;
     std::vector<infra::Frame> got;
@@ -85,6 +86,8 @@ struct FakeInfraServer {
                         if (!answer_pings) continue;
                         if (ping_delay_ms) fake_sleep_ms(ping_delay_ms);
                         send_json({{"id", f.json["id"]}, {"ok", true}, {"t", f.json["t"]}});
+                    } else if (op == "link_stats" && answer_link_stats) {
+                        send_json({{"id", f.json["id"]}, {"ok", true}});
                     } else if (on_frame) {
                         on_frame(*this, f);
                     }

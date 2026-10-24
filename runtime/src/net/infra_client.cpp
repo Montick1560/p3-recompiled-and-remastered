@@ -23,6 +23,9 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
+constexpr uint32_t kErrBadRequest = 0x80550D01;  // tools/infra_server.py BAD_REQUEST (unknown op on old servers)
+constexpr int kLinkStatsWaitMs = 750;  // disconnect waits this long at most for the link_stats answer
+
 int64_t now_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
 }
@@ -265,6 +268,9 @@ bool Client::connect(const std::string& online_id, int timeout_ms, const nlohman
         std::lock_guard<std::mutex> lock(mu_);
         rooms_.clear();
         rtts_.clear();
+        pings_out_.clear();
+        link_.reset();
+        link_refused_ = false;
         connected_ = true;
     }
     {
@@ -317,6 +323,27 @@ bool Client::connect(const std::string& online_id, int timeout_ms, const nlohman
 
 void Client::disconnect() {
     std::lock_guard<std::mutex> clock(connect_mu_);
+    if (connected_) {
+        log_link();
+        // The session's numbers go out first; the answer (or a lost connection) ends the wait early.
+        struct Wait {
+            std::mutex mu;
+            std::condition_variable cv;
+            bool done = false;
+        };
+        auto w = std::make_shared<Wait>();
+        const bool sent = report_link(
+            [w](const nlohmann::json&) {
+                std::lock_guard<std::mutex> l(w->mu);
+                w->done = true;
+                w->cv.notify_all();
+            },
+            kLinkStatsWaitMs);
+        if (sent) {
+            std::unique_lock<std::mutex> l(w->mu);
+            w->cv.wait_for(l, std::chrono::milliseconds(kLinkStatsWaitMs), [&] { return w->done; });
+        }
+    }
     lost("disconnect");  // closing the transport also unblocks a writer stuck in a send
     if (reader_.joinable()) reader_.join();
     if (ticker_.joinable()) ticker_.join();
@@ -352,11 +379,35 @@ void Client::lost(const char* why) {
     }
     out_cv_.notify_all();
     if (transport_) transport_->close();
-    if (std::strcmp(why, "disconnect") != 0) std::fprintf(stderr, "[INFRA] connection lost: %s\n", why);
+    if (std::strcmp(why, "disconnect") != 0) {
+        std::fprintf(stderr, "[INFRA] connection lost: %s\n", why);
+        log_link();  // a lost connection sends nothing; the numbers stay in the log
+    }
     for (auto& [id, p] : pending) fail(p.done);
     if (fn)
         for (int64_t room : rooms)
             fn(nlohmann::json{{"ev", "room_destroyed"}, {"room_id", room}, {"cause", kCauseConnectionError}});
+}
+
+bool Client::report_link(Done done, int timeout_ms) {
+    const LinkSummary s = link_.summary();
+    if (s.pings == 0 || link_refused_) return false;  // -1 percentiles carry nothing; old server
+    nlohmann::json req = to_json(s);
+    req["op"] = "link_stats";
+    request(std::move(req),
+            [this, done](const nlohmann::json& j) {
+                if (!j.value("ok", false) && j.value("error", 0u) == kErrBadRequest) link_refused_ = true;
+                if (done) done(j);
+            },
+            timeout_ms);
+    return true;
+}
+
+void Client::log_link() const {
+    const LinkSummary s = link_.summary();
+    if (s.pings == 0) return;
+    std::fprintf(stderr, "[INFRA] link: %d pings, p50 %d ms, p95 %d ms, max %d ms, %d slow, longest gap %d ms\n",
+                 s.pings, s.rtt_p50, s.rtt_p95, s.rtt_max, s.slow_pings, s.max_rx_gap_ms);
 }
 
 void Client::send(Outgoing o) {
@@ -542,7 +593,14 @@ void Client::reader() {
             return;
         }
         if (bytes.empty()) continue;
-        last_rx_ms_ = now_ms();
+        const int64_t rx = now_ms();
+        {
+            // A stall while a ping is out: count from the later of the previous frame and the oldest ping.
+            std::lock_guard<std::mutex> lock(mu_);
+            if (!pings_out_.empty())
+                link_.rx_gap(static_cast<int>(rx - std::max<int64_t>(last_rx_ms_, *pings_out_.begin())));
+        }
+        last_rx_ms_ = rx;
         r.feed(bytes.data(), bytes.size());
         Frame f;
         while (r.next(&f)) {
@@ -589,7 +647,7 @@ void Client::reader() {
 }
 
 void Client::ticker() {
-    int64_t last_ping = 0;
+    int64_t last_ping = 0, last_report = now_ms();
     while (running_) {
         {
             std::unique_lock<std::mutex> lock(mu_);
@@ -624,14 +682,26 @@ void Client::ticker() {
         }
         if (t - last_ping >= opt_.ping_interval_ms) {
             last_ping = t;
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                pings_out_.insert(t);
+            }
             request({{"op", "ping"}, {"t", t}},
                     [this, t](const nlohmann::json& j) {
-                        if (!j.value("ok", false)) return;
                         std::lock_guard<std::mutex> lock(mu_);
-                        rtts_.push_back(static_cast<int>(now_ms() - t));
+                        auto it = pings_out_.find(t);
+                        if (it != pings_out_.end()) pings_out_.erase(it);
+                        if (!j.value("ok", false)) return;
+                        const int rtt = static_cast<int>(now_ms() - t);
+                        rtts_.push_back(rtt);
                         if (rtts_.size() > 5) rtts_.pop_front();
+                        link_.ping_rtt(rtt);
                     },
                     opt_.dead_after_ms);
+        }
+        if (opt_.link_report_ms > 0 && t - last_report >= opt_.link_report_ms) {
+            last_report = t;
+            report_link(nullptr, opt_.dead_after_ms);  // fire and forget: the server overwrites the row
         }
     }
 }
