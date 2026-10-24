@@ -4,6 +4,7 @@
 #include "hle/psp_savedata.h"
 #include "psp_gamedata_install.h"
 #include "psp_host_io.h"
+#include "psp_log.h"
 #include "psp_memory.h"
 #include "psp_scheduler.h"
 #include "recomp.h"
@@ -375,8 +376,10 @@ static void hle_sceIoClose(
     uint8_t* rdram, recomp_context* ctx
 ) {
     int fd = ctx->r[4];
-    std::fprintf(stderr, "[HLE] sceIoClose(fd=%d) caller=0x%08X\n",
-        fd, g_last_func_addr);
+    if (psp_log_verbose()) {
+        std::fprintf(stderr, "[HLE] sceIoClose(fd=%d) caller=0x%08X\n",
+            fd, g_last_func_addr);
+    }
     auto it = g_fd_table.find(fd);
     if (it != g_fd_table.end()) {
         if (it->second.host_fd >= 0) {
@@ -514,13 +517,15 @@ static void hle_sceIoLseek(
     uint8_t* rdram, recomp_context* ctx
 ) {
     int fd = ctx->r[4];
-    std::fprintf(stderr,
-        "[IO_DIAG] sceIoLseek(fd=%d, r4=%d, r5=%d, offset=0x%08X:%08X, whence=%d) "
-        "caller=0x%08X sp=0x%08X\n",
-        fd, (int)ctx->r[4], (int)ctx->r[5],
-        (uint32_t)ctx->r[7], (uint32_t)ctx->r[6],
-        (int32_t)ctx->r[8], g_last_func_addr,
-        (uint32_t)ctx->r[29]);
+    if (psp_log_verbose()) {
+        std::fprintf(stderr,
+            "[IO_DIAG] sceIoLseek(fd=%d, r4=%d, r5=%d, offset=0x%08X:%08X, whence=%d) "
+            "caller=0x%08X sp=0x%08X\n",
+            fd, (int)ctx->r[4], (int)ctx->r[5],
+            (uint32_t)ctx->r[7], (uint32_t)ctx->r[6],
+            (int32_t)ctx->r[8], g_last_func_addr,
+            (uint32_t)ctx->r[29]);
+    }
     // PSP calling convention for sceIoLseek (64-bit offset):
     //   a0 (r4) = fd
     //   a1 (r5) = NOT used (no 64-bit alignment padding in PSP ABI for this call)
@@ -563,9 +568,11 @@ static void hle_sceIoLseek(
     // delivering the correct asset bytes instead of the container header.
     off_t pos = slice_aware_lseek(it->second, offset, posix_whence);
 
-    std::fprintf(stderr,
-        "[IO_DIAG] sceIoLseek(fd=%d, whence=%d) -> pos=%lld (0x%llX)\n",
-        fd, whence, (long long)pos, (unsigned long long)pos);
+    if (psp_log_verbose()) {
+        std::fprintf(stderr,
+            "[IO_DIAG] sceIoLseek(fd=%d, whence=%d) -> pos=%lld (0x%llX)\n",
+            fd, whence, (long long)pos, (unsigned long long)pos);
+    }
 
     // Return 64-bit position in v0:v1
     ctx->r[2] = static_cast<int32_t>(pos & 0xFFFFFFFF);
@@ -979,9 +986,11 @@ static void hle_sceIoReadAsync(
     uint32_t buf_ptr = static_cast<uint32_t>(ctx->r[5]);
     uint32_t size = static_cast<uint32_t>(ctx->r[6]);
 
-    std::fprintf(stderr,
-        "[HLE] sceIoReadAsync(fd=%d, buf=0x%08X, size=%u)\n",
-        fd, buf_ptr, size);
+    if (psp_log_verbose()) {
+        std::fprintf(stderr,
+            "[HLE] sceIoReadAsync(fd=%d, buf=0x%08X, size=%u)\n",
+            fd, buf_ptr, size);
+    }
 
     auto it = g_fd_table.find(fd);
     if (it == g_fd_table.end()) {
@@ -1015,7 +1024,9 @@ static void hle_sceIoCloseAsync(
     uint8_t* rdram, recomp_context* ctx
 ) {
     int fd = ctx->r[4];
-    std::fprintf(stderr, "[HLE] sceIoCloseAsync(fd=%d)\n", fd);
+    if (psp_log_verbose()) {
+        std::fprintf(stderr, "[HLE] sceIoCloseAsync(fd=%d)\n", fd);
+    }
     auto it = g_fd_table.find(fd);
     if (it != g_fd_table.end()) {
         if (it->second.host_fd >= 0) {
@@ -1042,9 +1053,11 @@ static void hle_sceIoLseekAsync(
     uint32_t offset_hi = static_cast<uint32_t>(ctx->r[7]);
     int32_t whence = static_cast<int32_t>(ctx->r[8]);
 
-    std::fprintf(stderr,
-        "[HLE] sceIoLseekAsync(fd=%d, offset=0x%08X%08X, whence=%d)\n",
-        fd, offset_hi, offset_lo, whence);
+    if (psp_log_verbose()) {
+        std::fprintf(stderr,
+            "[HLE] sceIoLseekAsync(fd=%d, offset=0x%08X%08X, whence=%d)\n",
+            fd, offset_hi, offset_lo, whence);
+    }
 
     auto it = g_fd_table.find(fd);
     if (it == g_fd_table.end()) {
@@ -1064,10 +1077,12 @@ static void hle_sceIoLseekAsync(
     if (whence == PSP_SEEK_END) posix_whence = SEEK_END;
 
     off_t pos = slice_aware_lseek(it->second, offset, posix_whence);
-    std::fprintf(stderr,
-        "[HLE] sceIoLseekAsync: fd=%d host_fd=%d offset=%lld whence=%d -> pos=%lld asyncPending_before=%d\n",
-        fd, it->second.host_fd, (long long)offset, posix_whence,
-        (long long)pos, (int)it->second.asyncPending);
+    if (psp_log_verbose()) {
+        std::fprintf(stderr,
+            "[HLE] sceIoLseekAsync: fd=%d host_fd=%d offset=%lld whence=%d -> pos=%lld asyncPending_before=%d\n",
+            fd, it->second.host_fd, (long long)offset, posix_whence,
+            (long long)pos, (int)it->second.asyncPending);
+    }
     it->second.asyncResult = static_cast<int64_t>(pos);
     it->second.asyncPending = true;
     // Do NOT call notify_fd_callback or sched_yield_point here.
@@ -1087,9 +1102,11 @@ static void hle_sceIoLseek32Async(
     int32_t offset = static_cast<int32_t>(ctx->r[5]);
     int32_t whence = static_cast<int32_t>(ctx->r[6]);
 
-    std::fprintf(stderr,
-        "[HLE] sceIoLseek32Async(fd=%d, offset=0x%08X, whence=%d)\n",
-        fd, offset, whence);
+    if (psp_log_verbose()) {
+        std::fprintf(stderr,
+            "[HLE] sceIoLseek32Async(fd=%d, offset=0x%08X, whence=%d)\n",
+            fd, offset, whence);
+    }
 
     auto it = g_fd_table.find(fd);
     if (it == g_fd_table.end()) {
@@ -1131,18 +1148,22 @@ static void hle_sceIoPollAsync(
 
     auto it = g_fd_table.find(fd);
     if (it != g_fd_table.end() && res_ptr != 0) {
-        std::fprintf(stderr,
-            "[IO_DIAG] PollAsync fd=%d asyncResult=%lld asyncPending=%d\n",
-            fd, (long long)it->second.asyncResult,
-            (int)it->second.asyncPending);
+        if (psp_log_verbose()) {
+            std::fprintf(stderr,
+                "[IO_DIAG] PollAsync fd=%d asyncResult=%lld asyncPending=%d\n",
+                fd, (long long)it->second.asyncResult,
+                (int)it->second.asyncPending);
+        }
         psp_mem_write<int64_t>(rdram, res_ptr,
                                it->second.asyncResult);
         it->second.asyncPending = false;
 
         // If close was pending, free the fd now
         if (it->second.closePending) {
-            std::fprintf(stderr,
-                "[HLE] sceIoPollAsync: erasing fd=%d (closePending)\n", fd);
+            if (psp_log_verbose()) {
+                std::fprintf(stderr,
+                    "[HLE] sceIoPollAsync: erasing fd=%d (closePending)\n", fd);
+            }
             g_fd_table.erase(it);
         }
     }
@@ -1170,10 +1191,12 @@ static void hle_sceIoWaitAsync(
             g_fd_table.erase(it);
         }
     }
-    std::fprintf(stderr,
-        "[HLE] sceIoWaitAsync(fd=%d, res_ptr=0x%08X) -> "
-        "result=0x%llX\n",
-        fd, res_ptr, (unsigned long long)result);
+    if (psp_log_verbose()) {
+        std::fprintf(stderr,
+            "[HLE] sceIoWaitAsync(fd=%d, res_ptr=0x%08X) -> "
+            "result=0x%llX\n",
+            fd, res_ptr, (unsigned long long)result);
+    }
     ctx->r[2] = SCE_OK;
     sched_yield_point();
 }
@@ -1274,12 +1297,14 @@ static void hle_sceIoSetAsyncCallback(
         // subsequent sceIoSetAsyncCallback calls (to prepare
         // for the next async operation) don't re-fire for
         // the same completed operation.
-        std::fprintf(stderr,
-            "[HLE] sceIoSetAsyncCallback(fd=%d) asyncPending=%d "
-            "callbackId=%d callbackArg=0x%X -> notifying=%d\n",
-            fd, it->second.asyncPending ? 1 : 0,
-            callbackId, callbackArg,
-            (it->second.asyncPending && callbackId != 0) ? 1 : 0);
+        if (psp_log_verbose()) {
+            std::fprintf(stderr,
+                "[HLE] sceIoSetAsyncCallback(fd=%d) asyncPending=%d "
+                "callbackId=%d callbackArg=0x%X -> notifying=%d\n",
+                fd, it->second.asyncPending ? 1 : 0,
+                callbackId, callbackArg,
+                (it->second.asyncPending && callbackId != 0) ? 1 : 0);
+        }
         if (it->second.asyncPending && callbackId != 0) {
             it->second.asyncPending = false;
             psp_kernel_notify_callback(callbackId, callbackArg);
@@ -1310,10 +1335,12 @@ static void hle_sceIoSetAsyncCallback(
         }
     }
 
-    std::fprintf(stderr,
-        "[HLE] sceIoSetAsyncCallback(fd=%d, cbId=%d, "
-        "cbArg=0x%X) caller=0x%08X\n",
-        fd, callbackId, callbackArg, g_last_func_addr);
+    if (psp_log_verbose()) {
+        std::fprintf(stderr,
+            "[HLE] sceIoSetAsyncCallback(fd=%d, cbId=%d, "
+            "cbArg=0x%X) caller=0x%08X\n",
+            fd, callbackId, callbackArg, g_last_func_addr);
+    }
 
     ctx->r[2] = SCE_OK;
     (void)rdram;
@@ -1451,9 +1478,11 @@ static void hle_sceIoIoctlAsync(
         it->second.asyncResult = 0;       // device-control success
         it->second.asyncPending = true;   // arm the completion callback
     }
-    std::fprintf(stderr,
-        "[HLE] sceIoIoctlAsync(fd=%d, cmd=0x%08X) -> asyncPending=1\n",
-        fd, static_cast<uint32_t>(ctx->r[5]));
+    if (psp_log_verbose()) {
+        std::fprintf(stderr,
+            "[HLE] sceIoIoctlAsync(fd=%d, cmd=0x%08X) -> asyncPending=1\n",
+            fd, static_cast<uint32_t>(ctx->r[5]));
+    }
     ctx->r[2] = SCE_OK;
     (void)rdram;
     // Do NOT notify here — sceIoSetAsyncCallback fires the callback when it

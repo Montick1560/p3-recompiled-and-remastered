@@ -1,5 +1,6 @@
 #include "hle/psp_atrac_ctx.h"
 #include "hle/psp_hle.h"
+#include "psp_log.h"
 #include "psp_memory.h"
 #include "recomp.h"
 
@@ -246,7 +247,7 @@ void hle_sceAtracDecodeData(uint8_t* rdram, recomp_context* ctx) {
     // First decodes + every 500th: samples written and output peak, to tell
     // "nothing decoded" from "decoded silence" when music is missing.
     static int decode_calls = 0;
-    if (++decode_calls <= 8 || decode_calls % 500 == 0) {
+    if (++decode_calls <= 8 || (psp_log_verbose() && decode_calls % 500 == 0)) {
         int peak = 0;
         if (outAddr != 0 && numSamplesWritten > 0) {
             for (int i = 0; i < numSamplesWritten * 2; i++) {

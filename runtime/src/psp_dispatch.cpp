@@ -297,8 +297,12 @@ FuncPtr psp_on_lookup_miss(uint32_t vaddr) {
     g_miss_total.fetch_add(1, std::memory_order_relaxed);
     if (count == 1) {
         g_miss_unique.fetch_add(1, std::memory_order_relaxed);
+        // The lookup has no context: the calling thread's registers give the
+        // return address (a jalr's call site, or the caller's caller for a jr).
+        PspThread* self = psp_get_current_thread();
         std::fprintf(stderr,
-            "[LOOKUP_MISS] addr=0x%08X (first hit)\n", vaddr);
+            "[LOOKUP_MISS] addr=0x%08X ra=0x%08X (first hit)\n", vaddr,
+            self ? static_cast<uint32_t>(self->ctx.r[31]) : 0u);
     }
 
     // Store for noop_stub context logging

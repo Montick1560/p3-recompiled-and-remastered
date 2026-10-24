@@ -2,6 +2,7 @@
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_kernel.h"
 #include "hle/psp_hle_refer_info.h"
+#include "psp_log.h"
 #include "psp_scheduler.h"
 #include "psp_memory.h"
 #include "recomp.h"
@@ -157,9 +158,11 @@ static void hle_sceKernelSetEventFlag(
     std::unique_lock<std::mutex> lock(ef->mtx);
     ef->pattern |= bits;
     ef->cv.notify_all();
-    std::fprintf(stderr,
-        "[HLE] sceKernelSetEventFlag(uid=%d '%s' bits=0x%08X) pattern=0x%08X\n",
-        uid, ef->name, bits, ef->pattern);
+    if (psp_log_verbose()) {
+        std::fprintf(stderr,
+            "[HLE] sceKernelSetEventFlag(uid=%d '%s' bits=0x%08X) pattern=0x%08X\n",
+            uid, ef->name, bits, ef->pattern);
+    }
     ctx->r[2] = SCE_OK;
     (void)rdram;
 }

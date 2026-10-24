@@ -60,14 +60,14 @@ static void sema_remove_waiter(PspSemaphore& s, SemaWaiter* w) {
     }
 }
 
-/// STUCK warning, rate-limited to once per uid per 30s.
+/// STUCK warning, once per uid (the audio semaphores wait for good between
+/// tracks and would repeat it all session).
 /// Caller must hold s.mtx.
 static void sema_warn_stuck(PspSemaphore& s, int uid, int32_t signal) {
-    auto now = std::chrono::steady_clock::now();
-    if (now - s.last_stuck_warn < std::chrono::seconds(30)) {
+    if (s.stuck_warned) {
         return;
     }
-    s.last_stuck_warn = now;
+    s.stuck_warned = true;
     std::fprintf(stderr,
         "[HLE] sceKernelWaitSema STUCK: uid=%d '%s' "
         "count=%d signal=%d (still waiting)\n",

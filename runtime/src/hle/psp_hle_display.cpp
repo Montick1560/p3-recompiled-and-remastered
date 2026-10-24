@@ -3,6 +3,7 @@
 #include "hle/psp_hle_intr.h"
 #include "psp_vblank_clock.h"
 #include "psp_vblank_hook.h"
+#include "psp_log.h"
 #include "psp_render_queue.h"
 #include "psp_scheduler.h"
 #include "psp_memory.h"
@@ -33,9 +34,11 @@ static void hle_sceDisplaySetFrameBuf(
     g_fb_stride = stride;
     g_fb_format = format;
 
-    std::fprintf(stderr,
-        "[HLE] sceDisplaySetFrameBuf(0x%08X, %u, %u)\n",
-        fb_addr, stride, format);
+    if (psp_log_verbose()) {
+        std::fprintf(stderr,
+            "[HLE] sceDisplaySetFrameBuf(0x%08X, %u, %u)\n",
+            fb_addr, stride, format);
+    }
 
     // Fast-forward (loading screens): at most one present per real display
     // period, so a vsynced swap does not pace the skipped frames.

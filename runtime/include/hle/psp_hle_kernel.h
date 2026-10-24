@@ -38,7 +38,7 @@ struct PspSemaphore {
     int wait_count = 0;
     bool deleted = false;
     std::deque<SemaWaiter*> waiters;  // FIFO; guarded by mtx
-    std::chrono::steady_clock::time_point last_stuck_warn{};
+    bool stuck_warned = false;  // STUCK logged once per uid
     std::mutex mtx;
     std::condition_variable cv;
 };

@@ -1,6 +1,7 @@
 #include "hle/psp_hle.h"
 #include "psp_render_queue.h"
 #include "psp_ge.h"
+#include "psp_log.h"
 #include "psp_scheduler.h"
 #include "psp_memory.h"
 #include "recomp.h"
@@ -20,9 +21,11 @@ static void hle_sceGeListEnQueue(
     uint32_t list_addr = static_cast<uint32_t>(ctx->r[4]);
     uint32_t stall_addr = static_cast<uint32_t>(ctx->r[5]);
 
-    std::fprintf(stderr,
-        "[HLE] sceGeListEnQueue(list=0x%08X, stall=0x%08X)\n",
-        list_addr, stall_addr);
+    if (psp_log_verbose()) {
+        std::fprintf(stderr,
+            "[HLE] sceGeListEnQueue(list=0x%08X, stall=0x%08X)\n",
+            list_addr, stall_addr);
+    }
 
     // Non-blocking: push to FIFO and return UID immediately.
     // The main thread will process the list via render_queue_process().

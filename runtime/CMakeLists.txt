@@ -1013,6 +1013,11 @@ target_include_directories(test_host_io PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/incl
 target_compile_options(test_host_io PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME host_io_tests COMMAND test_host_io)
 
+add_executable(test_log_verbose tests/test_log_verbose.cpp)
+target_include_directories(test_log_verbose PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME log_verbose_tests COMMAND test_log_verbose)
+set_tests_properties(log_verbose_tests PROPERTIES ENVIRONMENT "PSPRECOMP_LOG_VERBOSE=")
+
 add_executable(test_on_exit tests/test_on_exit.cpp)
 target_include_directories(test_on_exit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME on_exit_quick_tests COMMAND test_on_exit --quick)

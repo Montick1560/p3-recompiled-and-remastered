@@ -687,6 +687,7 @@ flags toggle individual experimental fixes/band-aids in the Patapon game module.
 | `PSPRECOMP_HLE_TRACE` | `runtime/src/hle/psp_hle_dispatch.cpp` (declared `runtime/include/hle/psp_hle.h`); used by `scripts/diff_traces.sh` | `=1` | Every HLE call logs thread name + function name to stderr. Used to produce the runtime trace for the PPSSPP differential. |
 | `PSPRECOMP_SEMA_TRACE` | `runtime/src/hle/psp_hle_kernel_sema.cpp` | `=1` | Gates the per-call WaitSema/Signal logs (≈1 GB/min during stalls) behind a flag. |
 | `PSPRECOMP_OVERLAY_TRACE` | `runtime/src/psp_dispatch.cpp` | `=1` | Logs the first 64 overlay-window lookups and their bank-resolution status. |
+| `PSPRECOMP_LOG_VERBOSE` | `runtime/include/psp_log.h` (read once) | `=1` | Restores the per-frame and per-call lines that are off by default: `sceGeListEnQueue`, `sceDisplaySetFrameBuf`, `sceKernelSetEventFlag`, every 500th `[ATRAC] decode`, the per-call async IO lines (`sceIoReadAsync`, `PollAsync`, `WaitAsync`, `SetAsyncCallback`, `Lseek`, `Close`...). Without it an idle hideout logs under 100 lines a minute. |
 
 > `PSPRECOMP_SPLEAK` no longer exists — the shadow-stack sp-leak detector it
 > gated was a Patapon-tuned probe deleted in issue #47 Phase 5
