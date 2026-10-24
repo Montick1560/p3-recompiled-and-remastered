@@ -56,8 +56,10 @@ console late and in bursts, so the consoles drift apart. The boss's "come out" s
 
 ## Anti-goals (a failure even if it "works")
 
-- Any real IP in logs, crash/beta reports, the server database, the launcher UI, or sent to a player outside the
-  room.
+- Any address this feature handles (candidates, peer addresses, STUN results) in a log, crash/beta report, the
+  server database or the launcher UI, or sent to a player outside the room. The server's operator log keeps
+  today's line with each connection's own address. That line is outside this rule, but direct-path lines never add
+  an address.
 - Accepting any packet on the direct socket that is not authenticated with the pair's current key, or replying to
   one. A reply to an unauthenticated packet is an amplification/reflection vector.
 - Sending game traffic to an address that has not proven it holds the pair key.
@@ -260,8 +262,8 @@ emulation on the relay baseline):
   disconnect; frames over 100 ms ≤ 1 per instance outside the 4 s detection window.
 - Opt-out client, old client (protocol 2), server `direct: false`: everything over the relay as today; 30 fps
   rt_regress PASS; ad hoc smoke OK.
-- Security tests (rule 11) green. A grep of every log, report and server DB written during the lab run finds no
-  IPv4 address except 127.0.0.1 and the STUN servers' configured names.
+- Security tests (rule 11) green. A grep of every client log, report and the server DB written during the lab
+  run finds no IPv4 address except 127.0.0.1 and 0.0.0.0. The server log's direct-path lines carry none.
 
 Field (beta, Phase 3):
 - Telemetry shows the direct success rate per night and RTT direct vs relay.
