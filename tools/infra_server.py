@@ -1068,7 +1068,9 @@ class Server:
         for m in room.members:
             self.send_json(m.conn, {"ev": "member_left", "room_id": room.id, "member": member.json(),
                                     "cause": cause, "opt": opt.hex()})
-            if m in told:
+            # SIGNALING_DEAD about a member that left goes to the owner only: a visitor's game answers it with a
+            # kick and "Se ha producido un error de red / Se ha disuelto el escondite" (beta 1, 23 Oct).
+            if m in told and m is room.owner:
                 self.signal(m.conn, room, member, SIG_DEAD)
         self.log("%s left room %d (cause %d, %d left)" % (conn.label(), room.id, cause, len(room.members)))
 
@@ -1375,6 +1377,12 @@ def selftest():
         left = cl.event(lambda x: x["ev"] == "member_left", what="member_left")
         assert left["member"]["member_id"] == 0x11 and left["cause"] == CAUSE_DISAPPEARED, left
     assert a.event(lambda x: x["ev"] == "signaling" and x["event"] == SIG_DEAD)["member_id"] == 0x11
+    # Visitors get member_left only: a SIGNALING_DEAD about a member that left made a visitor's game kick it, show
+    # "Se ha producido un error de red / Se ha disuelto el escondite" and leave (beta 1, 23 Oct; host unaffected).
+    for cl in (c, dd):
+        cl.pump(0.3)
+        dead = [x for x in cl.events if x["ev"] == "signaling" and x["event"] == SIG_DEAD]
+        assert not dead, ("visitor got SIGNALING_DEAD for a member that left", dead)
     a.ok("leave", room_id=room["id"], opt="")
     for cl in (c, dd):
         gone = cl.event(lambda x: x["ev"] == "room_destroyed", what="room_destroyed")
