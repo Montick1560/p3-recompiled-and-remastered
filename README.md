@@ -313,7 +313,9 @@ For lab runs the local server takes `--impair "delay=MS,jitter=MS,stall=PCT,stal
 connection waits the delay plus or minus the jitter, in order, and `stall` percent of them first hold that connection
 `stall_ms` more, as a TCP link does after a lost segment (it is refused together with `--beta`, so the public server
 never runs it). Each client reports its relay link (ping RTT p50/p95/max, pings over 250 ms, the longest receive gap)
-as `link_stats`, which a server with `--db` stores per session, without addresses.
+as `link_stats`, which a server with `--db` stores per session, without addresses. `--log FILE` also appends every
+server log line to a file. Each connection may send up to 1500 game datagrams per second (more are dropped and
+counted per session): at the beta a host with three visitors went over the earlier 400.
 
 ### Prerequisites
 

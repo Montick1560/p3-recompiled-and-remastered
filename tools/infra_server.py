@@ -42,7 +42,7 @@ MAX_FRAME = 64 * 1024        # kind + body; a bigger frame closes the connection
 MAX_TX = 1024 * 1024         # a client that does not read its queued output is dropped
 MAX_HEADER = 8 * 1024        # HTTP upgrade request
 MAX_DGRAM = 4096             # game datagram payload (the game sends up to 0x574)
-DGRAM_PER_S = 400
+DGRAM_PER_S = 1500           # per connection: a host with 3 peers sent over 400/s at the beta
 STREAM_BYTES_PER_S = 2 * 1024 * 1024  # game stream sockets (kind 3): over this the session is closed
 WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 ONLINE_ID = re.compile(r"[A-Za-z0-9_-]{3,16}")
@@ -89,6 +89,22 @@ OPS = {1: lambda a, b: a == b, 2: lambda a, b: a != b, 3: lambda a, b: a < b,
 
 def log(msg):
     print(time.strftime("%H:%M:%S"), msg, flush=True)
+
+
+def tee_sink(path, echo=None):
+    """An AsyncLog sink for --log: each line is appended to the file (kept across restarts), then echoed to the
+    console. The file is written first, so a console that fails still leaves the line on disk."""
+    f = open(path, "a", encoding="utf-8", buffering=1)
+    echo = echo or (lambda line: print(line, flush=True))
+
+    def sink(line):
+        try:
+            f.write(line + "\n")
+        except OSError:
+            pass
+        echo(line)
+    sink.close = f.close
+    return sink
 
 
 class AsyncLog:
@@ -1505,12 +1521,13 @@ def selftest():
     again = g.req("join", room_id=r["id"])
     assert not again["ok"] and again["error"] == ALREADY_JOINED, "one membership per room"
     h.event(lambda ev: ev["ev"] == "member_joined")
-    burst = b"".join(frame(2, struct.pack("<IHH", 0x0A500001, 1, 1) + b"d") for _ in range(500))
+    # A host in a full room (3 peers) sent over 400 datagrams/s at the beta: 1200 in one second all go through.
+    burst = b"".join(frame(2, struct.pack("<IHH", 0x0A500001, 1, 1) + b"d") for _ in range(DGRAM_PER_S + 200))
     g.send_raw_frame(burst)
     deadline = time.monotonic() + 0.5  # well inside --idle 1: H sends nothing meanwhile
     while time.monotonic() < deadline:
         h.pump(0.05)
-    assert 0 < len(h.dgrams) <= DGRAM_PER_S, "rate limit forwarded %d" % len(h.dgrams)
+    assert 1200 <= len(h.dgrams) <= DGRAM_PER_S, "rate limit forwarded %d" % len(h.dgrams)
     # G goes silent; H keeps pinging and sees G's session time out of the room.
     deadline = time.monotonic() + 3
     while not any(ev["ev"] == "member_left" for ev in h.events):
@@ -1628,6 +1645,29 @@ def selftest():
     assert len(got) >= 2001 and got[0].endswith(" line 0") and any("login P3Q" in l for l in got), got[:2]
     srv5.running = False
     th5.join(timeout=2)
+
+    # --log FILE: every line also goes to the file, appended across restarts, even when the console fails.
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "server.log")
+        echoed = []
+        first = tee_sink(path, echo=echoed.append)
+        alog = AsyncLog(sink=first)
+        alog("first run")
+        alog.flush(timeout=3)
+        first.close()
+
+        def broken(line):
+            raise OSError("console gone")
+        second = tee_sink(path, echo=broken)
+        alog = AsyncLog(sink=second)
+        alog("second run")
+        alog.flush(timeout=3)
+        second.close()
+        with open(path, encoding="utf-8") as f:
+            kept = f.read().splitlines()
+        assert len(kept) == 2 and kept[0].endswith(" first run") and kept[1].endswith(" second run"), kept
+        assert echoed == kept[:1], echoed
 
     # ---- VS: a player is in its hideout room and a VS room at once (up to 4 rooms), room flags ----
     srv = Server("127.0.0.1", 0, None, max_per_addr=16, logger=quiet)
@@ -2143,13 +2183,14 @@ def main():
                     help="seconds a member may take to bind its game socket before its peers get SIGNALING_DEAD")
     ap.add_argument("--beta", help="beta config (invite codes, window, minimum protocol); none = no gate")
     ap.add_argument("--db", help="SQLite file for beta metrics (sessions, rooms, events); none = no metrics")
+    ap.add_argument("--log", help="also append every log line to this file (the console keeps them too)")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
         return selftest()
     if args.impair and args.beta:
         ap.error("--impair is a lab option: never on the beta (public) server")
-    alog = AsyncLog()
+    alog = AsyncLog(sink=tee_sink(args.log) if args.log else None)
     srv = Server(args.host, args.port, args.ws_port, args.ws_path, args.max_rooms, args.idle, args.stats_every,
                  args.delay_ms, args.max_per_addr, signal_timeout=args.signal_timeout, loss=args.loss, logger=alog,
                  beta_path=args.beta, db_path=args.db, impair=args.impair)
