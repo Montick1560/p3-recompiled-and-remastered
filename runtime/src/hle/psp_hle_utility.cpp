@@ -1074,21 +1074,7 @@ static void hle_sceKernelCpuResumeIntr(
 }
 
 // ---- LoadExec ----
-
-static void hle_sceKernelExitGame(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    std::fprintf(stderr, "[HLE] sceKernelExitGame called\n");
-    ctx->r[2] = SCE_OK;
-    (void)rdram;
-}
-
-static void hle_sceKernelRegisterExitCallback(
-    uint8_t* rdram, recomp_context* ctx
-) {
-    ctx->r[2] = SCE_OK;
-    (void)rdram;
-}
+// sceKernelExitGame / sceKernelRegisterExitCallback: psp_hle_misc.cpp.
 
 // ---- Impose ----
 
@@ -2109,10 +2095,6 @@ void psp_hle_register_utility() {
                       hle_sceKernelCpuResumeIntr);
 
     // LoadExec
-    psp_hle_register("sceKernelExitGame",
-                      hle_sceKernelExitGame);
-    psp_hle_register("sceKernelRegisterExitCallback",
-                      hle_sceKernelRegisterExitCallback);
 
     // Impose
     psp_hle_register("sceImposeGetLanguageMode",

@@ -4,9 +4,11 @@
 // scePspNpDrm_user, sceKernel).
 
 #include "hle/psp_hle.h"
+#include "psp_exit.h"
 #include "psp_memory.h"
 #include "recomp.h"
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -158,6 +160,35 @@ static void test_returns() {
              ERR_INVALID_SIZE, "DcacheWritebackInvalidateRange negative size");
 }
 
+// "Guardar y salir" (beta reports #4, #9): the game calls sceKernelExitGame.
+// PPSSPP stops the game there (Core_Stop); the port goes back to the
+// launcher menu with exit code 10, like F1 -> Yes.
+std::atomic<bool> g_should_exit{false};
+
+// DxD's integrity check branches to sceKernelExitGame with a forged, odd $ra
+// (sp - 0x4321 / sp - 0x1337) when its header sum fails; it fails in the port
+// (a pointer in the summed header: our heap sits 0x872000 above the PSP's) and
+// passes on the PSP, so that call must not end the session.
+static void test_exit_game_ignores_a_forged_ra() {
+    auto it = registry().find("sceKernelExitGame");
+    CHECK(it != registry().end(), "sceKernelExitGame registered");
+    if (it == registry().end()) return;
+    recomp_context ctx{};
+    ctx.r[31] = 0x0BFFA40F;
+    it->second(g_ram, &ctx);
+    CHECK_EQ(ctx.r[2], 0, "returns 0");
+    CHECK_EQ(psp_requested_exit_code().load(), 0, "no exit code for a forged ra");
+    CHECK(!g_should_exit.load(), "the session goes on");
+}
+
+static void test_exit_game_requests_code_10() {
+    CHECK_EQ(psp_requested_exit_code().load(), 0, "no exit requested before");
+    CHECK(!g_should_exit.load(), "exit flag clear before");
+    CHECK_EQ(callHle("sceKernelExitGame"), 0, "sceKernelExitGame returns 0");
+    CHECK_EQ(psp_requested_exit_code().load(), 10, "exit code 10 (back to the launcher)");
+    CHECK(g_should_exit.load(), "exit flag set");
+}
+
 int main() {
     g_ram = static_cast<uint8_t*>(std::calloc(1, PSP_MEM_SIZE));
     if (!g_ram) {
@@ -171,6 +202,8 @@ int main() {
     test_openpsid_uses_local_mac();
     test_power_callback();
     test_returns();
+    test_exit_game_ignores_a_forged_ra();
+    test_exit_game_requests_code_10();
     std::free(g_ram);
     std::printf("%d checks, %d failures\n", tests_run, failures);
     return failures == 0 ? 0 : 1;

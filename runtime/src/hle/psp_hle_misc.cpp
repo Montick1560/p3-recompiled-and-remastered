@@ -1,8 +1,10 @@
 #include "hle/psp_hle.h"
+#include "psp_exit.h"
 #include "psp_memory.h"
 #include "recomp.h"
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 // Small Patapon 3 imports (sceWlan/sceNet live in psp_hle_net.cpp). Return values and pointer checks follow PPSSPP
@@ -97,7 +99,36 @@ static void hle_sceKernelDcacheWritebackInvalidateRange(uint8_t* rdram,
     (void)rdram;
 }
 
+// The game's "save and quit". PPSSPP stops the game here (sceKernel.cpp
+// sceKernelExitGame: Core_Stop); the port returns to the launcher menu.
+// A `jal` always leaves an aligned $ra. An integrity check that fails only
+// here (it sums a header holding a heap pointer, and our heap addresses are
+// not the PSP's) branches in with a forged odd $ra: on the PSP it passes and
+// never gets here, so that call is logged and ignored.
+static void hle_sceKernelExitGame(uint8_t* rdram, recomp_context* ctx) {
+    const uint32_t ra = static_cast<uint32_t>(ctx->r[31]);
+    ctx->r[2] = 0;
+    (void)rdram;
+    if (ra & 3) {
+        std::fprintf(stderr,
+            "[HLE] sceKernelExitGame with a forged ra=0x%08X (integrity check): ignored\n", ra);
+        return;
+    }
+    char why[64];
+    std::snprintf(why, sizeof(why), "the game called sceKernelExitGame (ra=0x%08X)", ra);
+    psp_request_back_to_launcher(why);
+}
+
+static void hle_sceKernelRegisterExitCallback(uint8_t* rdram,
+                                              recomp_context* ctx) {
+    ctx->r[2] = 0;
+    (void)rdram;
+}
+
 void psp_hle_register_misc() {
+    psp_hle_register("sceKernelExitGame", hle_sceKernelExitGame);
+    psp_hle_register("sceKernelRegisterExitCallback",
+                     hle_sceKernelRegisterExitCallback);
     psp_hle_register("sceOpenPSIDGetOpenPSID", hle_sceOpenPSIDGetOpenPSID);
     psp_hle_register("sceHprmIsHeadphoneExist", hle_sceHprmIsHeadphoneExist);
     psp_hle_register("sceUmdCancelWaitDriveStat",

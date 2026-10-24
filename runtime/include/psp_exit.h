@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 
 inline void psp_on_exit(void (*fn)()) {
@@ -16,4 +17,14 @@ inline void psp_on_exit(void (*fn)()) {
 inline std::atomic<int>& psp_requested_exit_code() {
     static std::atomic<int> code{0};
     return code;
+}
+
+extern std::atomic<bool> g_should_exit;  // psp_event_loop.cpp
+
+// End the session and go back to the launcher menu (exit code 10): F1 -> Yes, or the game's
+// own "save and quit" (sceKernelExitGame).
+inline void psp_request_back_to_launcher(const char* why) {
+    std::fprintf(stderr, "[RT] back to the launcher menu (exit code 10): %s\n", why);
+    psp_requested_exit_code().store(10);
+    g_should_exit.store(true);
 }

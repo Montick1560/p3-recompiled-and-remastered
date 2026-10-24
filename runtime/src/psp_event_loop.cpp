@@ -273,9 +273,7 @@ static void open_menu_prompt() {
 static void finish_menu_prompt(PromptResult r) {
     publish_pads();  // the prompt may have closed: the game sees the pads again
     if (r != PromptResult::Confirmed) return;
-    std::fprintf(stderr, "[RT] back to the launcher menu (exit code 10)\n");
-    psp_requested_exit_code().store(10);
-    g_should_exit.store(true);
+    psp_request_back_to_launcher("menu prompt (F1 / Select+Start)");
 }
 
 // Returns true when the event was consumed by the prompt (or opened it). Key and

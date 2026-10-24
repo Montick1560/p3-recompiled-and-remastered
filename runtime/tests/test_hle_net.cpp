@@ -9,6 +9,7 @@
 #include "psp_memory.h"
 #include "recomp.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -16,6 +17,9 @@
 #include <cstring>
 #include <map>
 #include <string>
+
+// psp_hle_misc.cpp's sceKernelExitGame sets it (psp_event_loop.cpp in the runtime).
+std::atomic<bool> g_should_exit{false};
 
 static int failures = 0;
 #define CHECK(cond, msg) \
