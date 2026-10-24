@@ -309,6 +309,11 @@ Sending never blocks the game: the client queues frames for a writer thread. Mea
 (`PSPRECOMP_INFRA_STATS` + `tools/infra_lagjoin.py`), a 60 s co-op mission runs at a steady 30 fps on both
 instances with no frame over 100 ms, and a datagram reaches the other game in under 32 ms (p99, most of it waiting
 for the game's next read); the internet path is not measured yet.
+For lab runs the local server takes `--impair "delay=MS,jitter=MS,stall=PCT,stall_ms=MS"`: every frame to a
+connection waits the delay plus or minus the jitter, in order, and `stall` percent of them first hold that connection
+`stall_ms` more, as a TCP link does after a lost segment (it is refused together with `--beta`, so the public server
+never runs it). Each client reports its relay link (ping RTT p50/p95/max, pings over 250 ms, the longest receive gap)
+as `link_stats`, which a server with `--db` stores per session, without addresses.
 
 ### Prerequisites
 

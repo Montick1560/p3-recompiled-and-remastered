@@ -267,6 +267,29 @@ def load_beta(path):
     return cfg
 
 
+IMPAIR_KEYS = {"delay": int, "jitter": int, "stall": float, "stall_ms": int}
+
+
+def parse_impair(text):
+    """--impair "delay=MS,jitter=MS,stall=PCT,stall_ms=MS" (lab only) -> dict; every key optional, at least one."""
+    out = {}
+    for part in text.split(",") if text else []:
+        key, sep, val = part.partition("=")
+        kind = IMPAIR_KEYS.get(key.strip())
+        if not sep or kind is None or key.strip() in out:
+            raise argparse.ArgumentTypeError("--impair: %r (keys: delay, jitter, stall, stall_ms)" % part)
+        try:
+            v = kind(val.strip())
+        except ValueError:
+            raise argparse.ArgumentTypeError("--impair: %r is not a number of the right kind" % part)
+        if v < 0 or (key.strip() == "stall" and v > 100):
+            raise argparse.ArgumentTypeError("--impair: %r out of range" % part)
+        out[key.strip()] = v
+    if not out:
+        raise argparse.ArgumentTypeError("--impair: empty")
+    return out
+
+
 class Err(Exception):
     def __init__(self, code):
         super().__init__("0x%08X" % code)
@@ -410,6 +433,7 @@ class Conn:
         self.dgram_dropped = 0
         self.stream_window = 0.0
         self.stream_bytes = 0
+        self.last_due = 0.0         # --impair: due time of the last frame queued to this connection
 
     def label(self):
         vip = socket.inet_ntoa(struct.pack(">I", self.vip)) if self.vip else "-"
@@ -419,8 +443,15 @@ class Conn:
 class Server:
     def __init__(self, host="127.0.0.1", port=27320, ws_port=27321, ws_path="/infra", max_rooms=64,
                  idle=30.0, stats_every=60.0, delay_ms=0, max_per_addr=4, max_conns=512, signal_timeout=15.0,
-                 loss=0, logger=log, beta_path=None, clock=time.time, db_path=None):
+                 loss=0, logger=log, beta_path=None, clock=time.time, db_path=None, impair=None):
         self.log = logger
+        # Lab only (--impair): every frame to a connection is delayed, jittered and sometimes stalled like a TCP
+        # link that lost a segment, keeping that connection's order. The public server never runs it.
+        self.impair = impair or {}
+        self.irng = random.Random(2)
+        if self.impair and sys.platform == "win32":  # 1 ms timer: frames leave at their due time, not on a 15.6 ms tick
+            import ctypes
+            ctypes.windll.winmm.timeBeginPeriod(1)
         self.metrics = MetricsDb(db_path, logger)
         self.clock = clock
         self.beta_path = beta_path
@@ -471,7 +502,7 @@ class Server:
         self.rooms = {}         # room id -> Room
         # Ids from the start time, so a room list cached by a game across a restart cannot name a new room.
         self.next_room_id = (int(time.time() * 1000) & 0xFFFFFFFFFF) << 8
-        self.delayed = []       # heap of (due, seq, conn, frame bytes)
+        self.delayed = []       # heap of (due, seq, conn, frame bytes, impaired)
         self.seq = 0
         self.running = True
         self.stats_t = time.monotonic()
@@ -494,7 +525,22 @@ class Server:
         self.flush(conn)
 
     def send_frame(self, conn, data):
+        if self.impair:
+            return self.impaired_send(conn, data)
         self.raw_send(conn, ws_wrap(data) if conn.kind == "ws" else data)
+
+    def impaired_send(self, conn, data):
+        """Due time max(now + delay + U(-jitter, jitter), the connection's last due); with probability stall % the
+        connection first jumps stall_ms (head-of-line blocking after a lost segment), holding every later frame."""
+        now = time.monotonic()
+        imp = self.impair
+        if imp.get("stall") and self.irng.random() < imp["stall"] / 100.0:
+            conn.last_due = max(conn.last_due, now) + imp.get("stall_ms", 0) / 1000.0
+        jitter = imp.get("jitter", 0)
+        due = max(now + (imp.get("delay", 0) + self.irng.uniform(-jitter, jitter)) / 1000.0, conn.last_due)
+        conn.last_due = due
+        self.seq += 1
+        heapq.heappush(self.delayed, (due, self.seq, conn, data, True))
 
     def send_json(self, conn, obj):
         self.send_frame(conn, json_frame(obj))
@@ -842,7 +888,7 @@ class Server:
 
     def later(self, conn, data):
         self.seq += 1
-        heapq.heappush(self.delayed, (time.monotonic() + self.delay, self.seq, conn, data))
+        heapq.heappush(self.delayed, (time.monotonic() + self.delay, self.seq, conn, data, False))
 
     def on_datagram(self, conn, body):
         if conn.session is None or len(body) < 8 or len(body) - 8 > MAX_DGRAM:
@@ -1146,8 +1192,11 @@ class Server:
                     self.event("signal_dead", to.conn, room, "no game socket from session %s" % about.conn.sid)
                     self.signal(to.conn, room, about, SIG_DEAD)
         while self.delayed and self.delayed[0][0] <= now:
-            _, _, conn, data = heapq.heappop(self.delayed)
-            self.send_frame(conn, data)
+            _, _, conn, data, impaired = heapq.heappop(self.delayed)
+            if impaired:
+                self.raw_send(conn, ws_wrap(data) if conn.kind == "ws" else data)
+            else:
+                self.send_frame(conn, data)
         for conn in list(self.conns.values()):
             if now - conn.last > self.idle:
                 self.drop(conn, "idle")
@@ -1160,7 +1209,8 @@ class Server:
 
     def serve(self):
         while self.running:
-            for key, mask in self.sel.select(timeout=0.02 if self.delayed else 0.2):
+            wait = min(0.02, max(0.0, self.delayed[0][0] - time.monotonic())) if self.delayed else 0.2
+            for key, mask in self.sel.select(timeout=wait):
                 kind = self.listeners.get(key.fileobj)
                 if kind is not None:
                     self.accept(key.fileobj, kind)
@@ -1661,7 +1711,95 @@ def selftest():
 
     beta_selftest(run, quiet, lines)
     link_stats_selftest(run, quiet, lines)
+    impair_selftest(run, quiet)
     print("selftest OK")
+
+
+def impair_selftest(run, quiet):
+    """--impair: delay, jitter and TCP-stall emulation on every frame to a connection, in order."""
+
+    def pair(impair):
+        srv = Server("127.0.0.1", 0, None, logger=quiet, impair=impair)
+        th = run(srv)
+        a, b = TestClient(srv.port), TestClient(srv.port)
+        a.ok("login", online_id="IMP_A")
+        vb = b.ok("login", online_id="IMP_B")["vip"]
+        room = a.ok("create", max_slot=4, ints=GAME_INTS)["room"]
+        b.ok("join", room_id=room["id"])
+        return srv, th, a, b, vb
+
+    def stop(srv, th, *clients):
+        for cl in clients:
+            cl.close()
+        srv.running = False
+        th.join(timeout=5)
+
+    def first_dgram(cl, timeout=5):
+        deadline = time.monotonic() + timeout
+        while not cl.dgrams:
+            assert time.monotonic() < deadline, "no datagram"
+            cl.pump(0.05)
+        return cl.dgrams.pop(0)
+
+    # impair_delay: a datagram and a ping answer wait the delay
+    srv, th, a, b, vb = pair({"delay": 50})
+    t0 = time.monotonic()
+    a.dgram(vb, 3, 4, b"late")
+    assert first_dgram(b)[3] == b"late"
+    assert time.monotonic() - t0 >= 0.045, time.monotonic() - t0
+    t0 = time.monotonic()
+    a.ok("ping", t=1)
+    assert time.monotonic() - t0 >= 0.045, "ping answer delayed too"
+    stop(srv, th, a, b)
+    # impair_order: under jitter the frames to one connection never overtake each other (TCP)
+    srv, th, a, b, vb = pair({"delay": 40, "jitter": 30})
+    for i in range(200):
+        a.dgram(vb, 3, 4, struct.pack("<I", i))
+    seen = [struct.unpack("<I", first_dgram(b)[3])[0] for _ in range(200)]
+    assert seen == list(range(200)), seen[:20]
+    stop(srv, th, a, b)
+    # impair_stall: a stall holds the connection's frames stall_ms more
+    srv, th, a, b, vb = pair({"stall": 100, "stall_ms": 200})
+    t0 = time.monotonic()
+    a.dgram(vb, 3, 4, b"stalled")
+    assert first_dgram(b)[3] == b"stalled"
+    assert time.monotonic() - t0 >= 0.19, time.monotonic() - t0
+    stop(srv, th, a, b)
+    # impair_parse
+    assert parse_impair("delay=90,jitter=15,stall=2,stall_ms=400") == \
+        {"delay": 90, "jitter": 15, "stall": 2.0, "stall_ms": 400}
+    assert parse_impair("stall=0.5") == {"stall": 0.5}
+    for bad in ("delay=x", "delay", "speed=3", "delay=-1", "stall=101", "jitter=1.5", "delay=1,delay=2", ""):
+        try:
+            parse_impair(bad)
+            raise AssertionError("accepted --impair %r" % bad)
+        except argparse.ArgumentTypeError:
+            pass
+    import contextlib
+    import io
+    # a malformed value, and the lab option on a beta (public) server, stop main() with an argparse error
+    for args in (["--impair", "delay=x"], ["--impair", "delay=90", "--beta", "beta_config.json"]):
+        argv = sys.argv
+        sys.argv = ["infra_server.py"] + args
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                main()
+            raise AssertionError("main() took %r" % args)
+        except SystemExit as e:
+            assert e.code == 2, (args, e.code)
+        finally:
+            sys.argv = argv
+    # impair_timing: the loop wakes at the due time, not on a 20 ms tick
+    srv, th, a, b, vb = pair({"delay": 30})
+    late = []
+    for i in range(20):
+        t0 = time.monotonic()
+        a.dgram(vb, 3, 4, b"t")
+        first_dgram(b)
+        late.append(time.monotonic() - t0 - 0.030)
+    late.sort()
+    assert late[10] < 0.008, "median lateness %.1f ms" % (late[10] * 1000)
+    stop(srv, th, a, b)
 
 
 def link_stats_selftest(run, quiet, lines):
@@ -1997,6 +2135,9 @@ def main():
     ap.add_argument("--stats-every", type=float, default=60.0)
     ap.add_argument("--delay-ms", type=int, default=0, help="extra latency on datagrams and pings (tests)")
     ap.add_argument("--loss", type=float, default=0, help="percent of game datagrams dropped (tests)")
+    ap.add_argument("--impair", type=parse_impair, default=None, metavar="delay=MS,jitter=MS,stall=PCT,stall_ms=MS",
+                    help="lab only: every frame to a connection waits delay +- jitter ms in order; stall %% of them "
+                         "first hold the connection stall_ms more (TCP head-of-line after a lost segment)")
     ap.add_argument("--max-per-addr", type=int, default=4)
     ap.add_argument("--signal-timeout", type=float, default=15.0,
                     help="seconds a member may take to bind its game socket before its peers get SIGNALING_DEAD")
@@ -2006,13 +2147,17 @@ def main():
     args = ap.parse_args()
     if args.selftest:
         return selftest()
+    if args.impair and args.beta:
+        ap.error("--impair is a lab option: never on the beta (public) server")
     alog = AsyncLog()
     srv = Server(args.host, args.port, args.ws_port, args.ws_path, args.max_rooms, args.idle, args.stats_every,
                  args.delay_ms, args.max_per_addr, signal_timeout=args.signal_timeout, loss=args.loss, logger=alog,
-                 beta_path=args.beta, db_path=args.db)
+                 beta_path=args.beta, db_path=args.db, impair=args.impair)
     if disable_quick_edit():
         alog("console QuickEdit turned off: a click in this window no longer pauses the server")
     alog("infrastructure server: tcp %s:%d, ws %s:%d%s" % (args.host, srv.port, args.host, srv.ws_port, args.ws_path))
+    if args.impair:
+        alog("LAB: link impairment on every connection: %s" % ", ".join("%s=%s" % kv for kv in args.impair.items()))
     if srv.beta:
         b = srv.beta
         alog("beta gate: %d codes (%d staff), open %s .. %s UTC, min proto %d, %d per code"
