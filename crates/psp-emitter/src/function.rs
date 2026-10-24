@@ -611,6 +611,16 @@ pub fn emit_function(func: &DecodedFunction, gen: &mut dyn Generator, imports: &
                 } else {
                     emit_op(&instrs[i], gen, imports, func.vaddr, func_end);
                 }
+            } else if let MipsOp::J { target } = &instrs[i] {
+                if func.return_jumps.contains(target) {
+                    // The delay slot already ran; the code there is `jr ra; nop`.
+                    // Still recorded: the audit and main_entries.json see it as before.
+                    gen.note_static_lookup(*target);
+                    gen.emit_raw(&format!("/* j 0x{target:08X}: `jr ra; nop` there */"));
+                    gen.emit_return();
+                } else {
+                    emit_op(&instrs[i], gen, imports, func.vaddr, func_end);
+                }
             } else {
                 emit_op(&instrs[i], gen, imports, func.vaddr, func_end);
             }
@@ -2058,6 +2068,7 @@ mod tests {
             coalesced: false,
             fall_through_dispatchable: false,
             ra_adjust_calls: vec![],
+            return_jumps: vec![],
         }
     }
 

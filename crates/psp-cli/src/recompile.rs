@@ -580,6 +580,7 @@ pub fn run_recompile(
                 .collect();
             main_side_spans.sort_unstable();
             retain_by_window(&mut prep.analysis.functions, &mut prep.analysis.mid_entries, lo, hi, true);
+            prune_mid_entries_to_window(&mut prep.mid_entry_addr_map, lo, hi);
             let (id, _text_size) = read_overlay_header(&prep.segment_bytes, lo)?;
             let file_end = lo + read_overlay_file_len(&prep.segment_bytes, lo)?;
             let ctors = overlay_ctor_entries(&prep.segment_bytes, lo)?;
@@ -1928,6 +1929,17 @@ fn get_func_bytes<'a>(
 /// and SPECIAL (opcode 0) ops with rd == 31 except jalr (funct 0x09) and the
 /// all-zero word. Branch-likely delay slots count (they are in the linear scan).
 /// Bytes missing from `segments` -> false.
+/// The image holds `jr ra; nop` at `addr`: jumping there is a plain return.
+/// DxD 1.1.5b's overlays end functions with `j <a main jr ra>` where 1.1.4
+/// has `jr ra`; those addresses are no dispatch entry (LOOKUP_MISS, v0 = 0).
+/// Function starts (hooks replace those by address) and mid-entries this
+/// build dispatches keep their lookup.
+fn bare_return_at(segments: &[(u32, Vec<u8>)], addr: u32) -> bool {
+    read_image_range(segments, addr, 8).ok().is_some_and(|b| {
+        b[..4] == 0x03E0_0008u32.to_le_bytes() && b[4..8] == [0, 0, 0, 0]
+    })
+}
+
 fn ra_adjusting_target(segments: &[(u32, Vec<u8>)], target: u32) -> bool {
     fn read_word(segments: &[(u32, Vec<u8>)], addr: u32) -> Option<u32> {
         segments.iter().find_map(|(seg_vaddr, bytes)| {
@@ -2124,6 +2136,23 @@ pub fn decode_and_emit_function_with_name(
         .collect();
     ra_adjust_calls.sort_unstable();
     ra_adjust_calls.dedup();
+    let mut return_jumps: Vec<u32> = ops
+        .iter()
+        .filter_map(|op| match op {
+            MipsOp::J { target }
+                if (*target < func_vaddr || *target >= func_vaddr + decoded_size)
+                    && !func_map.contains_key(target)
+                    && !import_map.contains_key(target)
+                    && !mid_entry_addr_map.values().any(|addrs| addrs.contains(target))
+                    && bare_return_at(segments, *target) =>
+            {
+                Some(*target)
+            }
+            _ => None,
+        })
+        .collect();
+    return_jumps.sort_unstable();
+    return_jumps.dedup();
     let decoded = DecodedFunction {
         vaddr: func_vaddr,
         name: func.name.clone(),
@@ -2135,6 +2164,7 @@ pub fn decode_and_emit_function_with_name(
         coalesced,
         fall_through_dispatchable,
         ra_adjust_calls,
+        return_jumps,
     };
 
     let mut gen = CppGenerator::new();
@@ -2533,6 +2563,13 @@ fn read_main_entries(path: &Path) -> anyhow::Result<Vec<u32>> {
                 .ok_or_else(|| anyhow::anyhow!("bad entry {e} in {}", path.display()))
         })
         .collect()
+}
+
+/// A bank build dispatches only the window's mid-entries: main-side ones the
+/// combined analysis inferred (from overlay jumps into main functions) never
+/// reach the main build, so they must not count as dispatch entries here.
+fn prune_mid_entries_to_window(map: &mut HashMap<u32, Vec<u32>>, lo: u32, hi: u32) {
+    map.retain(|&parent, _| parent >= lo && parent < hi);
 }
 
 /// Keep only functions/mid-entries inside (`inside = true`) or outside the
@@ -3300,6 +3337,75 @@ mod tests {
         assert!(diag.decode_error.is_none(), "{:?}", diag.decode_error);
         assert!(!cpp.contains("decode error"), "{cpp}");
         assert!(cpp.contains("ctx->r[16]"), "the s0 load must be emitted: {cpp}");
+    }
+
+    /// `j 0x08900008; addiu sp,sp,16` at 0x08804000, with `other` placed at 0x08900000.
+    fn emit_tail_jump_into(other: &[u32], func_map: &HashMap<u32, String>) -> String {
+        emit_tail_jump_with_mids(other, func_map, &HashMap::new()).0
+    }
+
+    fn emit_tail_jump_with_mids(
+        other: &[u32],
+        func_map: &HashMap<u32, String>,
+        mids: &HashMap<u32, Vec<u32>>,
+    ) -> (String, EmitDiagnostics) {
+        let base = 0x0880_4000u32;
+        let j = 0x0800_0000 | ((0x0890_0008u32 >> 2) & 0x03FF_FFFF);
+        let mut segments = words_at(base, &[j, 0x27BD_0010]);
+        segments.extend(words_at(0x0890_0000, other));
+        let func = JsonFunction {
+            name: "FUN_08804000".into(),
+            address: format!("0x{base:08X}"),
+            size: 8,
+            is_external: false,
+            is_thunk: false,
+            source: "ghidra".into(),
+        };
+        decode_and_emit_function_with_name(
+            &func, "FUN_08804000", &segments, &HashMap::new(), func_map,
+            &GameConfig::default(), &[], mids, false,
+        )
+    }
+
+    #[test]
+    fn tail_jump_to_a_bare_return_is_a_return() {
+        // DxD 1.1.5b overlays end functions with `j <some main jr ra>` instead of
+        // `jr ra`: no dispatch entry there, and the miss stub would zero v0.
+        let cpp = emit_tail_jump_into(&[0x27BD_FFF0, 0xAFBF_0000, 0x03E0_0008, 0x0000_0000], &HashMap::new());
+        assert!(!cpp.contains("RECOMP_LOOKUP(0x08900008)"), "{cpp}");
+        assert!(cpp.contains("return;"), "{cpp}");
+        assert!(cpp.contains("ctx->r[29] + 16"), "the delay slot still runs: {cpp}");
+    }
+
+    #[test]
+    fn tail_jump_to_a_function_or_other_code_stays_a_lookup() {
+        let ret = [0x27BD_FFF0, 0xAFBF_0000, 0x03E0_0008, 0x0000_0000];
+        // A dispatchable start keeps its lookup (game hooks replace functions by address).
+        let known: HashMap<u32, String> = [(0x0890_0008, "FUN_08900008".to_string())].into_iter().collect();
+        assert!(emit_tail_jump_into(&ret, &known).contains("RECOMP_LOOKUP(0x08900008)"));
+        // `jr ra` with a real delay slot, or no return at all: a lookup as before.
+        let ds = [0x27BD_FFF0, 0xAFBF_0000, 0x03E0_0008, 0x27BD_0010];
+        assert!(emit_tail_jump_into(&ds, &HashMap::new()).contains("RECOMP_LOOKUP(0x08900008)"));
+        let other = [0x27BD_FFF0, 0xAFBF_0000, 0x2402_0007, 0x0000_0000];
+        assert!(emit_tail_jump_into(&other, &HashMap::new()).contains("RECOMP_LOOKUP(0x08900008)"));
+        // A mid-entry this build dispatches keeps its lookup (outputs stay as they were).
+        let mids = HashMap::from([(0x0890_0000, vec![0x0890_0008])]);
+        assert!(emit_tail_jump_with_mids(&ret, &HashMap::new(), &mids).0.contains("RECOMP_LOOKUP(0x08900008)"));
+    }
+
+    #[test]
+    fn tail_jump_to_a_bare_return_still_feeds_the_audit() {
+        // main_entries.json and the dispatch audit see the target as before.
+        let ret = [0x27BD_FFF0, 0xAFBF_0000, 0x03E0_0008, 0x0000_0000];
+        let (_, diag) = emit_tail_jump_with_mids(&ret, &HashMap::new(), &HashMap::new());
+        assert!(diag.static_lookup_targets.contains(&0x0890_0008), "{:?}", diag.static_lookup_targets);
+    }
+
+    #[test]
+    fn bank_build_keeps_only_window_mid_entry_parents() {
+        let mut m = HashMap::from([(0x0890_0000, vec![0x0890_0008]), (0x08AC_0000, vec![0x08AC_0010])]);
+        prune_mid_entries_to_window(&mut m, 0x08AB_B180, 0x08BC_6480);
+        assert_eq!(m.keys().copied().collect::<Vec<_>>(), vec![0x08AC_0000]);
     }
 
     #[test]

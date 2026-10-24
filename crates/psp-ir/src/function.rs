@@ -48,4 +48,8 @@ pub struct DecodedFunction {
     /// before returning (code caves that return elsewhere). The emitter sets
     /// `ctx->r[31]` before those calls and continues at the edited address.
     pub ra_adjust_calls: Vec<u32>,
+    /// Static `j` targets outside this function that are no function start and
+    /// hold `jr ra; nop` (DxD 1.1.5b overlays return that way). The emitter
+    /// lowers those jumps to a plain return.
+    pub return_jumps: Vec<u32>,
 }
