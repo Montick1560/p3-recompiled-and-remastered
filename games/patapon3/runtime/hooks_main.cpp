@@ -32,6 +32,7 @@
 #include "psp_game_module.h"
 #include "psp_ge_list_blend.h"
 #include "psp_half_ahead.h"
+#include "psp_once_per_count.h"
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_intr.h"
 #include "psp_paced_step.h"
@@ -105,8 +106,11 @@ void clear_words(uint8_t* rdram, uint32_t base, std::initializer_list<uint32_t> 
     for (uint32_t off : offsets) std::memset(rdram + ((base + off) & 0x07FFFFFFu), 0, 4);
 }
 
+uint64_t g_input_updates = 0;  // pad updates that ran (the held counters moved)
+
 void input_update_30hz(uint8_t* rdram, recomp_context* ctx) {
     if (g_input_pacer.due(psp_vblank_index(psp_display_elapsed_us()), 2)) {
+        g_input_updates++;
         g_input_update(rdram, ctx);
         return;
     }
@@ -115,6 +119,34 @@ void input_update_30hz(uint8_t* rdram, recomp_context* ctx) {
     clear_words(rdram, rd32(rdram, owner + 32),
                 {100, 104, 108, 116, 120, 124, 132, 136, 140});
     clear_words(rdram, owner + 40, {4, 8, 12, 20, 24, 28, 200, 216});
+}
+
+// 60 fps hold-to-repeat in item lists (with the 60fps set; PSPRECOMP_P3_MENU_30HZ=0 turns it off
+// for A/B). The DxD releases put FUN_08A62E8C in front of the list update FUN_08966754 that the
+// hideout overlay's item grid (FUN_08B44360: Lady Meden's shop, the forge) calls with s2 = its
+// input object. While Triangle alone is held (+0 == 0x1000) it reads Triangle's held-frame
+// counter (+136) and, each time (count - 1) % (20 - accel) == 0, copies held into pressed (+4)
+// and doubles the accel byte at 0x08800BA2 (1, 2, 4, 8, 16, then 19), so holding Triangle buys
+// or skips again and again, faster and faster. The counter only moves when the pad update runs
+// (30 Hz above), but the check ran every frame and saw each count twice: a 120 ms tap bought two
+// items and a 1.5 s hold twelve instead of five. The check now runs once per pad update; on the
+// frame in between only its tail jump, the list update, runs. The vanilla EU disc has no such
+// code (its grid calls the list update directly); the code is checked on every call.
+constexpr uint32_t kHoldRepeat = 0x08A62E8Cu;
+constexpr uint32_t kHoldRepeatCode[] = {0x3C0B0880u, 0x8E410000u, 0x2421F000u, 0x54200014u,
+                                        0xA1600BA2u, 0x8E410088u, 0x2421FFFFu};
+constexpr uint32_t kListUpdate = 0x08966754u;
+FuncPtr g_hold_repeat = nullptr;
+FuncPtr g_list_update = nullptr;
+OncePerCount g_hold_repeat_once;
+
+void hold_repeat_30hz(uint8_t* rdram, recomp_context* ctx) {
+    if (!psp_code_matches(rdram, kHoldRepeat, kHoldRepeatCode, sizeof kHoldRepeatCode / sizeof kHoldRepeatCode[0]) ||
+        g_hold_repeat_once.due(g_input_updates)) {
+        g_hold_repeat(rdram, ctx);
+        return;
+    }
+    g_list_update(rdram, ctx);
 }
 
 // 60 fps weather (with the 60fps set; PSPRECOMP_P3_WEATHER_30HZ=0 turns it off for A/B). The
@@ -1093,6 +1125,13 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
         g_input_update = RECOMP_LOOKUP(kInputUpdate);
         psp_dispatch_register(kInputUpdate, input_update_30hz);
         std::fprintf(stderr, "[P3] 60fps: input update paced to 30 Hz\n");
+        const char* menu = std::getenv("PSPRECOMP_P3_MENU_30HZ");
+        if (!(menu && menu[0] == '0')) {
+            g_hold_repeat = RECOMP_LOOKUP(kHoldRepeat);
+            g_list_update = RECOMP_LOOKUP(kListUpdate);
+            psp_dispatch_register(kHoldRepeat, hold_repeat_30hz);
+            std::fprintf(stderr, "[P3] 60fps: item-list hold repeat (DxD) paced to 30 Hz\n");
+        }
         const char* weather = std::getenv("PSPRECOMP_P3_WEATHER_30HZ");
         if (!(weather && weather[0] == '0')) {
             const char* smooth_weather = std::getenv("PSPRECOMP_P3_WEATHER_SMOOTH");

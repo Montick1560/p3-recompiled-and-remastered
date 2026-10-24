@@ -972,6 +972,11 @@ target_include_directories(test_paced_step PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/i
 target_compile_options(test_paced_step PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME paced_step_tests COMMAND test_paced_step)
 
+add_executable(test_once_per_count tests/test_once_per_count.cpp)
+target_include_directories(test_once_per_count PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_once_per_count PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME once_per_count_tests COMMAND test_once_per_count)
+
 add_executable(test_particle_nudge tests/test_particle_nudge.cpp)
 target_include_directories(test_particle_nudge PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_particle_nudge PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)

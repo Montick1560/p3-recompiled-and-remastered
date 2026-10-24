@@ -190,8 +190,9 @@ Read by the runtime binary at start-up or during execution.
   help (`psp_patch_set_active`); Patapon 3's `60fps` set paces the input update
   to 30 Hz, turns on smooth animation (`PSPRECOMP_P3_ANIM_SMOOTH`) and paces the
   weather (`PSPRECOMP_P3_WEATHER_30HZ`, `PSPRECOMP_P3_WEATHER_SMOOTH`) and the
-  script objects (`PSPRECOMP_P3_HIDEOUT_30HZ`) and the scripts' frame waits
-  (`PSPRECOMP_P3_SCRIPT_WAIT_30HZ`).
+  script objects (`PSPRECOMP_P3_HIDEOUT_30HZ`), the scripts' frame waits
+  (`PSPRECOMP_P3_SCRIPT_WAIT_30HZ`) and the item lists' hold repeat
+  (`PSPRECOMP_P3_MENU_30HZ`).
 - **Set it when:** playing with an opt-in game patch, e.g. Patapon 3
   `PSPRECOMP_PATCHES=60fps` (60 fps; see `games/patapon3/game.toml`).
 
@@ -920,6 +921,22 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   lost the stage, the army and the drum HUD (Arena del Valor froze). Install prints
   `[P3] 60fps: script objects paced to 30 Hz in the hideout only`.
 - **Set it when:** `0` to see the old double-speed scripts at 60 fps (A/B).
+
+### `PSPRECOMP_P3_MENU_30HZ`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`0` off; anything else or unset = on).
+- **Default:** on when `PSPRECOMP_PATCHES` enables `60fps`; never installed otherwise.
+- **Effect:** The DxD releases put `0x08A62E8C` in front of the item grid's list update
+  `0x08966754` (Lady Meden's shop, the forge): while Triangle alone is held it reads
+  Triangle's held-frame counter (input object +136) and, on every `20 - accel` counts,
+  copies held into pressed, so holding Triangle buys or skips repeatedly. The counter
+  moves only when the 30 Hz pad update runs, but the check ran every frame and saw each
+  count twice: a 120 ms tap bought two items, a 1.5 s hold twelve instead of five. The
+  check now runs once per pad update (`runtime/include/psp_once_per_count.h`); on the
+  frame in between only the list update runs. The code is checked on every call (the
+  vanilla EU disc has none there). Install prints
+  `[P3] 60fps: item-list hold repeat (DxD) paced to 30 Hz`.
+- **Set it when:** `0` to see the old double buys at 60 fps (A/B).
 
 ### `PSPRECOMP_P3_SCRIPT_WAIT_30HZ`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
