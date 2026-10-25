@@ -108,6 +108,26 @@ int main() {
         t.step(0x5000, 2, 2, &dt);
         CHECK(!t.skipped(0x5000), "ran again: not skipped");
     }
+    {   // step_on: one run per tick of the pad update (60 fps hideout scripts read fresh presses)
+        PacedStepTable t;
+        uint32_t dt = 80;
+        CHECK(t.step_on(0xC000, 5, 1, &dt) && dt == 80, "a new object runs at once (even on an off frame)");
+        dt = 80;
+        CHECK(t.step_on(0xC000, 6, 2, &dt) && dt == 80, "the pad updated (tick 6): runs on that frame");
+        dt = 80;
+        CHECK(!t.step_on(0xC000, 6, 3, &dt), "no pad update since: skipped, frame time banked");
+        dt = 80;
+        CHECK(t.step_on(0xC000, 7, 4, &dt) && dt == 160, "next pad update: runs with the banked time");
+        dt = 80;
+        CHECK(!t.step_on(0xC000, 7, 5, &dt), "and skips the frame after");
+    }
+    {   // step_on when the game slows to one pad update per frame: every call runs unchanged
+        PacedStepTable t;
+        for (int64_t vb = 10, tick = 1; vb < 20; vb += 2, tick++) {
+            uint32_t dt = 160;
+            CHECK(t.step_on(0xD000, static_cast<uint64_t>(tick), vb, &dt) && dt == 160, "slow frames all run");
+        }
+    }
     if (failures == 0) std::printf("paced_step: all tests passed\n");
     return failures == 0 ? 0 : 1;
 }

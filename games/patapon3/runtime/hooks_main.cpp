@@ -194,9 +194,14 @@ void weather_step_register() {
 // yields). Scripts written for 30 fps count frames: cmd_waitFrame (0x08838434) takes one off
 // per run, and a prop's motion is "read the actor position (FUN_08911444), add a fixed step
 // (cmd add FUN_08837D18), set it (FUN_08911588)" once per run, so at 60 the star floated twice
-// as fast. Each script object runs at most once per two vblanks and a skipped call's frame
-// time goes to its next run (psp_paced_step.h): frame waits and per-run steps keep the 30 fps
-// rate, time waits still count real time. The return value is "keep running": the list update
+// as fast. Each script object runs once per pad update (itself paced to 30 Hz above), on the
+// frame of that update, and a skipped call's frame time goes to its next run
+// (psp_paced_step.h step_on): frame waits and per-run steps keep the 30 fps rate, time waits
+// still count real time. Paced on their own vblank phase instead (every second vblank from
+// their first run), all the hideout's scripts ran on the frames between two pad updates, where
+// the pressed words are cleared (counted: 120 of 120 runs per 4 s): a scripted dialog
+// never saw a press, or only after many (Plata Hoshipon's "more allies?" choice, reports
+// #31 #32 #33 #39 #40). The return value is "keep running": the list update
 // FUN_0889459c clears the object's active byte +1272 when it is 0, so a skipped call returns 1
 // (what FUN_08909C7C itself returns for an object with nothing to run), never a stale v0.
 // Only in the hideout (overlay id 2 in the window): paced mission scripts lost the stage,
@@ -345,7 +350,7 @@ void script_update_30hz(uint8_t* rdram, recomp_context* ctx) {
     uint32_t dt = static_cast<uint32_t>(ctx->r[5]);
     const uint32_t obj = static_cast<uint32_t>(ctx->r[4]);
     const int64_t vb = psp_vblank_index(psp_display_elapsed_us());
-    if (!g_script_paced.step(obj, vb, 2, &dt)) {
+    if (!g_script_paced.step_on(obj, g_input_updates, vb, &dt)) {
         hideout_event("script-skip", obj, vb);
         ctx->r[2] = 1;
         return;

@@ -940,8 +940,10 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   time in ticks) runs the game's script VM. Scripts count frames (`cmd_waitFrame`
   `0x08838434` takes one off per run) and move props by a fixed step per run (the
   hideout's Silver Hoshipon: read the actor position, add a step, set it), so at 60 fps
-  they ran twice as fast. Each script object runs at most once per two vblanks and a
-  skipped call's frame time goes to its next run (`runtime/include/psp_paced_step.h`),
+  they ran twice as fast. Each script object runs once per pad update (30 Hz), on the
+  frame of that update, so a scripted dialog reads the frame's presses (on their own
+  vblank phase every script ran between two pad updates, where the pressed words are
+  cleared), and a skipped call's frame time goes to its next run (`runtime/include/psp_paced_step.h`),
   so `cmd_waitTime` still counts real time; a skipped call returns 1 ("keep running").
   Only while the hideout overlay (id 2 at `0x08ABB180`) is loaded: paced mission scripts
   lost the stage, the army and the drum HUD (Arena del Valor froze). Install prints

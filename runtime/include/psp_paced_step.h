@@ -30,12 +30,43 @@ struct PacedStepTable {
         VblankPacer pacer;
         uint32_t banked = 0;
         bool skipped = false;  // the last step() for this object returned false
+        bool ticked = false;   // step_on: `tick` holds the tick of the last run
+        uint64_t tick = 0;
     };
     Slot slots[kSlots];
 
     // True: run the update now with *dt (this call's frame time plus the
     // banked one). False: skip it; *dt has been banked for the next run.
     bool step(uint32_t obj, int64_t vcount, int64_t period, uint32_t* dt) {
+        Slot* s = slot(obj, vcount);
+        return settle(s, s->pacer.due(vcount, period), dt);
+    }
+
+    // As step(), but an object runs once per `tick` of another routine
+    // instead of once per `period` vblanks: the first call after each tick
+    // runs. Patapon 3's hideout scripts at 60 fps tick with the pad update
+    // (paced to 30 Hz itself), so they run on the frames whose pad words hold
+    // the presses: on their own vblank phase they all ran on the frames in
+    // between, where the pressed words are cleared, and a scripted dialog
+    // never saw a press. A new object runs at once.
+    bool step_on(uint32_t obj, uint64_t tick, int64_t vcount, uint32_t* dt) {
+        Slot* s = slot(obj, vcount);
+        const bool due = !s->ticked || s->tick != tick;
+        s->ticked = true;
+        s->tick = tick;
+        return settle(s, due, dt);
+    }
+
+    // Whether the object's last update was skipped: its draw then shows the
+    // state of the previous run (a draw can show it half a step ahead).
+    bool skipped(uint32_t obj) const {
+        for (const Slot& c : slots)
+            if (c.used >= 0 && c.obj == obj) return c.skipped;
+        return false;
+    }
+
+  private:
+    Slot* slot(uint32_t obj, int64_t vcount) {
         Slot* s = nullptr;
         Slot* lru = &slots[0];
         for (Slot& c : slots) {
@@ -50,7 +81,11 @@ struct PacedStepTable {
             s->banked = 0;
         }
         s->used = vcount;
-        s->skipped = !s->pacer.due(vcount, period);
+        return s;
+    }
+
+    bool settle(Slot* s, bool due, uint32_t* dt) {
+        s->skipped = !due;
         if (s->skipped) {
             s->banked += *dt;
             if (s->banked > kMaxBanked) s->banked = kMaxBanked;
@@ -59,13 +94,5 @@ struct PacedStepTable {
         *dt += s->banked;
         s->banked = 0;
         return true;
-    }
-
-    // Whether the object's last update was skipped: its draw then shows the
-    // state of the previous run (a draw can show it half a step ahead).
-    bool skipped(uint32_t obj) const {
-        for (const Slot& c : slots)
-            if (c.used >= 0 && c.obj == obj) return c.skipped;
-        return false;
     }
 };
