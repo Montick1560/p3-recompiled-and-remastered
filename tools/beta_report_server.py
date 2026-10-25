@@ -6,11 +6,14 @@ One HTTP service behind the Cloudflare Tunnel, told apart by the Host header:
   from that form or from the launcher's "Reportar problema" button (with the tail of the game log);
 - `beta.montick.app` (Host starting with `beta.`): `GET /` is the sign-up page (email + consent), `POST /cola`
   stores the email in the queue the user draws invitations from (tools/beta_cola.py). Nothing is sent to anyone.
+  `GET /salas` is the public lobby page (players online, rooms) that polls `GET /salas.json`, the summary the
+  infrastructure server writes with `--status` (online ids and game settings only, never addresses).
 
 Both write into the beta SQLite file the infrastructure server keeps its metrics in (tables `reports` and
 `queue`). A report names its invite code by the code's label from the server's beta config, never the code.
 
     python -I tools/beta_report_server.py [--host 127.0.0.1] [--port 27322] [--db beta.db] [--beta beta_config.json]
+        [--status salas.json]
     python -I tools/beta_report_server.py --selftest
 """
 import argparse
@@ -32,6 +35,7 @@ MAX_BODY = 1024 * 1024       # a bigger request body is refused with 413
 MAX_LOG = 640 * 1024         # decoded log text attached to a report
 REPORTS_PER_HOUR = 10        # per address
 SIGNUPS_PER_HOUR = 5         # per address
+STATUS_STALE = 15            # seconds: an older lobby summary means the infrastructure server is not running
 MODES = ("escondite", "coop", "vs", "otro")
 EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 SIGNUP_OK = "¡Listo! Si sales en el sorteo te llegará un correo con tu código."
@@ -123,8 +127,9 @@ class RateLimit:
 class Service(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, host, port, db, beta=None, clock=time.time):
+    def __init__(self, host, port, db, beta=None, clock=time.time, status=None):
         self.db = db
+        self.status = status    # the infrastructure server's --status file (lobby summary)
         self.labels = Labels(beta)
         self.clock = clock
         self.reports = RateLimit(REPORTS_PER_HOUR)
@@ -164,10 +169,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return (self.headers.get("Host") or "").lower().startswith("beta.")
 
     def do_GET(self):
-        if self.path.split("?")[0] != "/":
+        path = self.path.split("?")[0]
+        if self.queue_host() and path == "/salas":
+            return self.answer(200, LOBBY_PAGE, "text/html; charset=utf-8")
+        if self.queue_host() and path == "/salas.json":
+            return self.answer(200, self.lobby())
+        if path != "/":
             return self.answer(404, {"error": "not found"})
         page = SIGNUP_PAGE if self.queue_host() else REPORT_PAGE
         self.answer(200, page, "text/html; charset=utf-8")
+
+    def lobby(self):
+        """The lobby summary while the infrastructure server keeps it fresh; {"ok": false} otherwise."""
+        try:
+            with open(self.server.status, encoding="utf-8") as f:
+                snap = json.load(f)
+            if abs(self.server.clock() - float(snap["t"])) <= STATUS_STALE:
+                return dict(snap, ok=True)
+        except (OSError, TypeError, ValueError, KeyError):
+            pass
+        return {"ok": False}
 
     def read_json(self):
         """The request body as a dict, or None after answering the error."""
@@ -308,7 +329,8 @@ código de invitación y el enlace de descarga. No te mandaremos nada más.</p>
 <label class="check"><input id="consent" type="checkbox"> <span>%s.</span></label>
 <button id="b" type="submit">Apuntarme</button>
 <div id="msg" role="status"></div>
-</form></main>
+</form>
+<p style="margin-top:20px;text-align:center"><a href="/salas">¿Hay gente jugando? Mira las salas</a></p></main>
 <script>
 const f=document.getElementById('f'),m=document.getElementById('msg'),b=document.getElementById('b');
 f.addEventListener('submit',async e=>{e.preventDefault();m.className='';m.textContent='';
@@ -325,6 +347,57 @@ f.addEventListener('submit',async e=>{e.preventDefault();m.className='';m.textCo
  b.disabled=false});
 </script></body></html>
 """ % (PAGE_STYLE, CONSENT)
+
+LOBBY_PAGE = """<!doctype html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Salas de Patapon 3</title>
+<style>{STYLE}
+:root{--blue:#1f5fae;--amber:#a85d00}
+@media (prefers-color-scheme:dark){:root{--blue:#7fb2ff;--amber:#ffb454}}
+main{max-width:760px}.count{text-align:center;margin:8px 0 24px}
+.count b{display:block;font-size:4rem;line-height:1;font-weight:700}
+.count span{display:block;text-transform:uppercase;letter-spacing:.06em;font-size:.8rem;color:var(--muted)}
+.count small{display:block;margin-top:6px;color:var(--muted)}
+.rooms{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(220px,100%),1fr));gap:10px}
+.room{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.room h2{font-size:1rem;margin:0;overflow-wrap:anywhere}.room p{margin:2px 0 0;font-size:.9rem}
+.st{font-weight:600;font-size:.9rem;margin-top:6px}.st::before{content:"\\25CF  "}
+.open{color:var(--ok)}.searching{color:var(--blue)}.playing,.in_vs{color:var(--amber)}.full{color:var(--muted)}
+.empty{text-align:center;color:var(--muted);padding:24px 0}.foot{margin-top:20px;font-size:.85rem;text-align:center}
+</style></head><body><main>
+<h1>Salas de Patapon 3 online</h1>
+<div class="count"><b id="n">–</b><span>jugadores conectados ahora</span><small id="sum"></small></div>
+<div class="rooms" id="rooms"></div>
+<p class="empty" id="empty" hidden></p>
+<p class="foot" id="foot">Cargando…</p>
+</main>
+<script>
+const STATE={open:'Abierta',full:'Llena',in_vs:'En VS',searching:'Buscando rival',playing:'Jugando'};
+const $=id=>document.getElementById(id);
+function card(r){
+ const d=document.createElement('div');d.className='room';
+ const h=document.createElement('h2');h.textContent=(r.kind==='vs'?'VS de ':'Cuartel de ')+(r.owner||'?');
+ const p=document.createElement('p');p.style.color='var(--muted)';
+ const bits=[r.kind==='vs'?'Arena '+r.mission:'Cooperativo',r.members+'/'+r.max_slot];
+ if(r.kind==='vs'){bits.push('nivel '+r.level);if(r.rule_type===0&&r.rule_value)bits.push(Math.round(r.rule_value/60)+' min')}
+ p.textContent=bits.join(' · ');
+ const s=document.createElement('div');s.className='st '+r.state;s.textContent=STATE[r.state]||r.state;
+ d.append(h,p,s);return d}
+async function load(){
+ try{const j=await (await fetch('/salas.json',{cache:'no-store'})).json();
+  if(!j.ok){$('n').textContent='–';$('sum').textContent='';$('rooms').replaceChildren();
+   $('empty').hidden=false;$('empty').textContent='El servidor online no está respondiendo ahora.';
+   $('foot').textContent='Reintentando cada 5 segundos.';return}
+  const vs=j.rooms.filter(r=>r.kind==='vs'&&r.state==='playing').length;
+  $('n').textContent=j.players;
+  $('sum').textContent=j.rooms.length+(j.rooms.length===1?' sala':' salas')+' · '+vs+' VS en curso';
+  $('rooms').replaceChildren(...j.rooms.map(card));
+  $('empty').hidden=j.rooms.length>0;
+  $('empty').textContent=j.players?'Hay gente conectada, pero nadie tiene sala abierta.':'Ahora no hay nadie conectado.';
+  $('foot').textContent='Actualizado '+new Date(j.t*1000).toLocaleTimeString('es-MX')+' · se actualiza sola'}
+ catch(_){$('foot').textContent='Sin conexión; reintentando…'}}
+load();setInterval(load,5000);
+</script></body></html>
+""".replace("{STYLE}", PAGE_STYLE)
 
 REPORT_PAGE = """<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Reportar un problema</title>
@@ -377,7 +450,8 @@ def selftest():
     with open(cfg, "w", encoding="utf-8") as f:
         json.dump({"codes": [{"label": "invitado 07", "sha256": code_hash("P3-K7QF-2MXD"), "enabled": True,
                               "staff": False}]}, f)
-    svc = Service("127.0.0.1", 0, db, cfg)
+    status = os.path.join(tmp, "salas.json")
+    svc = Service("127.0.0.1", 0, db, cfg, status=status)
     threading.Thread(target=svc.serve_forever, daemon=True).start()
     port = svc.server_address[1]
 
@@ -494,6 +568,33 @@ def selftest():
                        host="beta.montick.app", addr="10.1.0.5")
         assert st == 200 and json.loads(text) == {"ok": True, "message": SIGNUP_OK}, (st, text)
         assert rows("SELECT COUNT(*) FROM queue WHERE email='bot@spam.com'") == [(0,)]
+
+        # lobby_page: beta.montick.app/salas polls /salas.json; the sign-up page links to it
+        st, text = req("GET", "/salas", host="beta.montick.app")
+        assert st == 200 and "/salas.json" in text and "jugadores" in text, (st, text[:200])
+        st, text = req("GET", "/", host="beta.montick.app")
+        assert 'href="/salas"' in text, "sign-up page links to the lobby"
+        st, _ = req("GET", "/salas", host="report.montick.app")
+        assert st == 404, st
+
+        # lobby_json: the infrastructure server's --status file, fresh; missing or stale -> ok false
+        st, text = req("GET", "/salas.json", host="beta.montick.app")
+        assert st == 200 and json.loads(text) == {"ok": False}, (st, text)
+        snap = {"t": round(time.time()), "players": 3, "rooms": [
+            {"kind": "vs", "owner": "Montick", "members": 1, "max_slot": 2, "state": "searching", "mission": 3,
+             "level": 40, "rule_type": 0, "rule_value": 900}]}
+        with open(status, "w", encoding="utf-8") as f:
+            json.dump(snap, f)
+        st, text = req("GET", "/salas.json", host="beta.montick.app")
+        assert st == 200 and json.loads(text) == dict(snap, ok=True), (st, text)
+        with open(status, "w", encoding="utf-8") as f:
+            json.dump(dict(snap, t=round(time.time()) - STATUS_STALE - 5), f)
+        st, text = req("GET", "/salas.json", host="beta.montick.app")
+        assert json.loads(text) == {"ok": False}, text
+        with open(status, "w", encoding="utf-8") as f:
+            f.write("{roto")
+        st, text = req("GET", "/salas.json", host="beta.montick.app")
+        assert st == 200 and json.loads(text) == {"ok": False}, (st, text)
     finally:
         svc.shutdown()
         svc.server_close()
@@ -507,11 +608,13 @@ def main():
     ap.add_argument("--port", type=int, default=27322)
     ap.add_argument("--db", default="beta.db")
     ap.add_argument("--beta", help="the infrastructure server's beta config (invite code labels)")
+    ap.add_argument("--status", default="salas.json",
+                    help="the infrastructure server's --status file, served at beta.<host>/salas")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
         return selftest()
-    svc = Service(args.host, args.port, args.db, args.beta)
+    svc = Service(args.host, args.port, args.db, args.beta, status=args.status)
     if disable_quick_edit():
         log("console QuickEdit turned off: a click in this window no longer pauses the service")
     log("beta reports + queue: http://%s:%d, db %s" % (args.host, svc.server_address[1], os.path.abspath(args.db)))

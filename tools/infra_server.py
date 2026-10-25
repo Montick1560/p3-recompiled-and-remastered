@@ -459,8 +459,13 @@ class Conn:
 class Server:
     def __init__(self, host="127.0.0.1", port=27320, ws_port=27321, ws_path="/infra", max_rooms=64,
                  idle=30.0, stats_every=60.0, delay_ms=0, max_per_addr=4, max_conns=512, signal_timeout=15.0,
-                 loss=0, logger=log, beta_path=None, clock=time.time, db_path=None, impair=None):
+                 loss=0, logger=log, beta_path=None, clock=time.time, db_path=None, impair=None, status_path=None,
+                 status_every=2.0):
         self.log = logger
+        # --status: the public lobby summary (tools/beta_report_server.py serves it at beta.montick.app/salas)
+        self.status_path = status_path
+        self.status_every = status_every
+        self.status_t = 0.0
         # Lab only (--impair): every frame to a connection is delayed, jittered and sometimes stalled like a TCP
         # link that lost a segment, keeping that connection's order. The public server never runs it.
         self.impair = impair or {}
@@ -1222,6 +1227,37 @@ class Server:
             self.log("traffic: %d sessions, up %.1f kB/s, down %.1f kB/s, %d rooms"
                      % (sessions, self.stats_out / dt / 1024, self.stats_in / dt / 1024, len(self.rooms)))
             self.stats_t, self.stats_in, self.stats_out = now, 0, 0
+        if self.status_path and now - self.status_t >= self.status_every:
+            self.status_t = now
+            self.write_status()
+
+    def lobby_status(self):
+        """Players and rooms for the public lobby page: online ids and game settings only, never addresses.
+        A hideout carries bin attrs (hero, online id); a VS room has none and its ints are the VS settings
+        (0x4D mission, 0x4F max level, 0x50 rule type, 0x51 rule value, as the game's setupSearchIntAttr logs)."""
+        rooms = []
+        for room in sorted(self.rooms.values(), key=lambda r: r.id):
+            full = len(room.members) >= room.max_slot
+            r = {"kind": "coop" if room.bins else "vs", "owner": room.owner.conn.online_id,
+                 "members": len(room.members), "max_slot": room.max_slot}
+            if room.bins:
+                r["state"] = "in_vs" if room.flag_attr & FLAG_HIDDEN else "full" if full else "open"
+            else:
+                r["state"] = "playing" if full else "searching"
+                r.update(mission=room.ints.get(0x4D, 0), level=room.ints.get(0x4F, 0),
+                         rule_type=room.ints.get(0x50, 0), rule_value=room.ints.get(0x51, 0))
+            rooms.append(r)
+        return {"t": round(self.clock()), "players": sum(1 for c in self.conns.values() if c.session),
+                "rooms": rooms}
+
+    def write_status(self):
+        tmp = self.status_path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.lobby_status(), f, ensure_ascii=False, separators=(",", ":"))
+            os.replace(tmp, self.status_path)
+        except OSError:
+            pass  # a reader holding the file open on Windows: the next tick writes it again
 
     def serve(self):
         while self.running:
@@ -1752,7 +1788,61 @@ def selftest():
     beta_selftest(run, quiet, lines)
     link_stats_selftest(run, quiet, lines)
     impair_selftest(run, quiet)
+    lobby_status_selftest(run, quiet)
     print("selftest OK")
+
+
+def lobby_status_selftest(run, quiet):
+    """--status: the public lobby summary (players, rooms, VS settings) is written to a file, without addresses."""
+    import os
+    import tempfile
+
+    path = os.path.join(tempfile.mkdtemp(prefix="p3status_"), "salas.json")
+    srv = Server("127.0.0.1", 0, None, logger=quiet, status_path=path, status_every=0.05)
+    th = run(srv)
+
+    def status(pred, what):
+        deadline = time.monotonic() + 3
+        while True:
+            try:
+                with open(path, encoding="utf-8") as f:
+                    s = json.load(f)
+                if pred(s):
+                    return s
+            except (OSError, ValueError):
+                s = None
+            assert time.monotonic() < deadline, "no status with %s (have %r)" % (what, s)
+            time.sleep(0.05)
+
+    a, b = TestClient(srv.port), TestClient(srv.port)
+    a.ok("login", online_id="P3A")
+    b.ok("login", online_id="P3B")
+    hero = "Edson".encode("utf-16-le").ljust(94, b"\0").hex()
+    hide = a.ok("create", max_slot=4, flag_attr=0x04000000, ints=GAME_INTS, bins=[[0x55, hero]],
+                member_bins=[])["room"]
+    vs_ints = [[0x4C, 0], [0x4D, 3], [0x4E, 0x30001], [0x4F, 32], [0x50, 0], [0x51, 300]]
+    vs = b.ok("create", max_slot=2, flag_attr=0, ints=vs_ints, member_bins=[])["room"]
+    # status_rooms: a hideout (bin attrs) is co-op, a room without bin attrs is VS with its settings
+    s = status(lambda s: len(s["rooms"]) == 2, "two rooms")
+    assert s["players"] == 2 and abs(s["t"] - time.time()) < 5, s
+    assert s["rooms"][0] == {"kind": "coop", "owner": "P3A", "members": 1, "max_slot": 4, "state": "open"}, s
+    assert s["rooms"][1] == {"kind": "vs", "owner": "P3B", "members": 1, "max_slot": 2, "state": "searching",
+                             "mission": 3, "level": 32, "rule_type": 0, "rule_value": 300}, s
+    # status_vs_playing: the host of a hideout hides it while in VS; a full VS room is a match being played
+    a.ok("set_internal", room_id=hide["id"], flag_filter=0x54000000, flag_attr=0x14000000)
+    a.ok("join", room_id=vs["id"], member_bins=[])
+    s = status(lambda s: s["rooms"][1]["state"] == "playing", "VS playing")
+    assert s["rooms"][0]["state"] == "in_vs" and s["rooms"][1]["members"] == 2, s
+    # status_no_addresses: online ids only, never addresses, virtual IPs, console ids or codes
+    text = open(path, encoding="utf-8").read()
+    for bad in ("127.0.0.1", "10.80.", "addr", "console", "label"):
+        assert bad not in text, (bad, text)
+    # status_players_leave: closing a connection takes its rooms and its player out of the count
+    a.close()
+    b.close()
+    s = status(lambda s: s["players"] == 0 and not s["rooms"], "nobody left")
+    srv.running = False
+    th.join(timeout=2)
 
 
 def impair_selftest(run, quiet):
@@ -2184,6 +2274,7 @@ def main():
     ap.add_argument("--beta", help="beta config (invite codes, window, minimum protocol); none = no gate")
     ap.add_argument("--db", help="SQLite file for beta metrics (sessions, rooms, events); none = no metrics")
     ap.add_argument("--log", help="also append every log line to this file (the console keeps them too)")
+    ap.add_argument("--status", help="write the public lobby summary (players, rooms) to this JSON file every 2 s")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
@@ -2193,7 +2284,7 @@ def main():
     alog = AsyncLog(sink=tee_sink(args.log) if args.log else None)
     srv = Server(args.host, args.port, args.ws_port, args.ws_path, args.max_rooms, args.idle, args.stats_every,
                  args.delay_ms, args.max_per_addr, signal_timeout=args.signal_timeout, loss=args.loss, logger=alog,
-                 beta_path=args.beta, db_path=args.db, impair=args.impair)
+                 beta_path=args.beta, db_path=args.db, impair=args.impair, status_path=args.status)
     if disable_quick_edit():
         alog("console QuickEdit turned off: a click in this window no longer pauses the server")
     alog("infrastructure server: tcp %s:%d, ws %s:%d%s" % (args.host, srv.port, args.host, srv.ws_port, args.ws_path))
