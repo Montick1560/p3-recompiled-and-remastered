@@ -210,6 +210,21 @@ constexpr uint32_t kScriptUpdate = 0x08909C7Cu;
 FuncPtr g_script_update = nullptr;
 PacedStepTable g_script_paced;
 
+// The hideout's message windows step with those scripts (PSPRECOMP_P3_HIDEOUT_WINDOWS_30HZ=0 turns
+// it off for A/B). The window manager FUN_08931B6C (a0 = manager, a1 = frame time) runs the open
+// window and, once it has closed, FUN_0885C454 turns its pending answer (+2496) into "answered"
+// (+2499). A script that asked a question reads the window between two manager steps: at 30 fps
+// one step, but with the scripts paced to the pad update and the manager left at 60 Hz there were
+// two, the close went by unseen, and the START menu's "¿Sobrescribir los datos guardados?" -> Sí went
+// on as No: no save command (FUN_08B4F790), no save, and the help bar of the notice before it never
+// gave way to the hideout's (PPSSPP and 30 fps save, then show "START: Pantalla de título"). So the
+// manager runs once per pad update too, on the same frame as the scripts (it runs after the pad
+// update, so the window still reads that frame's presses); a skipped call banks its frame time like
+// the scripts'. Callers read the window through FUN_089319F0 afterwards, never this v0.
+constexpr uint32_t kWindowUpdate = 0x08931B6Cu;
+FuncPtr g_window_update = nullptr;
+PacedStepTable g_window_paced;
+
 // The code-overlay window (psp_overlay.h) starts with "MWo3" and the overlay id. The hideout is
 // id 2 in every release (read live: hideout 2, missions 3); go by the id, not the file name: the
 // DxD discs ship the hideout code as OL_Mission.bin, the vanilla EU disc as OL_Azito.bin.
@@ -361,6 +376,18 @@ void script_update_30hz(uint8_t* rdram, recomp_context* ctx) {
     g_running_script = obj;
     g_script_update(rdram, ctx);
     g_running_script = 0;
+}
+
+void window_update_30hz(uint8_t* rdram, recomp_context* ctx) {
+    if (!in_hideout(rdram)) {
+        g_window_update(rdram, ctx);
+        return;
+    }
+    uint32_t dt = static_cast<uint32_t>(ctx->r[5]);
+    const uint32_t manager = static_cast<uint32_t>(ctx->r[4]);
+    if (!g_window_paced.step_on(manager, g_input_updates, psp_vblank_index(psp_display_elapsed_us()), &dt)) return;
+    ctx->r[5] = static_cast<int32_t>(dt);
+    g_window_update(rdram, ctx);
 }
 
 // 60 fps script frame waits (with the 60fps set; PSPRECOMP_P3_SCRIPT_WAIT_30HZ=0 turns it off for
@@ -1365,6 +1392,12 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
             g_script_update = RECOMP_LOOKUP(kScriptUpdate);
             psp_dispatch_register(kScriptUpdate, script_update_30hz);
             std::fprintf(stderr, "[P3] 60fps: script objects paced to 30 Hz in the hideout only\n");
+            const char* windows = std::getenv("PSPRECOMP_P3_HIDEOUT_WINDOWS_30HZ");
+            if (!(windows && windows[0] == '0')) {
+                g_window_update = RECOMP_LOOKUP(kWindowUpdate);
+                psp_dispatch_register(kWindowUpdate, window_update_30hz);
+                std::fprintf(stderr, "[P3] 60fps: hideout message windows step with its scripts\n");
+            }
             const char* trace = std::getenv("PSPRECOMP_P3_HIDEOUT_TRACE");
             g_hideout_trace = trace && trace[0] == '1';
             const char* smooth_scripts = std::getenv("PSPRECOMP_P3_HIDEOUT_SMOOTH");

@@ -190,7 +190,8 @@ Read by the runtime binary at start-up or during execution.
   help (`psp_patch_set_active`); Patapon 3's `60fps` set paces the input update
   to 30 Hz, turns on smooth animation (`PSPRECOMP_P3_ANIM_SMOOTH`) and paces the
   weather (`PSPRECOMP_P3_WEATHER_30HZ`, `PSPRECOMP_P3_WEATHER_SMOOTH`) and the
-  script objects (`PSPRECOMP_P3_HIDEOUT_30HZ`), the scripts' frame waits
+  script objects (`PSPRECOMP_P3_HIDEOUT_30HZ`) with the hideout's message windows
+  (`PSPRECOMP_P3_HIDEOUT_WINDOWS_30HZ`), the scripts' frame waits
   (`PSPRECOMP_P3_SCRIPT_WAIT_30HZ`) and the item lists' hold repeat
   (`PSPRECOMP_P3_MENU_30HZ`).
 - **Set it when:** playing with an opt-in game patch, e.g. Patapon 3
@@ -949,6 +950,21 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   lost the stage, the army and the drum HUD (Arena del Valor froze). Install prints
   `[P3] 60fps: script objects paced to 30 Hz in the hideout only`.
 - **Set it when:** `0` to see the old double-speed scripts at 60 fps (A/B).
+
+### `PSPRECOMP_P3_HIDEOUT_WINDOWS_30HZ`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`0` off; anything else or unset = on).
+- **Default:** on with `PSPRECOMP_P3_HIDEOUT_30HZ`; never installed otherwise.
+- **Effect:** The message window manager `0x08931B6C` (a0 = manager, a1 = frame time)
+  runs once per pad update in the hideout, on the same frame as the paced scripts, so a
+  script that asked a question reads the window after one manager step, as at 30 fps.
+  With the manager at 60 Hz it stepped twice between two script runs, the window's close
+  (pending answer +2496 turned into "answered" +2499 by `0x0885C454`) went by unseen and
+  the START menu's "¿Sobrescribir los datos guardados?" -> Sí went on as No: no save, and
+  the help bar of the notice shown after Continue stayed (PPSSPP and 30 fps save, then
+  show the hideout's bar). A skipped call banks its frame time like the scripts'. Install
+  prints `[P3] 60fps: hideout message windows step with its scripts`.
+- **Set it when:** `0` for an A/B of the hideout save at 60 fps.
 
 ### `PSPRECOMP_P3_MENU_30HZ`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
