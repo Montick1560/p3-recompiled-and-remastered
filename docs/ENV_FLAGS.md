@@ -980,6 +980,19 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   `[P3] 60fps: script frame waits last their 30 fps time`.
 - **Set it when:** `0` to see the old double-speed mission waits at 60 fps (A/B).
 
+### `PSPRECOMP_P3_MOVIE_LATCH`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`0` off; anything else or unset = on).
+- **Default:** on (any frame rate; the routines' code is checked on every call).
+- **Effect:** The movie status query `FUN_0885F654` shows the change to 3 ("done"), which the
+  movie player's control thread makes, to the main thread only from its next frame (frames
+  counted by the main loop `FUN_08871CF4`; `runtime/include/psp_frame_latch.h`). Other status
+  changes pass at once. Without it the change could land between a scene's poll and the movie
+  wrapper's (`FUN_088929B0`), the wrapper deleted the movie, and the scene waited for good: the
+  intermittent black screen of a new game after the oath movie or the stones movie. Install
+  prints `[P3] movie status: a change reaches the main thread at its next frame`.
+- **Set it when:** `0` to bring the race back (A/B).
+
 ### `PSPRECOMP_P3_HIDEOUT_SMOOTH`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
 - **Type:** env (`0` off; anything else or unset = on).

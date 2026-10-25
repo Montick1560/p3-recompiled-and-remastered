@@ -28,6 +28,7 @@
 #include "psp_achievements_run.h"
 #include "psp_anim_blend.h"
 #include "psp_code_match.h"
+#include "psp_frame_latch.h"
 #include "psp_frame_wait.h"
 #include "psp_game_module.h"
 #include "psp_ge_list_blend.h"
@@ -1192,6 +1193,54 @@ void loading_icon_draw(uint8_t* rdram, recomp_context* ctx) {
     psp_display_fast_forward().request(kFastLoadVblanks);
 }
 
+// Movie status at frame boundaries (any frame rate; PSPRECOMP_P3_MOVIE_LATCH=0 turns it off for
+// A/B). The movie player's control thread (a PSP thread of its own) sets the movie's status
+// (obj+376 of the movie at 0x08AABE18; 2 playing, 3 done) while the main thread's tasks read it
+// through FUN_0885F654 (4 when there is no movie). Two tasks act on the 3: a scene waiting for
+// the end deletes the movie itself and goes on (the new game's oath scene, Azito overlay state 18:
+// FUN_08AC6750; the stones movie's scene likewise), and the movie wrapper's per-frame update
+// FUN_088929B0 deletes it on the frame it reads 3. On the PSP the control thread wakes at the
+// vblank and runs before the main thread's frame, so the scene (earlier in the frame) reads the 3
+// first and the wrapper never deletes a movie (every delete in good runs comes from a scene,
+// FUN_08892B7C). Here the control thread can run between two tasks of a frame (at any HLE call
+// of the main thread; the wrapper's own movie step makes several), so the 3 could land after the
+// scene's poll and before the wrapper's: the wrapper deleted the movie and the scene, reading 4,
+// waited for good. That was the intermittent black screen after the oath or the stones movie
+// (game alive, no further load), at 30 and at 60 fps (5 of 45 automated new games; none of 27
+// with this change). The status
+// query now shows the change to 3 to the main thread only from its next frame (psp_frame_latch.h,
+// frames counted by the main loop FUN_08871CF4), as on the PSP; the other changes come from the
+// thread the main thread itself just woke and pass at once. Both routines' code is checked on
+// every call: a release that has other code there runs unchanged.
+constexpr uint32_t kMainFrame = 0x08871CF4u;
+constexpr uint32_t kMainFrameCode[] = {0x27BDFF90u, 0xAFBF001Cu, 0xAFB40018u, 0xAFB30014u};
+constexpr uint32_t kMovieStatus = 0x0885F654u;
+constexpr uint32_t kMovieStatusCode[] = {0x27BDFFF0u, 0xAFBF000Cu, 0x3C0208ABu, 0x8C44BE18u};
+constexpr uint32_t kMovieObject = 0x08AABE18u;
+FuncPtr g_main_frame = nullptr;
+FuncPtr g_movie_status = nullptr;
+uint64_t g_main_frames = 0;
+constexpr uint32_t kMovieDone = 3;
+FrameLatch g_movie_status_latch{kMovieDone};
+
+void main_frame_count(uint8_t* rdram, recomp_context* ctx) {
+    if (psp_code_matches(rdram, kMainFrame, kMainFrameCode, sizeof kMainFrameCode / sizeof kMainFrameCode[0])) {
+        g_main_frames++;
+    }
+    g_main_frame(rdram, ctx);
+}
+
+void movie_status_latched(uint8_t* rdram, recomp_context* ctx) {
+    g_movie_status(rdram, ctx);
+    if (!psp_code_matches(rdram, kMovieStatus, kMovieStatusCode,
+                          sizeof kMovieStatusCode / sizeof kMovieStatusCode[0])) {
+        return;
+    }
+    const uint32_t real = static_cast<uint32_t>(ctx->r[2]);
+    const uint32_t shown = g_movie_status_latch.view(rd32(rdram, kMovieObject), real, g_main_frames);
+    ctx->r[2] = static_cast<int32_t>(shown);
+}
+
 void patapon3_register_hooks(uint8_t* /*rdram*/) {
     size_t ach_sources = 0;
     const PspAchievementSource* ach = p3_achievement_sources(&ach_sources);
@@ -1202,6 +1251,14 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
         g_loading_icon_draw = RECOMP_LOOKUP(kLoadingIconDraw);
         psp_dispatch_register(kLoadingIconDraw, loading_icon_draw);
         std::fprintf(stderr, "[P3] fast loading: tip-screen loads skip the vblank waits\n");
+    }
+    const char* movie_latch = std::getenv("PSPRECOMP_P3_MOVIE_LATCH");
+    if (!(movie_latch && movie_latch[0] == '0')) {
+        g_main_frame = RECOMP_LOOKUP(kMainFrame);
+        g_movie_status = RECOMP_LOOKUP(kMovieStatus);
+        psp_dispatch_register(kMainFrame, main_frame_count);
+        psp_dispatch_register(kMovieStatus, movie_status_latched);
+        std::fprintf(stderr, "[P3] movie status: a change reaches the main thread at its next frame\n");
     }
     const char* smooth = std::getenv("PSPRECOMP_P3_ANIM_SMOOTH");
     const bool smooth_on = (smooth && smooth[0]) ? smooth[0] == '1' : psp_patch_set_active("60fps");

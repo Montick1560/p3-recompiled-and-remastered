@@ -1005,6 +1005,11 @@ target_include_directories(test_frame_wait PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/i
 target_compile_options(test_frame_wait PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME frame_wait_tests COMMAND test_frame_wait)
 
+add_executable(test_frame_latch tests/test_frame_latch.cpp)
+target_include_directories(test_frame_latch PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_frame_latch PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME frame_latch_tests COMMAND test_frame_latch)
+
 add_executable(test_cpu_close tests/test_cpu_close.cpp src/psp_cpu.cpp src/psp_perf.cpp)
 target_include_directories(test_cpu_close PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_cpu_close PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
