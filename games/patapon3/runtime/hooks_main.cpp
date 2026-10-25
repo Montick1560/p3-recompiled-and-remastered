@@ -364,7 +364,10 @@ void script_update_30hz(uint8_t* rdram, recomp_context* ctx) {
 // one per 0.245 s instead of 0.50 s and the march hints every 2 s instead of 4 s. Pacing the
 // mission scripts instead lost the stage and froze the Arena (4100add), so they keep running
 // every vblank and only a wait that has just started is made twice as long
-// (psp_frame_wait.h). The command block is b = vm + [vm + 0x360] * 0x118: +0x118 "started",
+// (psp_frame_wait.h). A one-frame wait is left alone: scripts poll with "check; wait 1; repeat"
+// (the prologue drum tutorial's four VMs, ~30 polls a second each), and stretched to two runs the
+// poll skipped every other vblank and could miss a hit flag that lasts one. The command
+// block is b = vm + [vm + 0x360] * 0x118: +0x118 "started",
 // +0x120 "still running" (cleared by the command when the wait is over), +0x124 frames left
 // (the first run stores N and counts itself: N - 1). Not in the hideout while its scripts are
 // paced to 30 Hz above: their waits already last their 30 fps time.

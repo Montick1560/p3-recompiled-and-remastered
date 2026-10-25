@@ -9,7 +9,8 @@ static int failures = 0;
 
 int main() {
     CHECK(psp_frame_wait_left(14, 2) == 29, "N = 15 at two runs per frame: 30 runs");
-    CHECK(psp_frame_wait_left(0, 2) == 1, "N = 1 at two runs per frame: 2 runs");
+    CHECK(psp_frame_wait_left(0, 2) == 0, "N = 1 stays one run: a poll-every-frame loop sees one-vblank flags");
+    CHECK(psp_frame_wait_left(1, 2) == 3, "N = 2 at two runs per frame: 4 runs");
     CHECK(psp_frame_wait_left(59, 2) == 119, "N = 60 at two runs per frame: 120 runs");
     CHECK(psp_frame_wait_left(14, 1) == 14, "one run per frame (30 fps): unchanged");
     CHECK(psp_frame_wait_left(-1, 2) == -1, "a negative count is left alone: never invent a wait");

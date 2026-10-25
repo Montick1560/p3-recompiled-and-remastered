@@ -974,7 +974,8 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   of 0.50 s, march hints every 2 s instead of 4 s). When a wait has just started (command
   block `vm + [vm+0x360]*0x118`: +0x118 started, +0x120 still running, +0x124 frames
   left), its count is set so it lasts twice as many runs (`runtime/include/psp_frame_wait.h`);
-  scripts are never skipped. Not in the hideout while `PSPRECOMP_P3_HIDEOUT_30HZ` paces
+  a one-frame wait stays one run (scripts poll with "check; wait 1; repeat", and every other
+  vblank missed the prologue drum tutorial's one-vblank hits); scripts are never skipped. Not in the hideout while `PSPRECOMP_P3_HIDEOUT_30HZ` paces
   its scripts. `cmd_waitTime` already counts real time and is left alone. Install prints
   `[P3] 60fps: script frame waits last their 30 fps time`.
 - **Set it when:** `0` to see the old double-speed mission waits at 60 fps (A/B).
