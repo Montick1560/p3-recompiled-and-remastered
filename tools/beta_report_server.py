@@ -182,7 +182,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def lobby(self):
         """The lobby summary while the infrastructure server keeps it fresh; {"ok": false} otherwise."""
         try:
-            with open(self.server.status, encoding="utf-8") as f:
+            with open(self.server.status, encoding="utf-8-sig") as f:
                 snap = json.load(f)
             if abs(self.server.clock() - float(snap["t"])) <= STATUS_STALE:
                 return dict(snap, ok=True)
@@ -348,58 +348,233 @@ f.addEventListener('submit',async e=>{e.preventDefault();m.className='';m.textCo
 </script></body></html>
 """ % (PAGE_STYLE, CONSENT)
 
-LOBBY_PAGE = """<!doctype html><html lang="es"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Salas de Patapon 3</title>
-<style>{STYLE}
-:root{--blue:#1f5fae;--amber:#a85d00}
-@media (prefers-color-scheme:dark){:root{--blue:#7fb2ff;--amber:#ffb454}}
-main{max-width:760px}.count{text-align:center;margin:8px 0 24px}
-.count b{display:block;font-size:4rem;line-height:1;font-weight:700}
-.count span{display:block;text-transform:uppercase;letter-spacing:.06em;font-size:.8rem;color:var(--muted)}
-.count small{display:block;margin-top:6px;color:var(--muted)}
-.rooms{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(220px,100%),1fr));gap:10px}
-.room{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
-.room h2{font-size:1rem;margin:0;overflow-wrap:anywhere}.room p{margin:2px 0 0;font-size:.9rem}
-.st{font-weight:600;font-size:.9rem;margin-top:6px}.st::before{content:"\\25CF  "}
-.open{color:var(--ok)}.searching,.departing{color:var(--blue)}.playing,.in_vs,.in_mission{color:var(--amber)}
-.full{color:var(--muted)}
-.empty{text-align:center;color:var(--muted);padding:24px 0}.foot{margin-top:20px;font-size:.85rem;text-align:center}
-</style></head><body><main>
-<h1>Salas de Patapon 3 online</h1>
-<div class="count"><b id="n">–</b><span>jugadores conectados ahora</span><small id="sum"></small></div>
-<div class="rooms" id="rooms"></div>
-<p class="empty" id="empty" hidden></p>
-<p class="foot" id="foot">Cargando…</p>
-</main>
+LOBBY_PAGE = r"""<!doctype html>
+<!--
+THESIS: the lobby is a split-flap departures board; rooms are departures, counters are flap digits, and a change in the
+world is a change of flaps. Refuses the dashboard of metric tiles and room cards.
+OWN-WORLD: vermilion wall, ink-black flaps with a hinge line, ivory print, green/amber/blue state print, ivory
+engraved plate, corner screws, one condensed DIN-style face in capitals.
+STORY: a player sees at once how many are online and which rooms are open, searching or playing, then decides to launch.
+FIRST VIEWPORT: wall + screwed board; plate "SALAS EN LINEA", counter strip (JUGADORES, SALAS, VS EN CURSO as flap
+digits), then one row per room (tag, name, players, state, detail line).
+FORM: departures board (grounded candidate 6 of 7, staging: counters strip over rows); seed e62684e0.
+-->
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Salas de Patapon 3</title>
+<style>
+:root{
+ --wall:#d23a1c;--wall-deep:#a82a12;
+ --ink:#1a1511;--ink-lit:#2a231b;--hinge:#050403;
+ --print:#f3e8c9;--print-dim:#b8ab8c;
+ --open:#86e08f;--active:#ffb832;--search:#8ccbff;--plate:#efe3c2;
+ --u:clamp(.95rem,4.6vw,1.5rem);
+ --face:Bahnschrift,"DIN Alternate","Roboto Condensed","Arial Narrow",sans-serif;
+}
+*{box-sizing:border-box}
+html{background:var(--wall-deep)}
+body{margin:0;min-height:100vh;color:var(--print);font:600 1rem/1.3 var(--face);
+ background:
+  radial-gradient(120% 80% at 50% 0%,var(--wall) 0%,var(--wall-deep) 100%);
+ padding:clamp(14px,4vw,40px) 16px 40px}
+.wrap{max-width:880px;margin:0 auto}
+.board{position:relative;background:var(--ink);border-radius:10px;
+ padding:clamp(18px,3.4vw,28px) clamp(12px,3vw,24px) clamp(14px,2.4vw,20px);
+ box-shadow:0 2px 0 #ffffff22 inset,0 0 0 clamp(5px,1.2vw,9px) #2b1a14,0 14px 30px #00000070}
+.screw{position:absolute;width:11px;height:11px;border-radius:50%;
+ background:radial-gradient(circle at 35% 30%,#8d8372,#3a342b 70%);box-shadow:0 1px 1px #000a}
+.screw::after{content:"";position:absolute;left:2px;right:2px;top:5px;height:1px;background:#1a1611;transform:rotate(35deg)}
+.screw.a{left:7px;top:7px}.screw.b{right:7px;top:7px}.screw.c{left:7px;bottom:7px}.screw.d{right:7px;bottom:7px}
+
+.plate{display:inline-block;background:var(--plate);color:#1a1511;border-radius:2px;
+ padding:.35em .9em;font-size:clamp(1rem,3.8vw,1.25rem);letter-spacing:.14em;text-transform:uppercase;
+ box-shadow:0 1px 0 #fff8 inset,0 2px 3px #0008;margin:0 0 clamp(14px,3vw,22px)}
+h1{margin:0;font:inherit;display:inline}
+
+/* counters */
+.counters{display:flex;flex-wrap:wrap;gap:14px clamp(18px,5vw,44px);align-items:flex-end;
+ padding-bottom:clamp(14px,3vw,20px);border-bottom:2px solid #0a0806;box-shadow:0 1px 0 #ffffff12}
+.counter{display:flex;flex-direction:column;gap:6px}
+.cap{font-size:.78rem;letter-spacing:.14em;text-transform:uppercase;color:var(--print-dim)}
+.counter .word{--u:clamp(1.7rem,9vw,2.9rem)}
+
+/* flaps */
+.word{display:inline-flex;gap:2px;--cw:calc(var(--u)*.78);--ch:calc(var(--u)*1.3)}
+.f{position:relative;display:inline-block;width:var(--cw);height:var(--ch);border-radius:3px;
+ background:linear-gradient(180deg,#14100c 0 49%,var(--ink-lit) 51% 100%);
+ box-shadow:0 1px 0 #ffffff14 inset,0 1px 2px #000b;perspective:300px;overflow:hidden;
+ font-size:var(--u);line-height:var(--ch);text-align:center;color:var(--print);letter-spacing:0}
+.f::after{content:"";position:absolute;left:0;right:0;top:calc(50% - 1px);height:2px;background:var(--hinge);z-index:2}
+.f i{position:absolute;inset:0;font-style:normal;display:block;transform-origin:50% 50%;backface-visibility:hidden}
+.f i.flip{animation:flap .09s linear}
+@keyframes flap{0%{transform:rotateX(0)}49.9%{transform:rotateX(-88deg)}50%{transform:rotateX(88deg)}100%{transform:rotateX(0)}}
+.t-open .f{color:var(--open)}.t-active .f{color:var(--active)}.t-search .f{color:var(--search)}.t-dim .f{color:var(--print-dim)}
+
+/* rows */
+.rows{margin-top:clamp(10px,2.4vw,16px);display:flex;flex-direction:column}
+.row{display:grid;align-items:center;gap:8px 14px;padding:clamp(9px,2vw,12px) 0;
+ grid-template-columns:auto 1fr auto auto;
+ grid-template-areas:"tag name players state" ". det det det";
+ border-top:1px solid #ffffff12}
+.row:first-child{border-top:0}
+.tag{grid-area:tag;display:inline-block;min-width:3.6rem;text-align:center;font-size:.78rem;letter-spacing:.12em;
+ text-transform:uppercase;padding:.28em .5em;border-radius:2px}
+.tag.vs{background:var(--plate);color:#1a1511}
+.tag.coop{border:1.5px solid var(--print-dim);color:var(--print)}
+.n{grid-area:name}.p{grid-area:players}.s{grid-area:state}
+.det{grid-area:det;font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;color:var(--print-dim);min-height:0}
+.det:empty{display:none}
+.det b{color:var(--print);font-weight:700}
+
+@media (max-width:620px){
+ .row{grid-template-columns:auto 1fr;grid-template-areas:"tag name" "players state" "det det"}
+ .p,.s{justify-self:start}
+ .row{gap:8px 12px}
+ .s{justify-self:end}
+}
+
+.empty .row{opacity:.9}
+.foot{margin:18px 2px 0;display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px 18px;
+ font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:#fff}
+.foot a{color:#fff;text-underline-offset:3px}
+.live::before{content:"";display:inline-block;width:.6em;height:.6em;border-radius:50%;margin-right:.55em;
+ background:var(--open);box-shadow:0 0 0 2px #0003;animation:beat 2.4s ease-in-out infinite}
+.live.off::before{background:#ffd0c4;animation:none}
+@keyframes beat{50%{opacity:.35}}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+:focus-visible{outline:3px solid #fff;outline-offset:3px}
+@media (prefers-reduced-motion:reduce){.f i.flip{animation:none}.live::before{animation:none}}
+</style></head><body>
+<div class="wrap">
+ <main class="board" id="board">
+  <i class="screw a"></i><i class="screw b"></i><i class="screw c"></i><i class="screw d"></i>
+  <div class="plate"><h1>Salas en línea · Patapon 3</h1></div>
+  <section class="counters" aria-hidden="true">
+   <div class="counter"><div class="word" data-c="players"></div><div class="cap">Jugadores</div></div>
+   <div class="counter"><div class="word" data-c="rooms"></div><div class="cap">Salas</div></div>
+   <div class="counter"><div class="word" data-c="vs"></div><div class="cap">VS en curso</div></div>
+  </section>
+  <div class="rows" id="rows" aria-hidden="true"></div>
+  <p class="sr" id="live" role="status" aria-live="polite">Cargando las salas…</p>
+  <ul class="sr" id="list"></ul>
+ </main>
+ <div class="foot"><span class="live" id="stamp">Cargando…</span>
+  <a href="/">¿Quieres jugar? Apúntate a la beta</a></div>
+</div>
 <script>
-const STATE={open:'Abierta',full:'Llena',departing:'Saliendo a misión',in_mission:'En misión',in_vs:'En VS',
- searching:'Buscando rival',playing:'Jugando'};
+(()=>{
 const $=id=>document.getElementById(id);
-function card(r){
- const d=document.createElement('div');d.className='room';
- const h=document.createElement('h2');h.textContent=(r.kind==='vs'?'VS de ':'Cuartel de ')+(r.owner||'?');
- const p=document.createElement('p');p.style.color='var(--muted)';
- const bits=[r.kind==='vs'?'Arena '+r.mission:'Cooperativo',r.members+'/'+r.max_slot];
- if(r.kind==='vs'){bits.push('nivel '+r.level);if(r.rule_type===0&&r.rule_value)bits.push(Math.round(r.rule_value/60)+' min')}
- p.textContent=bits.join(' · ');
- const s=document.createElement('div');s.className='st '+r.state;s.textContent=STATE[r.state]||r.state;
- d.append(h,p,s);return d}
+const REDUCE=matchMedia('(prefers-reduced-motion:reduce)').matches;
+const GLYPHS=Array.from('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789');
+const STATE={open:['ABIERTA','open'],full:['LLENA','dim'],departing:['SALIENDO','search'],
+ in_mission:['EN MISIÓN','active'],in_vs:['EN VS','active'],searching:['BUSCANDO','search'],playing:['JUGANDO','active']};
+const NAME_CELLS=14,STATE_CELLS=9;
+
+/* a word = fixed number of flap cells; a changed cell flips through a few glyphs and lands */
+function makeWord(el,len){
+ el.replaceChildren();el._c=[];
+ for(let k=0;k<len;k++){const f=document.createElement('span');f.className='f';const i=document.createElement('i');
+  f.append(i);el.append(f);el._c.push({i,ch:'',busy:0})}
+}
+function setCell(c,ch,delay){
+ if(c.ch===ch)return;c.ch=ch;
+ if(REDUCE){c.i.textContent=ch;return}
+ const token=++c.busy,steps=ch===' '&&!c.i.textContent?0:3+(Math.random()*3|0);
+ let n=0;
+ const tick=()=>{
+  if(c.busy!==token)return;
+  const last=n>=steps;
+  c.i.classList.remove('flip');void c.i.offsetWidth;c.i.classList.add('flip');
+  setTimeout(()=>{if(c.busy===token)c.i.textContent=last?ch:GLYPHS[Math.random()*GLYPHS.length|0]},45);
+  if(!last){n++;setTimeout(tick,95)}
+ };
+ setTimeout(tick,delay)
+}
+function setWord(el,text,len,delay=0){
+ if(!el._c||el._c.length!==len)makeWord(el,len);
+ const chars=Array.from(text);
+ for(let k=0;k<len;k++)setCell(el._c[k],k<chars.length?chars[k]:' ',delay+k*28)
+}
+const fit=(s,len)=>{const a=Array.from(String(s||'?').toUpperCase());
+ return a.length>len?a.slice(0,len-1).join('')+'…':a.join('')};
+const num=(n,len)=>String(n).padStart(len,' ');
+
+const rowsEl=$('rows'),rowEls=new Map();
+function rowFor(id){
+ let r=rowEls.get(id);
+ if(r)return r;
+ r=document.createElement('div');r.className='row';
+ r.innerHTML='<span class="tag"></span><div class="word n"></div><div class="word p"></div><div class="word s"></div><div class="det"></div>';
+ r._tag=r.children[0];r._n=r.children[1];r._p=r.children[2];r._s=r.children[3];r._d=r.children[4];
+ rowEls.set(id,r);rowsEl.append(r);return r
+}
+let first=true,order=0;
+function paintRoom(r,i){
+ const row=rowFor(r.key),d=first?i*60:0;
+ const [label,tone]=STATE[r.state]||[String(r.state).toUpperCase(),'dim'];
+ row._tag.className='tag '+r.kind;row._tag.textContent=r.kind==='vs'?'VS':'Coop';
+ setWord(row._n,fit(r.owner,NAME_CELLS),NAME_CELLS,d);
+ setWord(row._p,r.members+'/'+r.max_slot,3,d+120);
+ setWord(row._s,label,STATE_CELLS,d+200);
+ row._s.className='word s t-'+tone;row._p.className='word p t-'+(r.members>=r.max_slot?'dim':'open');
+ row._n.className='word n';
+ if(r.kind==='vs'){
+  const bits=['Arena <b>'+(+r.mission)+'</b>','nivel <b>'+(+r.level)+'</b>'];
+  if(r.rule_type===0&&r.rule_value)bits.push('<b>'+Math.round(r.rule_value/60)+'</b> min');
+  row._d.innerHTML=bits.join(' · ')
+ }else row._d.textContent=r.state==='in_vs'?'Su grupo está en una sala VS':'Cooperativo';
+ return row
+}
+function placeholder(left,right=''){
+ rowsEl.querySelectorAll('.row').forEach(x=>x.remove());rowEls.clear();
+ const row=rowFor('msg');row._tag.className='tag';row._tag.textContent='';
+ setWord(row._n,left,NAME_CELLS);setWord(row._p,'',3);setWord(row._s,right,STATE_CELLS,150);
+ row._n.className='word n t-dim';row._s.className='word s t-dim';row._d.textContent='';
+}
+
+const cw={players:$('board').querySelector('[data-c=players]'),rooms:$('board').querySelector('[data-c=rooms]'),
+ vs:$('board').querySelector('[data-c=vs]')};
+function counters(p,r,v){
+ const f=n=>n===null?'':num(n,2),w=n=>n===null?2:Math.max(2,String(n).length);
+ setWord(cw.players,f(p),w(p),first?60:0);
+ setWord(cw.rooms,f(r),w(r),first?140:0);
+ setWord(cw.vs,f(v),w(v),first?220:0)
+}
+const clock=t=>new Date(t*1000).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+let shown='';
 async function load(){
- try{const j=await (await fetch('/salas.json',{cache:'no-store'})).json();
-  if(!j.ok){$('n').textContent='–';$('sum').textContent='';$('rooms').replaceChildren();
-   $('empty').hidden=false;$('empty').textContent='El servidor online no está respondiendo ahora.';
-   $('foot').textContent='Reintentando cada 5 segundos.';return}
-  const vs=j.rooms.filter(r=>r.kind==='vs'&&r.state==='playing').length;
-  $('n').textContent=j.players;
-  $('sum').textContent=j.rooms.length+(j.rooms.length===1?' sala':' salas')+' · '+vs+' VS en curso';
-  $('rooms').replaceChildren(...j.rooms.map(card));
-  $('empty').hidden=j.rooms.length>0;
-  $('empty').textContent=j.players?'Hay gente conectada, pero nadie tiene sala abierta.':'Ahora no hay nadie conectado.';
-  $('foot').textContent='Actualizado '+new Date(j.t*1000).toLocaleTimeString('es-MX')+' · se actualiza sola'}
- catch(_){$('foot').textContent='Sin conexión; reintentando…'}}
+ try{
+  const j=await (await fetch('/salas.json',{cache:'no-store'})).json();
+  if(!j.ok){
+   if(shown!=='off'){counters(null,null,null);placeholder('SIN SEÑAL');shown='off'}
+   $('live').textContent='El servidor online no está respondiendo ahora.';$('list').replaceChildren();
+   $('stamp').className='live off';$('stamp').textContent='Sin señal · reintentando';first=false;return}
+  const rooms=j.rooms,vs=rooms.filter(r=>r.kind==='vs'&&r.state==='playing').length;
+  counters(j.players,rooms.length,vs);
+  const seen={};rooms.forEach(r=>{const k=r.owner+'/'+r.kind;seen[k]=(seen[k]||0)+1;r.key=k+(seen[k]>1?'/'+seen[k]:'')});
+  if(shown==='off'||shown==='empty'){rowsEl.querySelectorAll('.row').forEach(x=>x.remove());rowEls.clear()}
+  if(!rooms.length){
+   placeholder(j.players?'SIN SALAS':'NADIE POR AQUÍ');shown='empty'
+  }else{
+   shown='rooms';
+   rooms.forEach((r,i)=>paintRoom(r,i));
+   for(const [key,el] of [...rowEls])if(!rooms.some(r=>r.key===key)){el.remove();rowEls.delete(key)}
+   rooms.forEach(r=>rowsEl.append(rowEls.get(r.key)))
+  }
+  const list=$('list');list.replaceChildren(...rooms.map(r=>{const li=document.createElement('li');
+   li.textContent=(r.kind==='vs'?'VS de ':'Cuartel de ')+r.owner+', '+r.members+' de '+r.max_slot+', '+
+    (STATE[r.state]?STATE[r.state][0].toLowerCase():r.state)+(r.kind==='vs'?', arena '+r.mission+', nivel '+r.level:'');return li}));
+  $('live').textContent=j.players+(j.players===1?' jugador':' jugadores')+' en línea, '+rooms.length+
+   (rooms.length===1?' sala':' salas')+(vs?', '+vs+' VS en curso':'')+'.';
+  $('stamp').className='live';$('stamp').textContent='En vivo · '+clock(j.t);first=false
+ }catch(_){$('stamp').className='live off';$('stamp').textContent='Sin conexión · reintentando'}
+}
+makeWord(cw.players,2);makeWord(cw.rooms,2);makeWord(cw.vs,2);
 load();setInterval(load,5000);
+})();
 </script></body></html>
-""".replace("{STYLE}", PAGE_STYLE)
+"""
 
 REPORT_PAGE = """<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Reportar un problema</title>
