@@ -370,9 +370,10 @@ void script_update_30hz(uint8_t* rdram, recomp_context* ctx) {
 // one per 0.245 s instead of 0.50 s and the march hints every 2 s instead of 4 s. Pacing the
 // mission scripts instead lost the stage and froze the Arena (4100add), so they keep running
 // every vblank and only a wait that has just started is made twice as long
-// (psp_frame_wait.h). A one-frame wait is left alone: scripts poll with "check; wait 1; repeat"
-// (the prologue drum tutorial's four VMs, ~30 polls a second each), and stretched to two runs the
-// poll skipped every other vblank and could miss a hit flag that lasts one. The command
+// (psp_frame_wait.h). One-frame waits are doubled too (the countdown is a loop of them), but a
+// wait that starts between two pad updates lasts one run less, so it ends on a pad-update frame:
+// scripts that poll with "check; wait 1; repeat" (the prologue drum tutorial's four VMs) then
+// check on the frames whose pad words hold the presses, not on the frames in between. The command
 // block is b = vm + [vm + 0x360] * 0x118: +0x118 "started",
 // +0x120 "still running" (cleared by the command when the wait is over), +0x124 frames left
 // (the first run stores N and counts itself: N - 1). Not in the hideout while its scripts are
@@ -387,7 +388,9 @@ void wait_frame_30hz(uint8_t* rdram, recomp_context* ctx) {
     g_wait_frame(rdram, ctx);
     if (started || rd32(rdram, b + 0x120) == 0) return;
     if (g_script_update && in_hideout(rdram)) return;
-    const int32_t left = psp_frame_wait_left(static_cast<int32_t>(rd32(rdram, b + 0x124)), 2);
+    const bool on_pad_frame = g_input_pacer.started &&
+                              g_input_pacer.last == psp_vblank_index(psp_display_elapsed_us());
+    const int32_t left = psp_frame_wait_left(static_cast<int32_t>(rd32(rdram, b + 0x124)), 2, on_pad_frame);
     std::memcpy(rdram + ((b + 0x124) & 0x07FFFFFFu), &left, 4);
 }
 
