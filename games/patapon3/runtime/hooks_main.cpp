@@ -48,6 +48,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -780,6 +781,14 @@ constexpr uint8_t kBoneKinds[64] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 uint8_t g_bone_kinds[64] = {};
 constexpr int kBoneAlphaWord = 0x4C / 4;
 
+// Models blended inside the current pose cache call, with the evaluation's arguments
+// (pose_cache_exact evaluates them again at the whole frame).
+struct BlendedEval {
+    uint32_t model;
+    recomp_context args;
+};
+thread_local std::vector<BlendedEval>* g_blended_evals = nullptr;
+
 // The shipped smooth mode for one GMO evaluation in a player tick/draw scope.
 void pose_eval_blend(uint8_t* rdram, recomp_context* ctx, uint32_t model, uint16_t count, float alpha) {
     if (!g_smooth_scope || model == 0 || g_scope_motions.n == 0) {
@@ -835,6 +844,7 @@ void pose_eval_blend(uint8_t* rdram, recomp_context* ctx, uint32_t model, uint16
         psp_blend_pose(sample_a.data() + bone * 64, sample_b.data() + bone * 64, g_bone_kinds, 64, alpha);
     }
     std::memcpy(rdram + (bones & 0x07FFFFFFu), sample_a.data(), words * 4);
+    if (g_blended_evals != nullptr) g_blended_evals->push_back({model, args});
 }
 
 void pose_eval_smooth(uint8_t* rdram, recomp_context* ctx) {
@@ -864,6 +874,135 @@ void pose_eval_smooth(uint8_t* rdram, recomp_context* ctx) {
         return;
     }
     pose_eval_blend(rdram, ctx, model, count, alpha);
+}
+
+// The exact pose for game logic. The pose cache FUN_088785A8 (a0 = player +0x40) evaluates the
+// model (FUN_08879DF4: the evaluation, then FUN_089DC264, each bone's world matrix from its local
+// transforms and the parent chain) and records the model's GE list from those matrices, which the
+// draw only calls. With a matrix table (player +0x48) the cache points the bones' matrices at it
+// for the call (model vtable +0x70 = FUN_0887A380 -> FUN_089D7768(B, table, n); table 0 = back to
+// bone +0x80), and the bone getters (FUN_08878D38 / FUN_08878C8C -> FUN_08878494) copy from it.
+// Game logic reads them too: the cannon Hero's charged shot (FUN_0888ED40 -> FUN_0888FB40 /
+// FUN_0887EAA4, from the task loop, outside the tick) takes its angle from the cannon bone; from
+// the blended pose at clock 6.5 that bone was 25 degrees up instead of 5 (the recoil of frame 7
+// mixed in) and the shot flew in a high arc (report of 24 Oct 2026). So once the list is recorded
+// from the blended pose, each blended model is evaluated again at the whole frame and its matrices
+// recomputed into the table, as the unmodified game leaves them. The parts hung on the bones (a
+// Hero's weapon and mask, the Patapons' weapons: FUN_088F3B88(owner, part) -> FUN_088F3888, every
+// frame) store their world matrix in the part (part +0x00..+0x3F), and the shot leaves from the
+// cannon part: attach_smooth places each part twice, on the blended matrices kept here (for its
+// draw, motion_draw_part) and then on the exact ones, which stay for game logic.
+constexpr uint32_t kBoneMatrices = 0x089DC264u;
+FuncPtr g_bone_matrices = nullptr;
+FuncPtr g_pose_cache_exact = nullptr;
+struct PoseSwap {
+    uint32_t addr = 0;
+    std::vector<uint8_t> smooth, exact;
+};
+std::unordered_map<uint32_t, std::vector<PoseSwap>> g_pose_swaps;  // player -> its models' matrices
+
+void pose_cache_exact(uint8_t* rdram, recomp_context* ctx) {
+    if (!g_smooth_scope) {
+        g_pose_cache_exact(rdram, ctx);
+        return;
+    }
+    const uint32_t holder = static_cast<uint32_t>(ctx->r[4]);
+    std::vector<BlendedEval> evals;
+    std::vector<BlendedEval>* outer = g_blended_evals;
+    g_blended_evals = &evals;
+    g_pose_cache_exact(rdram, ctx);
+    g_blended_evals = outer;
+    if (evals.empty() || holder < 0x40u) return;
+    const uint32_t player = holder - 0x40u, wrapper = rd32(rdram, holder + 4), table = rd32(rdram, holder + 8);
+    std::vector<PoseSwap> swaps;
+    for (const BlendedEval& e : evals) {
+        uint16_t count = 0;
+        std::memcpy(&count, rdram + ((e.model + 0x18) & 0x07FFFFFFu), 2);
+        const bool in_table = table != 0 && wrapper != 0 && rd32(rdram, wrapper + 4) == e.model;
+        PoseSwap s;
+        s.addr = in_table ? table : rd32(rdram, e.model + 4);
+        const size_t len = static_cast<size_t>(count) * (in_table ? 0x40u : 0x100u);
+        const uint8_t* p = rdram + (s.addr & 0x07FFFFFFu);
+        s.smooth.assign(p, p + len);
+        recomp_context c = e.args;
+        eval_at(rdram, &c, e.args, [](int i) { return g_scope_motions.whole[i]; }, false);
+        const FuncPtr point = in_table ? RECOMP_LOOKUP(rd32(rdram, rd32(rdram, wrapper) + 0x70)) : nullptr;
+        if (point != nullptr) {
+            c.r[4] = static_cast<int32_t>(wrapper);
+            c.r[5] = static_cast<int32_t>(table);
+            c.r[6] = static_cast<int32_t>(rd32(rdram, holder + 20));
+            point(rdram, &c);
+        }
+        c.r[4] = static_cast<int32_t>(e.model);
+        g_bone_matrices(rdram, &c);
+        if (point != nullptr) {
+            c.r[4] = static_cast<int32_t>(wrapper);
+            c.r[5] = 0;
+            c.r[6] = 0;
+            point(rdram, &c);
+        }
+        s.exact.assign(p, p + len);
+        swaps.push_back(std::move(s));
+    }
+    if (g_pose_swaps.size() >= 1024 && g_pose_swaps.find(player) == g_pose_swaps.end()) g_pose_swaps.clear();
+    g_pose_swaps[player] = std::move(swaps);
+}
+
+constexpr uint32_t kAttachDraw = 0x088F3B88u;
+FuncPtr g_attach_draw = nullptr;
+
+// A part's world matrix (part +0x00..+0x3F, what its motion draw places it with), both versions.
+struct PartMatrix {
+    uint8_t smooth[64], exact[64];
+};
+std::unordered_map<uint32_t, PartMatrix> g_part_matrices;  // part (a motion player) -> its matrices
+
+void attach_smooth(uint8_t* rdram, recomp_context* ctx) {
+    const uint32_t part = static_cast<uint32_t>(ctx->r[5]);
+    const recomp_context args = *ctx;
+    auto show = [rdram](bool smooth) {
+        for (const auto& entry : g_pose_swaps) {
+            for (const PoseSwap& s : entry.second) {
+                const std::vector<uint8_t>& from = smooth ? s.exact : s.smooth;
+                const std::vector<uint8_t>& to = smooth ? s.smooth : s.exact;
+                uint8_t* p = rdram + (s.addr & 0x07FFFFFFu);
+                if (!to.empty() && std::memcmp(p, from.data(), from.size()) == 0) std::memcpy(p, to.data(), to.size());
+            }
+        }
+    };
+    // The part placed on the blended bones (kept for its draw), then on the exact ones: game logic
+    // (the cannon Hero's shot leaves from the cannon part) sees what the PSP computes.
+    show(true);
+    g_attach_draw(rdram, ctx);
+    show(false);
+    if (part == 0) return;
+    PartMatrix pm;
+    std::memcpy(pm.smooth, rdram + (part & 0x07FFFFFFu), 64);
+    *ctx = args;
+    g_attach_draw(rdram, ctx);
+    std::memcpy(pm.exact, rdram + (part & 0x07FFFFFFu), 64);
+    if (g_part_matrices.size() >= 1024 && g_part_matrices.find(part) == g_part_matrices.end()) g_part_matrices.clear();
+    g_part_matrices[part] = pm;
+}
+
+// A part's motion draw shows it where the smooth body puts it (attach_smooth).
+void motion_draw_scoped(uint8_t* rdram, recomp_context* ctx) {
+    smooth_scope_call(rdram, ctx, g_motion_draw);
+}
+
+void motion_draw_part(uint8_t* rdram, recomp_context* ctx) {
+    const uint32_t player = static_cast<uint32_t>(ctx->r[4]);
+    auto it = g_part_matrices.find(player);
+    if (it == g_part_matrices.end()) {
+        motion_draw_scoped(rdram, ctx);
+        return;
+    }
+    const PartMatrix pm = it->second;
+    uint8_t* p = rdram + (player & 0x07FFFFFFu);
+    const bool shown = std::memcmp(p, pm.exact, 64) == 0;
+    if (shown) std::memcpy(p, pm.smooth, 64);
+    motion_draw_scoped(rdram, ctx);
+    if (shown && std::memcmp(p, pm.smooth, 64) == 0) std::memcpy(p, pm.exact, 64);
 }
 
 // Smooth bone attachments (same switch as above). FUN_08878D38 (a1 = bone) and FUN_08878C8C
@@ -1069,9 +1208,14 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
         g_playhead_set = RECOMP_LOOKUP(kPlayheadSet);
         g_pose_eval = RECOMP_LOOKUP(kPoseEval);
         psp_dispatch_register(kMotionTick, motion_scope<&g_motion_tick>);
-        psp_dispatch_register(kMotionDraw, motion_scope<&g_motion_draw>);
+        psp_dispatch_register(kMotionDraw, motion_draw_part);
         psp_dispatch_register(kPlayheadSet, playhead_set_smooth);
         psp_dispatch_register(kPoseEval, pose_eval_smooth);
+        g_bone_matrices = RECOMP_LOOKUP(kBoneMatrices);
+        g_pose_cache_exact = RECOMP_LOOKUP(kPoseCache);
+        psp_dispatch_register(kPoseCache, pose_cache_exact);
+        g_attach_draw = RECOMP_LOOKUP(kAttachDraw);
+        psp_dispatch_register(kAttachDraw, attach_smooth);
         g_bone_at = RECOMP_LOOKUP(kBoneAt);
         g_bone_named = RECOMP_LOOKUP(kBoneNamed);
         psp_dispatch_register(kBoneAt, bone_smooth<&g_bone_at>);

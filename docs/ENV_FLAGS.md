@@ -830,7 +830,15 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   `0x08A82BB0`, one bone matrix per whole frame; the Patapons in the barracks
   hang body, eye and weapon on it) blend the bone at the whole frame with the
   next one by the clock's fraction. The clock and frame-keyed events are
-  untouched. Install prints
+  untouched. Game logic still sees the exact whole-frame pose: once the pose
+  cache `0x088785A8` has recorded the GE list from the blended pose, each
+  blended model is evaluated again at the whole frame and its bone matrices
+  recomputed (`0x089DC264`, into the player's matrix table +0x48 when it has
+  one), and the parts hung on bones (`0x088F3B88`: weapons, the Hero's mask)
+  are placed twice, the blended placement kept for their motion draw
+  `0x08878B18` and the exact one left for logic (the cannon Hero's charged shot
+  takes its angle from the cannon part; from the blended pose it flew in a high
+  arc). Install prints
   `[P3] smooth animation: poses blended from two whole frames`.
 - **Set it when:** `0` to compare against the stepped animation at 60 fps; `1`
   to try it at 30 fps.
