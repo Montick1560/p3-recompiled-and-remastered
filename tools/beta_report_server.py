@@ -361,7 +361,8 @@ main{max-width:760px}.count{text-align:center;margin:8px 0 24px}
 .room{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
 .room h2{font-size:1rem;margin:0;overflow-wrap:anywhere}.room p{margin:2px 0 0;font-size:.9rem}
 .st{font-weight:600;font-size:.9rem;margin-top:6px}.st::before{content:"\\25CF  "}
-.open{color:var(--ok)}.searching{color:var(--blue)}.playing,.in_vs{color:var(--amber)}.full{color:var(--muted)}
+.open{color:var(--ok)}.searching,.departing{color:var(--blue)}.playing,.in_vs,.in_mission{color:var(--amber)}
+.full{color:var(--muted)}
 .empty{text-align:center;color:var(--muted);padding:24px 0}.foot{margin-top:20px;font-size:.85rem;text-align:center}
 </style></head><body><main>
 <h1>Salas de Patapon 3 online</h1>
@@ -371,7 +372,8 @@ main{max-width:760px}.count{text-align:center;margin:8px 0 24px}
 <p class="foot" id="foot">Cargando…</p>
 </main>
 <script>
-const STATE={open:'Abierta',full:'Llena',in_vs:'En VS',searching:'Buscando rival',playing:'Jugando'};
+const STATE={open:'Abierta',full:'Llena',departing:'Saliendo a misión',in_mission:'En misión',in_vs:'En VS',
+ searching:'Buscando rival',playing:'Jugando'};
 const $=id=>document.getElementById(id);
 function card(r){
  const d=document.createElement('div');d.className='room';

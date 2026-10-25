@@ -1236,12 +1236,18 @@ class Server:
         A hideout carries bin attrs (hero, online id); a VS room has none and its ints are the VS settings
         (0x4D mission, 0x4F max level, 0x50 rule type, 0x51 rule value, as the game's setupSearchIntAttr logs)."""
         rooms = []
+        # A party leaving its hideout hides it, then closes it at departure, for a co-op mission and for VS alike;
+        # only VS also puts its players in a VS room.
+        in_vs = {m.conn for room in self.rooms.values() if not room.bins for m in room.members}
         for room in sorted(self.rooms.values(), key=lambda r: r.id):
             full = len(room.members) >= room.max_slot
             r = {"kind": "coop" if room.bins else "vs", "owner": room.owner.conn.online_id,
                  "members": len(room.members), "max_slot": room.max_slot}
             if room.bins:
-                r["state"] = "in_vs" if room.flag_attr & FLAG_HIDDEN else "full" if full else "open"
+                r["state"] = ("in_vs" if any(m.conn in in_vs for m in room.members)
+                              else "in_mission" if room.flag_attr & FLAG_CLOSED
+                              else "departing" if room.flag_attr & FLAG_HIDDEN
+                              else "full" if full else "open")
             else:
                 r["state"] = "playing" if full else "searching"
                 r.update(mission=room.ints.get(0x4D, 0), level=room.ints.get(0x4F, 0),
@@ -1828,11 +1834,18 @@ def lobby_status_selftest(run, quiet):
     assert s["rooms"][0] == {"kind": "coop", "owner": "P3A", "members": 1, "max_slot": 4, "state": "open"}, s
     assert s["rooms"][1] == {"kind": "vs", "owner": "P3B", "members": 1, "max_slot": 2, "state": "searching",
                              "mission": 3, "level": 32, "rule_type": 0, "rule_value": 300}, s
-    # status_vs_playing: the host of a hideout hides it while in VS; a full VS room is a match being played
+    # status_coop_mission: a co-op party leaving hides its hideout, then closes it at departure (no VS room)
+    a.ok("set_internal", room_id=hide["id"], flag_filter=0x54000000, flag_attr=0x14000000)
+    status(lambda s: s["rooms"][0]["state"] == "departing", "co-op party choosing a mission")
+    a.ok("set_internal", room_id=hide["id"], flag_filter=0x54000000, flag_attr=0x54000000)
+    status(lambda s: s["rooms"][0]["state"] == "in_mission", "co-op mission")
+    # status_vs_playing: a hideout whose member is in a VS room is in VS; a full VS room is a match being played
     a.ok("set_internal", room_id=hide["id"], flag_filter=0x54000000, flag_attr=0x14000000)
     a.ok("join", room_id=vs["id"], member_bins=[])
     s = status(lambda s: s["rooms"][1]["state"] == "playing", "VS playing")
     assert s["rooms"][0]["state"] == "in_vs" and s["rooms"][1]["members"] == 2, s
+    a.ok("set_internal", room_id=hide["id"], flag_filter=0x54000000, flag_attr=0x54000000)
+    s = status(lambda s: s["rooms"][0]["state"] == "in_vs", "VS match under way")
     # status_no_addresses: online ids only, never addresses, virtual IPs, console ids or codes
     text = open(path, encoding="utf-8").read()
     for bad in ("127.0.0.1", "10.80.", "addr", "console", "label"):
