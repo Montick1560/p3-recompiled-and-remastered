@@ -15,6 +15,7 @@
 #include "psp_perf.h"
 #include "psp_toast.h"
 #include "psp_hw_info.h"
+#include "psp_window_mode.h"
 
 #include <SDL.h>
 #include <glad/glad.h>
@@ -60,11 +61,49 @@ static void load_controls() {
 static SDL_Window*  g_window     = nullptr;
 static SDL_GLContext g_gl_context = nullptr;
 
-// F11 / Alt+Enter: toggle borderless desktop fullscreen.
-static void toggle_fullscreen() {
+// Display mode (psp_window_mode.h): the one settings chose (F11's target) and the current one.
+static PspWindowMode g_window_mode_cfg = PspWindowMode::Windowed;
+static PspWindowMode g_window_mode = PspWindowMode::Windowed;
+static int g_window_scale = 2;
+
+static void apply_window_mode(PspWindowMode m) {
     if (!g_window) return;
-    const bool full = (SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
-    SDL_SetWindowFullscreen(g_window, full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+    switch (m) {
+    case PspWindowMode::Windowed:
+        SDL_SetWindowFullscreen(g_window, 0);
+        SDL_SetWindowBordered(g_window, SDL_TRUE);
+        if (g_window_mode == PspWindowMode::Borderless) {  // fullscreen restores its own size
+            const int d = SDL_GetWindowDisplayIndex(g_window);
+            SDL_SetWindowSize(g_window, 480 * g_window_scale, 272 * g_window_scale);
+            SDL_SetWindowPosition(g_window, SDL_WINDOWPOS_CENTERED_DISPLAY(d < 0 ? 0 : d),
+                                  SDL_WINDOWPOS_CENTERED_DISPLAY(d < 0 ? 0 : d));
+        }
+        break;
+    case PspWindowMode::Borderless: {
+        SDL_SetWindowFullscreen(g_window, 0);
+        if (SDL_GetWindowFlags(g_window) & SDL_WINDOW_MAXIMIZED) SDL_RestoreWindow(g_window);
+        SDL_SetWindowBordered(g_window, SDL_FALSE);
+        const int d = SDL_GetWindowDisplayIndex(g_window);
+        SDL_Rect b;
+        if (SDL_GetDisplayBounds(d < 0 ? 0 : d, &b) == 0) {
+            const PspRect r = psp_borderless_rect({b.x, b.y, b.w, b.h});
+            SDL_SetWindowPosition(g_window, r.x, r.y);
+            SDL_SetWindowSize(g_window, r.w, r.h);
+        }
+        break;
+    }
+    case PspWindowMode::Fullscreen:
+        SDL_SetWindowBordered(g_window, SDL_TRUE);  // a window again when it leaves fullscreen
+        SDL_SetWindowFullscreen(g_window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+        break;
+    }
+    g_window_mode = m;
+    std::fprintf(stderr, "[RT] window mode: %s\n", psp_window_mode_name(m));
+}
+
+// F11 / Alt+Enter: a window <-> the configured full-display mode (psp_window_mode_toggle).
+static void toggle_fullscreen() {
+    apply_window_mode(psp_window_mode_toggle(g_window_mode, g_window_mode_cfg));
 }
 
 // --- Game controllers (SDL GameController API) ---
@@ -460,12 +499,11 @@ int psp_runtime_init_sdl() {
 
     SDL_SetWindowMinimumSize(g_window, 480, 272);
     SDL_StopTextInput();  // on only while the on-screen keyboard is open
-    {
-        const char* fs = std::getenv("PSPRECOMP_FULLSCREEN");
-        if (fs && std::strcmp(fs, "1") == 0) {
-            SDL_SetWindowFullscreen(g_window, SDL_WINDOW_FULLSCREEN_DESKTOP);
-        }
-    }
+    g_window_scale = win_scale;
+    g_window_mode_cfg = psp_window_mode(std::getenv("PSPRECOMP_WINDOW_MODE"), std::getenv("PSPRECOMP_FULLSCREEN"));
+    // A borderless window stays up when another window takes the focus (Alt+Tab).
+    if (g_window_mode_cfg == PspWindowMode::Borderless) SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");
+    apply_window_mode(g_window_mode_cfg);
 
     // 6. Print GL info for diagnostics, and the hardware line problem reports rely on
     std::fprintf(stderr, "[RT] GL: %s\n",

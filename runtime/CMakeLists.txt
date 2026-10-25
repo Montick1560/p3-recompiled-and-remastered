@@ -700,6 +700,12 @@ target_compile_definitions(test_settings PRIVATE
 target_compile_options(test_settings PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME settings_tests COMMAND test_settings)
 
+# Display mode rules (display.window_mode): windowed / borderless / fullscreen, F11 toggle.
+add_executable(test_window_mode tests/test_window_mode.cpp)
+target_include_directories(test_window_mode PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_window_mode PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME window_mode_tests COMMAND test_window_mode)
+
 # EBOOT image loader ([image] source = "disc"): synthetic ELFs, plus the real EBOOTs of the
 # three Patapon 3 releases when they are on this PC (skipped otherwise; never committed).
 add_executable(test_eboot_loader tests/test_eboot_loader.cpp src/psp_eboot_loader.cpp)

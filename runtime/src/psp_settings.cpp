@@ -31,6 +31,8 @@ const CoreKey kCore[] = {
     {"paths", "disc0", "PSPRECOMP_DISC0", Kind::Path, "disc0", 0, 0, nullptr},
     {"paths", "savedata", "PSPRECOMP_SAVEDATA", Kind::Path, "savedata", 0, 0, nullptr},
     {"display", "fullscreen", "PSPRECOMP_FULLSCREEN", Kind::Bool, "true", 0, 0, nullptr},
+    // No default: absent (an older launcher) leaves display.fullscreen to decide.
+    {"display", "window_mode", "PSPRECOMP_WINDOW_MODE", Kind::Enum, "", 0, 0, "windowed,borderless,fullscreen"},
     {"display", "window_scale", "PSPRECOMP_WINDOW_SCALE", Kind::Int, "2", 1, 8, nullptr},
     {"display", "render_scale", "PSPRECOMP_RENDER_SCALE", Kind::Int, "4", 1, 8, nullptr},
     {"display", "present_filter", "PSPRECOMP_PRESENT_FILTER", Kind::Enum, "linear", 0, 0, "linear,nearest"},
@@ -146,6 +148,7 @@ SettingsResolution psp_settings_resolve(const std::string& ini_text, const std::
                                        k.values ? k.values : "", &r.log);
         if (std::string(k.key) == "hd_textures") { hd = v; continue; }
         if (std::string(k.key) == "texture_pack") { pack = v; continue; }
+        if (v.empty() && k.def[0] == '\0') continue;  // window_mode: absent or invalid sets nothing
         if (k.kind == Kind::Bool) emit(k.env, "1", v != "true");
         else if (k.kind == Kind::Path) emit(k.env, resolve_path(base_dir, v), false);
         else emit(k.env, v, false);

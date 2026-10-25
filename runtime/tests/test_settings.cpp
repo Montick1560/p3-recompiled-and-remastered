@@ -56,6 +56,7 @@ static void defaults_fixture() {
     CHECK(val(r, "PSPRECOMP_DISC0") == "C:/Juegos/Patapon 3/disc0", "disc0 resolved (spaces)");
     CHECK(val(r, "PSPRECOMP_SAVEDATA") == "C:/Juegos/Patapon 3/savedata", "savedata resolved");
     CHECK(val(r, "PSPRECOMP_FULLSCREEN") == "1", "fullscreen true -> 1");
+    CHECK(val(r, "PSPRECOMP_WINDOW_MODE") == "fullscreen", "window mode");
     CHECK(val(r, "PSPRECOMP_WINDOW_SCALE") == "2", "window scale");
     CHECK(val(r, "PSPRECOMP_RENDER_SCALE") == "4", "render scale");
     CHECK(val(r, "PSPRECOMP_PRESENT_FILTER") == "linear", "present filter");
@@ -78,6 +79,7 @@ static void custom_fixture() {
     CHECK(val(r, "PSPRECOMP_DISC0") == "D:/P3/../data/disc0", "relative with ..");
     CHECK(val(r, "PSPRECOMP_SAVEDATA") == "D:/P3/Partidas Guardadas", "spaces in value");
     CHECK(val(r, "PSPRECOMP_FULLSCREEN") == "<unset>", "fullscreen no -> unset");
+    CHECK(val(r, "PSPRECOMP_WINDOW_MODE") == "borderless", "window mode borderless");
     CHECK(val(r, "PSPRECOMP_TEXTURES") == "<unset>", "hd off -> unset");
     CHECK(val(r, "PSPRECOMP_PATCHES") == "60fps", "fps 60 -> patch");
     CHECK(val(r, "PSPRECOMP_P3_ANIM_SMOOTH") == "0", "smooth false -> 0");
@@ -91,6 +93,8 @@ static void invalid_fixture() {
                                                       "C:/P", kNoEnv);
     CHECK(val(r, "PSPRECOMP_FULLSCREEN") == "1", "bad bool -> default (true)");
     CHECK(logged(r, "display.fullscreen"), "bad bool logged");
+    CHECK(val(r, "PSPRECOMP_WINDOW_MODE") == "<unset>", "bad window mode -> unset");
+    CHECK(logged(r, "display.window_mode"), "bad window mode logged");
     CHECK(val(r, "PSPRECOMP_RENDER_SCALE") == "3", "last duplicate (3) wins");
     CHECK(val(r, "PSPRECOMP_WINDOW_SCALE") == "2", "bad int -> default");
     CHECK(val(r, "PSPRECOMP_PRESENT_FILTER") == "linear", "bad enum -> default");
@@ -193,7 +197,22 @@ static void achievements_keys() {
           "an environment value wins (nothing emitted)");
 }
 
+// display.window_mode -> PSPRECOMP_WINDOW_MODE; absent or invalid sets nothing, so the legacy
+// display.fullscreen decides (psp_window_mode.h).
+static void window_mode_key() {
+    SettingsResolution r = psp_settings_resolve("[display]\nwindow_mode = borderless\n", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_WINDOW_MODE") == "borderless", "window_mode borderless");
+    r = psp_settings_resolve("[display]\nfullscreen = false\n", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_WINDOW_MODE") == "<unset>", "absent window_mode sets nothing");
+    CHECK(!logged(r, "display.window_mode"), "absent window_mode is not logged");
+    r = psp_settings_resolve("[display]\nwindow_mode = foo\n", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_WINDOW_MODE") == "<unset>", "invalid window_mode sets nothing");
+    CHECK(logged(r, "display.window_mode"), "invalid window_mode logged");
+    CHECK(!logged(r, "unknown key"), "window_mode is a known key");
+}
+
 int main() {
+    window_mode_key();
     parser_rules();
     defaults_fixture();
     custom_fixture();

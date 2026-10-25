@@ -344,6 +344,18 @@ Read by the runtime binary at start-up or during execution.
 - **Effect:** starts in borderless desktop fullscreen. F11 or Alt+Enter toggles
   fullscreen at any time.
 - **Set it when:** you always play fullscreen.
+- **Note:** `PSPRECOMP_WINDOW_MODE`, when valid, wins over this flag.
+
+### `PSPRECOMP_WINDOW_MODE`
+- **Read in:** `runtime/src/psp_event_loop.cpp` (`psp_runtime_init_sdl`, rules in
+  `runtime/include/psp_window_mode.h`); `settings.ini display.window_mode` sets it.
+- **Type:** env (`windowed` | `borderless` | `fullscreen`, any case).
+- **Default:** unset (then `PSPRECOMP_FULLSCREEN` decides: `1` fullscreen, else windowed).
+- **Effect:** `borderless` = a window without border covering the bounds of the display it is
+  on, not minimised when it loses the focus; `fullscreen` = desktop fullscreen; `windowed` = the
+  480x272 x `PSPRECOMP_WINDOW_SCALE` window. F11 / Alt+Enter toggle between a window and the
+  chosen mode (a window toggles with fullscreen). Logs `[RT] window mode: <name>`.
+- **Set it when:** you want borderless instead of fullscreen.
 
 ### `PSPRECOMP_CONTROLS`
 - **Read in:** `runtime/src/psp_event_loop.cpp` (`load_controls`, once SDL is up); the

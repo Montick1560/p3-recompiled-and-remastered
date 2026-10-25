@@ -21,7 +21,8 @@ disc0 = disc0               ; PSPRECOMP_DISC0
 savedata = savedata         ; PSPRECOMP_SAVEDATA
 
 [display]
-fullscreen = true           ; PSPRECOMP_FULLSCREEN=1 when true (borderless desktop)
+fullscreen = true           ; PSPRECOMP_FULLSCREEN=1 when true (legacy: window_mode decides when present)
+window_mode = fullscreen    ; PSPRECOMP_WINDOW_MODE: windowed | borderless | fullscreen
 window_scale = 2            ; PSPRECOMP_WINDOW_SCALE, 1..8
 render_scale = 4            ; PSPRECOMP_RENDER_SCALE, 1..8
 present_filter = linear     ; PSPRECOMP_PRESENT_FILTER: linear | nearest
@@ -149,7 +150,8 @@ invalid values, future version) that both the C++ and the Rust readers are teste
 | general.language | PSPRECOMP_UI_LANG | enum es,en | copied |
 | paths.disc0 | PSPRECOMP_DISC0 | path | resolved against the ini folder |
 | paths.savedata | PSPRECOMP_SAVEDATA | path | resolved |
-| display.fullscreen | PSPRECOMP_FULLSCREEN | bool | true -> `1`, false -> unset |
+| display.fullscreen | PSPRECOMP_FULLSCREEN | bool | true -> `1`, false -> unset (legacy switch, see window_mode) |
+| display.window_mode | PSPRECOMP_WINDOW_MODE | enum windowed,borderless,fullscreen | copied; absent or invalid -> unset, and then `display.fullscreen` decides (true = fullscreen, false = windowed). The launcher writes both keys (`fullscreen = mode != windowed`) so older game builds keep working |
 | display.window_scale | PSPRECOMP_WINDOW_SCALE | int 1..8 | copied |
 | display.render_scale | PSPRECOMP_RENDER_SCALE | int 1..8 | copied |
 | display.present_filter | PSPRECOMP_PRESENT_FILTER | enum linear,nearest | copied |
