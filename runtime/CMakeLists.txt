@@ -434,6 +434,14 @@ if(PSPRECOMP_BETA_UNTIL)
     message(STATUS "psprecomp: beta build, plays until ${PSPRECOMP_BETA_UNTIL}")
 endif()
 
+# PSPRECOMP_WINDOW_TITLE names the game window (include/psp_window_title.h); empty = "PSPrecomp Runtime".
+set(PSPRECOMP_WINDOW_TITLE "" CACHE STRING "Game window title; empty = PSPrecomp Runtime")
+if(PSPRECOMP_WINDOW_TITLE)
+    set_property(SOURCE src/psp_event_loop.cpp APPEND PROPERTY
+        COMPILE_DEFINITIONS "PSPRECOMP_WINDOW_TITLE=\"${PSPRECOMP_WINDOW_TITLE}\"")
+    message(STATUS "psprecomp: window title ${PSPRECOMP_WINDOW_TITLE}")
+endif()
+
 target_include_directories(psprecomp_runtime PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb  # stb_image (texture replacement PNGs)
@@ -699,6 +707,16 @@ target_compile_definitions(test_settings PRIVATE
     PSP_GAME_OPTIONS_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/game_options.json")
 target_compile_options(test_settings PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME settings_tests COMMAND test_settings)
+
+# The game window's title (PSPRECOMP_WINDOW_TITLE): the generic one, and a named build's.
+add_executable(test_window_title tests/test_window_title.cpp)
+target_include_directories(test_window_title PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME window_title_tests COMMAND test_window_title)
+add_executable(test_window_title_named tests/test_window_title.cpp)
+target_include_directories(test_window_title_named PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_definitions(test_window_title_named PRIVATE
+    "PSPRECOMP_WINDOW_TITLE=\"Patapon 3 DxD Remastered\"" "EXPECT_TITLE=\"Patapon 3 DxD Remastered\"")
+add_test(NAME window_title_named_tests COMMAND test_window_title_named)
 
 # Display mode rules (display.window_mode): windowed / borderless / fullscreen, F11 toggle.
 add_executable(test_window_mode tests/test_window_mode.cpp)

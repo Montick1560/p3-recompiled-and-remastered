@@ -16,6 +16,7 @@
 #include "psp_toast.h"
 #include "psp_hw_info.h"
 #include "psp_window_mode.h"
+#include "psp_window_title.h"
 
 #include <SDL.h>
 #include <glad/glad.h>
@@ -464,7 +465,7 @@ int psp_runtime_init_sdl() {
     //    letterboxes the rendered image into whatever size it gets.
     const int win_scale = present_window_scale(std::getenv("PSPRECOMP_WINDOW_SCALE"));
     g_window = SDL_CreateWindow(
-        "PSPrecomp Runtime",
+        psp_window_title(),
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
         480 * win_scale, 272 * win_scale,
