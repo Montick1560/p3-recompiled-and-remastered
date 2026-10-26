@@ -312,12 +312,15 @@ font:600 1rem system-ui,sans-serif;cursor:pointer}button:disabled{opacity:.6}
 
 # The public beta (no invite codes): what to download and how to start. Bump the zip name with every package.
 DOWNLOAD_URL = "https://descargas.montick.app/patapon3-beta1-u5.zip"
+DISCORD_URL = "https://discord.gg/MQTTfEBa"
 
 SIGNUP_PAGE = """<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Beta Patapon 3 online</title>
 <style>%s
 .dl{display:block;margin-top:18px;padding:14px;border-radius:8px;background:var(--accent);color:#fff;
-text-align:center;font:600 1.05rem system-ui,sans-serif;text-decoration:none}ol{margin:0;padding-left:22px}
+text-align:center;font:600 1.05rem system-ui,sans-serif;text-decoration:none}
+.dc{display:block;margin-top:10px;padding:12px;border-radius:8px;border:2px solid #5865f2;color:var(--fg);
+text-align:center;font:600 1rem system-ui,sans-serif;text-decoration:none}ol{margin:0;padding-left:22px}
 li{margin:6px 0}</style></head><body><main>
 <h1>Beta del modo online de Patapon 3</h1>
 <p>La beta del modo online del port nativo para PC está <strong>abierta a todos</strong>, sin código de invitación,
@@ -333,6 +336,7 @@ Patapon 3.</p>
 <li>Dale a Jugar. Si Windows pregunta por la red, acepta para jugar con gente de fuera de tu casa.</li>
 </ol>
 <a class="dl" href="%s">Descargar la beta</a>
+<a class="dc" href="%s">Únete al Discord: dudas, partidas y avisos</a>
 </form>
 <h2 style="font-size:1.15rem;margin:24px 0 8px">¿Windows o el antivirus lo bloquean?</h2>
 <p>El juego es nuevo y no está firmado, así que Windows y algunos antivirus desconfían de él aunque no tenga nada
@@ -351,8 +355,8 @@ excepciones.</li>
 tocan.</li>
 </ol>
 <p style="margin-top:20px;text-align:center"><a href="/salas">¿Hay gente jugando? Mira las salas</a> ·
-<a href="https://report.montick.app">Reportar un problema</a></p></main></body></html>
-""" % (PAGE_STYLE, DOWNLOAD_URL)
+<a href="https://report.montick.app">Reportar un problema</a> · <a href="%s">Discord</a></p></main></body></html>
+""" % (PAGE_STYLE, DOWNLOAD_URL, DISCORD_URL, DISCORD_URL)
 
 LOBBY_PAGE = r"""<!doctype html>
 <!--
@@ -466,7 +470,7 @@ h1{margin:0;font:inherit;display:inline}
   <ul class="sr" id="list"></ul>
  </main>
  <div class="foot"><span class="live" id="stamp">Cargando…</span>
-  <a href="/">¿Quieres jugar? Descarga la beta</a></div>
+  <a href="/">¿Quieres jugar? Descarga la beta</a> · <a href="https://discord.gg/MQTTfEBa">Discord</a></div>
 </div>
 <script>
 (()=>{
@@ -713,6 +717,7 @@ def selftest():
         assert st == 200 and DOWNLOAD_URL in text and "abierta a todos" in text, (st, text[:200])
         assert "domingo 1 de noviembre a las 23:59" in text and "apodo" in text
         assert "Ejecutar de todas formas" in text and "Restaurar" in text and "Exclusiones" in text, "blocked-file help"
+        assert text.count('href="%s"' % DISCORD_URL) == 2, "Discord button and footer link"
         assert "UCES01421" in text and "DxD" in text and "UCUS98751" in text, "which ISO works is said up front"
         st, _ = req("GET", "/nada", host="beta.montick.app")
         assert st == 404, st
