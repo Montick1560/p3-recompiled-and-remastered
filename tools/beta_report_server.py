@@ -334,6 +334,22 @@ Patapon 3.</p>
 </ol>
 <a class="dl" href="%s">Descargar la beta</a>
 </form>
+<h2 style="font-size:1.15rem;margin:24px 0 8px">¿Windows o el antivirus lo bloquean?</h2>
+<p>El juego es nuevo y no está firmado, así que Windows y algunos antivirus desconfían de él aunque no tenga nada
+malo. Descárgalo solo de este enlace.</p>
+<ol>
+<li><strong>«Windows protegió su PC»:</strong> pulsa <em>Más información</em> y luego <em>Ejecutar de todas
+formas</em>.</li>
+<li><strong>Si el antivirus borró un archivo</strong> (<code>launcher.exe</code> o
+<code>Patapon 3 DxD Remastered.exe</code>): abre <em>Seguridad de Windows → Protección contra virus y amenazas →
+Historial de protección</em>, elige el aviso y pulsa <em>Acciones → Restaurar</em>.</li>
+<li><strong>Para que no vuelva a pasar:</strong> en <em>Protección contra virus y amenazas → Administrar la
+configuración → Exclusiones → Agregar exclusión → Carpeta</em>, elige tu carpeta <code>Patapon3Recomp</code>.
+Con otro antivirus (Avast, AVG, Norton…) es igual: restáuralo de la cuarentena y añade la carpeta a sus
+excepciones.</li>
+<li><strong>Si falta algún archivo</strong>, vuelve a descomprimir el zip encima de tu carpeta: tus partidas no se
+tocan.</li>
+</ol>
 <p style="margin-top:20px;text-align:center"><a href="/salas">¿Hay gente jugando? Mira las salas</a> ·
 <a href="https://report.montick.app">Reportar un problema</a></p></main></body></html>
 """ % (PAGE_STYLE, DOWNLOAD_URL)
@@ -696,6 +712,7 @@ def selftest():
         st, text = req("GET", "/", host="beta.montick.app")
         assert st == 200 and DOWNLOAD_URL in text and "abierta a todos" in text, (st, text[:200])
         assert "domingo 1 de noviembre a las 23:59" in text and "apodo" in text
+        assert "Ejecutar de todas formas" in text and "Restaurar" in text and "Exclusiones" in text, "blocked-file help"
         assert "UCES01421" in text and "DxD" in text and "UCUS98751" in text, "which ISO works is said up front"
         st, _ = req("GET", "/nada", host="beta.montick.app")
         assert st == 404, st
