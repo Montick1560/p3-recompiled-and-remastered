@@ -55,8 +55,8 @@ int psp_beta_check_at_start() {
     }
     std::fprintf(stderr, "[RT] beta build ended at %s: not starting (exit %d)\n", until, kPspBetaEndedExit);
     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "Patapon 3",
-                             "La beta de Patapon 3 termin\xC3\xB3 el domingo 25 de octubre a las 23:59 (hora CDMX). "
-                             "Espera la siguiente ronda.",
+                             "La beta de Patapon 3 termin\xC3\xB3. "
+                             "Descarga la versi\xC3\xB3n nueva en https://beta.montick.app",
                              nullptr);
     return kPspBetaEndedExit;
 }
