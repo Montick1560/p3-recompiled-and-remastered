@@ -338,8 +338,8 @@ Patapon 3.</p>
 <p>El juego es nuevo y no está firmado, así que Windows y algunos antivirus desconfían de él aunque no tenga nada
 malo. Descárgalo solo de este enlace.</p>
 <ol>
-<li><strong>«Windows protegió su PC»:</strong> pulsa <em>Más información</em> y luego <em>Ejecutar de todas
-formas</em>.</li>
+<li><strong>«Windows protegió su PC»:</strong> pulsa <em>Más información</em> y luego
+<em>Ejecutar de todas formas</em>.</li>
 <li><strong>Si el antivirus borró un archivo</strong> (<code>launcher.exe</code> o
 <code>Patapon 3 DxD Remastered.exe</code>): abre <em>Seguridad de Windows → Protección contra virus y amenazas →
 Historial de protección</em>, elige el aviso y pulsa <em>Acciones → Restaurar</em>.</li>
