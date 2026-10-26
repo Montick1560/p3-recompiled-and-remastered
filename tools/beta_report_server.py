@@ -310,43 +310,33 @@ font:600 1rem system-ui,sans-serif;cursor:pointer}button:disabled{opacity:.6}
 .hp{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}
 """
 
+# The public beta (no invite codes): what to download and how to start. Bump the zip name with every package.
+DOWNLOAD_URL = "https://descargas.montick.app/patapon3-beta1-u5.zip"
+
 SIGNUP_PAGE = """<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Beta Patapon 3 online</title>
-<style>%s</style></head><body><main>
+<style>%s
+.dl{display:block;margin-top:18px;padding:14px;border-radius:8px;background:var(--accent);color:#fff;
+text-align:center;font:600 1.05rem system-ui,sans-serif;text-decoration:none}ol{margin:0;padding-left:22px}
+li{margin:6px 0}</style></head><body><main>
 <h1>Beta del modo online de Patapon 3</h1>
-<p>Fin de semana de pruebas del modo online del port nativo para PC: del viernes 23 de octubre a las 21:00 al domingo
-25 de octubre a las 23:59 (hora CDMX). Es para personas que tienen su propia copia (ISO) de Patapon 3.</p>
+<p>La beta del modo online del port nativo para PC está <strong>abierta a todos</strong>, sin código de invitación,
+hasta el <strong>domingo 1 de noviembre a las 23:59</strong> (hora CDMX). Necesitas tu propia copia (ISO) de
+Patapon 3.</p>
 <p><strong>Qué ISO sirve:</strong> la versión europea (UCES01421) o la de Patapon 3 DxD. La versión americana
-(UCUS98751) y la japonesa todavía no se pueden instalar; si solo tienes una de esas, mejor espera a la siguiente
-ronda.</p>
-<p>Apúntate con tu correo. Haremos un sorteo entre las personas apuntadas; si sales, te llegará un correo con tu
-código de invitación y el enlace de descarga. No te mandaremos nada más.</p>
-<form id="f" novalidate>
-<label for="email">Correo</label>
-<input id="email" name="email" type="email" maxlength="254" autocomplete="email" required>
-<div class="hp" aria-hidden="true"><label for="website">No llenar</label>
-<input id="website" name="website" type="text" tabindex="-1" autocomplete="off"></div>
-<label class="check"><input id="consent" type="checkbox"> <span>%s.</span></label>
-<button id="b" type="submit">Apuntarme</button>
-<div id="msg" role="status"></div>
+(UCUS98751) y la japonesa todavía no se pueden instalar.</p>
+<form onsubmit="return false">
+<ol>
+<li>Descarga el zip y descomprímelo en una carpeta tuya (por ejemplo, Documentos).</li>
+<li>Abre <code>launcher.exe</code> y elige tu ISO.</li>
+<li>Escoge tu apodo: es tu nombre en las salas online.</li>
+<li>Dale a Jugar. Si Windows pregunta por la red, acepta para jugar con gente de fuera de tu casa.</li>
+</ol>
+<a class="dl" href="%s">Descargar la beta</a>
 </form>
-<p style="margin-top:20px;text-align:center"><a href="/salas">¿Hay gente jugando? Mira las salas</a></p></main>
-<script>
-const f=document.getElementById('f'),m=document.getElementById('msg'),b=document.getElementById('b');
-f.addEventListener('submit',async e=>{e.preventDefault();m.className='';m.textContent='';
- const email=document.getElementById('email').value.trim(),consent=document.getElementById('consent').checked;
- if(!email.includes('@')){m.className='err';m.textContent='Revisa tu correo.';return}
- if(!consent){m.className='err';m.textContent='Marca la casilla de consentimiento.';return}
- b.disabled=true;
- try{const r=await fetch('/cola',{method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({email,consent,website:document.getElementById('website').value})});
-  const j=await r.json().catch(()=>({}));
-  if(r.ok){m.className='ok';m.textContent=j.message;f.reset()}
-  else{m.className='err';m.textContent=j.error||'No se pudo guardar; intenta de nuevo.'}}
- catch(_){m.className='err';m.textContent='Sin conexión; intenta de nuevo.'}
- b.disabled=false});
-</script></body></html>
-""" % (PAGE_STYLE, CONSENT)
+<p style="margin-top:20px;text-align:center"><a href="/salas">¿Hay gente jugando? Mira las salas</a> ·
+<a href="https://report.montick.app">Reportar un problema</a></p></main></body></html>
+""" % (PAGE_STYLE, DOWNLOAD_URL)
 
 LOBBY_PAGE = r"""<!doctype html>
 <!--
@@ -460,7 +450,7 @@ h1{margin:0;font:inherit;display:inline}
   <ul class="sr" id="list"></ul>
  </main>
  <div class="foot"><span class="live" id="stamp">Cargando…</span>
-  <a href="/">¿Quieres jugar? Apúntate a la beta</a></div>
+  <a href="/">¿Quieres jugar? Descarga la beta</a></div>
 </div>
 <script>
 (()=>{
@@ -704,8 +694,8 @@ def selftest():
         st, text = req("GET", "/", host="report.montick.app")
         assert st == 200 and "Reportar un problema" in text and "/report" in text, (st, text[:200])
         st, text = req("GET", "/", host="beta.montick.app")
-        assert st == 200 and CONSENT in text and 'name="website"' in text and "Apuntarme" in text, (st, text[:200])
-        assert "/cola" in text
+        assert st == 200 and DOWNLOAD_URL in text and "abierta a todos" in text, (st, text[:200])
+        assert "domingo 1 de noviembre a las 23:59" in text and "apodo" in text
         assert "UCES01421" in text and "DxD" in text and "UCUS98751" in text, "which ISO works is said up front"
         st, _ = req("GET", "/nada", host="beta.montick.app")
         assert st == 404, st

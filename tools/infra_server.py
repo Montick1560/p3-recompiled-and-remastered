@@ -266,14 +266,18 @@ def iso_utc(t):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
 
 
+# A login without a known code while the beta is public.
+PUBLIC_ENTRY = {"label": "público", "enabled": True, "staff": False}
+
+
 def load_beta(path):
     """The beta config: window (UTC), minimum protocol, invite codes by SHA-256 (the codes themselves are never
-    stored here). Raises OSError / ValueError / KeyError / TypeError on a bad file."""
+    stored here), "public" (anyone logs in without a code during the window; known codes keep their label and staff). Raises OSError / ValueError / KeyError / TypeError on a bad file."""
     with open(path, encoding="utf-8") as f:
         raw = json.load(f)
     cfg = {"starts": raw["starts"], "ends": raw["ends"], "t0": parse_utc(raw["starts"]), "t1": parse_utc(raw["ends"]),
            "min_proto": int(raw.get("min_proto", INFRA_PROTO)), "max_per_code": int(raw.get("max_per_code", 2)),
-           "codes": {}}
+           "public": bool(raw.get("public", False)), "codes": {}}
     for c in raw.get("codes", []):
         sha = str(c["sha256"]).lower()
         if not re.fullmatch(r"[0-9a-f]{64}", sha):
@@ -747,7 +751,7 @@ class Server:
     def beta_status(self):
         b = self.beta or {}
         return {"open": self.beta_open(), "starts": b.get("starts"), "ends": b.get("ends"), "now": iso_utc(self.clock()),
-                "min_proto": b.get("min_proto", INFRA_PROTO)}
+                "min_proto": b.get("min_proto", INFRA_PROTO), "public": bool(b.get("public", False))}
 
     def beta_code(self, invite):
         if self.beta is None or not isinstance(invite, str) or not normalize_code(invite):
@@ -802,6 +806,8 @@ class Server:
             if type(proto) is not int or proto < self.beta["min_proto"]:
                 raise Err(OUTDATED)
             sha, e = self.beta_code(msg.get("invite"))
+            if e is None and self.beta["public"]:
+                sha, e = None, PUBLIC_ENTRY
             if e is None:
                 raise Err(INVITE_UNKNOWN)
             label = e["label"]
@@ -811,7 +817,7 @@ class Server:
                 if not self.beta_open():
                     raise Err(BETA_CLOSED)
                 live = [c for c in self.conns.values() if c.session and not c.closed]
-                if sum(1 for c in live if c.code_sha == sha) >= self.beta["max_per_code"]:
+                if sha is not None and sum(1 for c in live if c.code_sha == sha) >= self.beta["max_per_code"]:
                     raise Err(INVITE_IN_USE)
                 if sum(1 for c in live if not c.staff and c.addr_key == conn.addr_key) >= self.max_per_addr:
                     raise Err(SERVICE_UNAVAILABLE)
@@ -2058,8 +2064,8 @@ def beta_selftest(run, quiet, lines):
              "P3-CCCC-DDDD": ["invitado 10", True, False], "P3-EEEE-FFFF": ["invitado 11", True, False],
              "P3-STAF-F222": ["staff 01", True, True], "P3-NNNN-PPPP": ["invitado 09", False, False]}
 
-    def write_cfg(bump=0):
-        cfg = {"starts": starts, "ends": ends, "min_proto": 2, "max_per_code": 2,
+    def write_cfg(bump=0, public=False):
+        cfg = {"starts": starts, "ends": ends, "min_proto": 2, "max_per_code": 2, "public": public,
                "codes": [{"label": lab, "sha256": hashlib.sha256(c.replace("-", "").encode()).hexdigest(),
                           "enabled": en, "staff": staff} for c, (lab, en, staff) in codes.items()]}
         with open(cfg_path, "w", encoding="utf-8") as f:
@@ -2191,6 +2197,28 @@ def beta_selftest(run, quiet, lines):
     assert check("P3-ZZZZ-ZZZZ")[0] == 429, "31st check in a minute"
     st, body = http_req(srv.ws_port, "GET", "/")
     assert st == 200 and body == b"Patapon 3 infrastructure server\n", (st, body)
+    assert http_req(srv.ws_port, "GET", "/beta")[1]["public"] is False
+    # public: no code (or an unknown one) logs in as "público" during the window; codes keep their label and staff.
+    write_cfg(bump=8, public=True)
+    deadline = time.monotonic() + 3
+    while http_req(srv.ws_port, "GET", "/beta")[1].get("public") is not True:
+        assert time.monotonic() < deadline, "public config not reloaded"
+        time.sleep(0.1)
+    pub = [TestClient(srv.ws_port, ws=True, headers="CF-Connecting-IP: 198.51.100.%d\r\n" % i) for i in range(1, 6)]
+    pub[0].ok("login", online_id="PUB1", proto=2)
+    pub[1].ok("login", online_id="PUB2", proto=2, invite="P3-ZZZZ-ZZZZ")
+    pub[2].ok("login", online_id="PUB3", proto=2, invite="P3-STAF-F222")
+    assert (by_id("PUB1").code_label, by_id("PUB1").staff) == ("público", False)
+    assert (by_id("PUB2").code_label, by_id("PUB2").staff) == ("público", False)
+    assert by_id("PUB3").staff is True, "a staff code stays staff"
+    refused(pub[3], OUTDATED, online_id="PUB4", proto=1)
+    refused(pub[3], INVITE_DISABLED, online_id="PUB4", proto=2, invite="P3-NNNN-PPPP")
+    now[0] = t_end + 1
+    refused(pub[4], BETA_CLOSED, online_id="PUB5", proto=2)
+    now[0] = t_start + 60
+    for cl in pub:
+        cl.close()
+    write_cfg(bump=10)
     for cl in (u, s, c2, d1, d2, d3, d4, far):
         cl.close()
     srv.running = False
