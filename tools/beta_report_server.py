@@ -320,7 +320,8 @@ SIGNUP_PAGE = """<!doctype html><html lang="es"><head><meta charset="utf-8">
 .dl{display:block;margin-top:18px;padding:14px;border-radius:8px;background:var(--accent);color:#fff;
 text-align:center;font:600 1.05rem system-ui,sans-serif;text-decoration:none}
 .dc{display:block;margin-top:10px;padding:12px;border-radius:8px;border:2px solid #5865f2;color:var(--fg);
-text-align:center;font:600 1rem system-ui,sans-serif;text-decoration:none}ol{margin:0;padding-left:22px}
+text-align:center;font:600 1rem system-ui,sans-serif;text-decoration:none}p a{color:var(--accent)}
+ol{margin:0;padding-left:22px}
 li{margin:6px 0}</style></head><body><main>
 <h1>Beta del modo online de Patapon 3</h1>
 <p>La beta del modo online del port nativo para PC está <strong>abierta a todos</strong>, sin código de invitación,
