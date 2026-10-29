@@ -289,6 +289,17 @@ Read by the runtime binary at start-up or during execution.
 - **Set it when:** checking whether a rendering difference comes from batching
   (same binary A/B), or as a player-side rollback.
 
+### `PSPRECOMP_RTT_LOG`
+- **Read in:** `runtime/src/psp_ge_draw.cpp` (`rtt_log_on`).
+- **Type:** env, `1` = on.
+- **Default:** off.
+- **Effect:** runs the render-to-texture detector: hashes each GL-written framebuffer
+  once per display list (CPU writes) and prints `[RTT] sample`, `[RTT] cpu-write` and
+  `[RTT] xfer` lines when the game samples or transfers a target GL drew. Logs only;
+  off saves ~25 % of the runtime's CPU in the hideout.
+- **Set it when:** checking whether a scene reads back a rendered framebuffer
+  (the case the RTT plan's later tasks would handle).
+
 ### `PSPRECOMP_BUTTON_ICONS`
 - **Read in:** `runtime/src/psp_prompt_patcher.cpp` (`psp_prompts_register_atlas`).
 - **Type:** env, `gray` | `color` | `off`.

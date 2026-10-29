@@ -607,6 +607,15 @@ static void drawlog_prim(const GeState& s, int index, int prim_type, int count) 
 // ---- RTT detector (logs only) ----
 // Which draws, transfers and CPU writes touch a GL-written target. GL never writes guest
 // VRAM, so a change of a target's guest bytes is the CPU (or a transfer) writing it.
+// Opt-in (PSPRECOMP_RTT_LOG=1): hashing every target once per list was ~25 % of the CPU.
+static bool rtt_log_on() {
+    static const bool on = [] {
+        const char* e = std::getenv("PSPRECOMP_RTT_LOG");
+        return e && e[0] == '1';
+    }();
+    return on;
+}
+
 static int rtt_targets(GeRttTarget* out) {
     for (int i = 0; i < GE_MAX_TARGETS; ++i) {
         const GeTarget& t = g_targets[i];
@@ -680,7 +689,7 @@ void ge_draw_note_transfer(const GeTransferRegs& r) {
     const int from = ge_rtt_overlap(t, n, x.src, src_bytes);
     const int into = ge_rtt_overlap(t, n, x.dst, dst_bytes);
     if (into >= 0) g_targets[into].cpu_newer = true;   // guest bytes now differ from GL
-    if (from < 0 && into < 0) return;
+    if ((from < 0 && into < 0) || !rtt_log_on()) return;
     static int logged = 0;
     if (++logged <= 64)
         std::fprintf(stderr, "[RTT] xfer src=0x%08X dst=0x%08X %ux%u bpp=%u from_target=%d into_target=%d\n",
@@ -811,7 +820,8 @@ void ge_draw_prim(
     const bool drawlog = g_drawlog_lists.load(std::memory_order_relaxed) > 0;
     const int list_index = g_list_prim_index++;
     if (drawlog) drawlog_prim(state, list_index, prim_type, count);
-    if (list_index == 0) rtt_check_cpu_writes(rdram);
+    const bool rtt_log = rtt_log_on();
+    if (rtt_log && list_index == 0) rtt_check_cpu_writes(rdram);
     if (g_current_target >= 0) {
         GeTarget& t = g_targets[g_current_target];
         t.stride = state.framebuf_width & 0x7FCu;
@@ -821,7 +831,7 @@ void ge_draw_prim(
         // buffer from scratch (Task 6 would upload them instead).
         if (state.clear_mode) t.cpu_newer = false;
     }
-    if (state.texture_enable && !state.clear_mode) rtt_note_sample(state);
+    if (rtt_log && state.texture_enable && !state.clear_mode) rtt_note_sample(state);
     if (!state.clear_mode && list_index >= g_skip_lo.load(std::memory_order_relaxed) &&
         list_index <= g_skip_hi.load(std::memory_order_relaxed)) {
         return;
