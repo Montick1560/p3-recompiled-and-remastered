@@ -1133,6 +1133,12 @@ target_compile_options(test_direct_crypto_primitives PRIVATE -O2 -Wall -Wextra -
 target_link_libraries(test_direct_crypto_primitives PRIVATE monocypher ${PSP_RANDOM_LIBS})
 add_test(NAME direct_crypto_primitives_tests COMMAND test_direct_crypto_primitives)
 
+add_executable(test_direct_crypto tests/test_direct_crypto.cpp src/net/direct_crypto.cpp)
+target_include_directories(test_direct_crypto PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_direct_crypto PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(test_direct_crypto PRIVATE monocypher)
+add_test(NAME direct_crypto_tests COMMAND test_direct_crypto)
+
 # Infrastructure-mode server frames (tools/infra_server.py wire format).
 add_executable(test_infra_protocol tests/test_infra_protocol.cpp src/net/infra_protocol.cpp)
 target_include_directories(test_infra_protocol PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
