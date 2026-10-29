@@ -26,6 +26,7 @@ struct FakeInfraServer {
     bool answer_pings = true;
     bool answer_link_stats = true;  // false: link_stats goes to on_frame like any other request
     uint32_t vip = 0x0A500003;
+    nlohmann::json login_extra = nlohmann::json::object();  // merged into the login answer (e.g. "direct")
     std::mutex mu;
     std::vector<infra::Frame> got;
 
@@ -81,7 +82,9 @@ struct FakeInfraServer {
                     }
                     const std::string op = f.kind == infra::kKindJson ? f.json.value("op", "") : "";
                     if (op == "login") {
-                        send_json({{"id", f.json["id"]}, {"ok", true}, {"session", "s1"}, {"vip", vip}});
+                        nlohmann::json answer = {{"id", f.json["id"]}, {"ok", true}, {"session", "s1"}, {"vip", vip}};
+                        answer.update(login_extra);
+                        send_json(answer);
                     } else if (op == "ping") {
                         if (!answer_pings) continue;
                         if (ping_delay_ms) fake_sleep_ms(ping_delay_ms);

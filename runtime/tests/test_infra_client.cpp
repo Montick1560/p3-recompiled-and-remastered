@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "fake_infra_server.h"
+#include "net/direct_link.h"
 #include "net/infra_protocol.h"
 #include "psp_socket_compat.h"
 
@@ -88,12 +89,12 @@ static void login_carries_extra_fields() {
 
 static void login_fields_carry_proto_and_invite() {
     nlohmann::json f = infra::login_fields("02000000000a", "P3-K7QF-2MXD");
-    CHECK(f.value("console", "") == "02000000000a" && f.value("proto", 0) == 2 && infra::kProto == 2,
-          "console id and protocol 2");
+    CHECK(f.value("console", "") == "02000000000a" && f.value("proto", 0) == 3 && infra::kProto == 3,
+          "console id and protocol 3");
     CHECK(f.value("invite", "") == "P3-K7QF-2MXD", "invite when given");
     CHECK(!infra::login_fields("02000000000a", "").contains("invite"), "no invite when empty");
     CHECK(!infra::login_fields("02000000000a", nullptr).contains("invite"), "no invite when unset");
-    CHECK(infra::login_fields("02000000000a", nullptr).value("proto", 0) == 2, "proto always");
+    CHECK(infra::login_fields("02000000000a", nullptr).value("proto", 0) == 3, "proto always");
 }
 
 static void request_answer_matched_by_id() {
@@ -651,6 +652,166 @@ static void link_gap_counts_from_the_ping() {
 
 // Optional: INFRA_WS_URL=ws://127.0.0.1:27321/infra with tools/infra_server.py
 // running exercises the WebSocket transport against the real server.
+// ---- direct path (protocol 3) ----
+
+static void set_env(const char* k, const char* v) {
+#ifdef _WIN32
+    _putenv_s(k, v ? v : "");
+#else
+    if (v) setenv(k, v, 1); else unsetenv(k);
+#endif
+}
+
+static nlohmann::json login_frame(FakeInfraServer& s) {
+    std::lock_guard<std::mutex> l(s.mu);
+    for (const auto& f : s.got)
+        if (f.kind == infra::kKindJson && f.json.value("op", "") == "login") return f.json;
+    return {};
+}
+
+static void direct_off_reasons() {
+    using A = infra::Address;
+    const A loop{A::Tcp, "127.0.0.1", 27320, ""}, wss{A::Wss, "online.montick.app", 443, "/infra"};
+    auto is = [](const char* got, const char* want) { return got && std::string(got) == want; };
+    CHECK(infra::direct_off_reason(loop, nullptr, true) == nullptr, "loopback tcp: direct allowed");
+    CHECK(infra::direct_off_reason(A{A::Ws, "localhost", 80, "/infra"}, "1", true) == nullptr, "localhost ws");
+    CHECK(infra::direct_off_reason(wss, "true", true) == nullptr, "wss: allowed");
+    CHECK(is(infra::direct_off_reason(A{A::Tcp, "192.0.2.10", 27320, ""}, nullptr, true), "plain-text server"),
+          "no_caps_plaintext_remote");
+    CHECK(is(infra::direct_off_reason(A{A::Ws, "192.0.2.10", 80, "/infra"}, nullptr, true), "plain-text server"),
+          "remote ws is plain text");
+    CHECK(is(infra::direct_off_reason(wss, "0", true), "opted out"), "env 0: opted out");
+    CHECK(is(infra::direct_off_reason(wss, "false", true), "opted out"), "env false: opted out");
+    CHECK(is(infra::direct_off_reason(wss, nullptr, false), "no randomness"), "no randomness");
+}
+
+static void caps_on_loopback() {
+    set_env("PSPRECOMP_INFRA_DIRECT", nullptr);
+    FakeInfraServer s;
+    s.start();
+    infra::Client c(s.address(), fast());
+    CHECK(c.connect("P3A", 2000, infra::login_fields("02000000000a", nullptr)), "connect");
+    const nlohmann::json j = login_frame(s);
+    CHECK(j.value("proto", 0) == 3 && j.contains("caps") && j["caps"].value("direct", 0) == 1,
+          "caps_on_loopback: caps.direct 1 and proto 3");
+    // An old server answers without "direct": the client stays on the relay.
+    CHECK(c.direct_reason() && std::string(c.direct_reason()) == "server off", "old server: off");
+}
+
+static void no_caps_when_opted_out() {
+    set_env("PSPRECOMP_INFRA_DIRECT", "0");
+    FakeInfraServer s;
+    s.start();
+    infra::Client c(s.address(), fast());
+    CHECK(c.connect("P3A", 2000, infra::login_fields("02000000000a", nullptr)), "connect");
+    CHECK(!login_frame(s).contains("caps"), "opted out: no caps");
+    CHECK(c.direct_reason() && std::string(c.direct_reason()) == "opted out", "opted out: the reason");
+    set_env("PSPRECOMP_INFRA_DIRECT", nullptr);
+}
+
+static void direct_events_not_forwarded() {
+    FakeInfraServer s;
+    s.start();
+    infra::Client c(s.address(), fast());
+    std::mutex mu;
+    std::vector<std::string> seen;
+    c.on_event([&](const nlohmann::json& e) {
+        std::lock_guard<std::mutex> l(mu);
+        seen.push_back(e.value("ev", ""));
+    });
+    CHECK(c.connect("P3A", 2000, infra::login_fields("02000000000a", nullptr)), "connect");
+    s.send_json({{"ev", "direct_peer"}, {"vip", 0x0A500009}, {"pair", 77}, {"key", std::string(64, 'a')},
+                 {"cands", nlohmann::json::array()}});
+    s.send_json({{"ev", "direct_drop"}, {"vip", 0x0A500009}, {"pair", 77}});
+    s.send_json({{"ev", "member_joined"}, {"room_id", 1}});
+    CHECK(wait_until([&] { std::lock_guard<std::mutex> l(mu); return !seen.empty(); }, 2000), "an event arrived");
+    sleep_ms(100);
+    std::lock_guard<std::mutex> l(mu);
+    CHECK(seen == std::vector<std::string>{"member_joined"}, "direct_peer / direct_drop never reach the game");
+}
+
+static void loss_drops_peers() {
+    set_env("PSPRECOMP_INFRA_DIRECT_TEST_HOSTS", "127.0.0.1");
+    FakeInfraServer s;
+    s.login_extra = {{"direct", {{"on", true}, {"stun", nlohmann::json::array()}}}};
+    std::mutex mu;
+    nlohmann::json offer;
+    s.on_frame = [&](FakeInfraServer& srv, const infra::Frame& f) {
+        if (f.kind != infra::kKindJson || f.json.value("op", "") != "direct_offer") return;
+        std::lock_guard<std::mutex> l(mu);
+        offer = f.json;
+        srv.send_json({{"id", f.json["id"]}, {"ok", true}});
+    };
+    s.start();
+    infra::Client::Options o = fast();
+    o.lab_hooks = true;
+    infra::Client c(s.address(), o);
+    CHECK(c.connect("P3A", 2000, infra::login_fields("02000000000a", nullptr)), "connect");
+    CHECK(c.direct_reason() == nullptr, "direct on");
+    CHECK(wait_until([&] { std::lock_guard<std::mutex> l(mu); return offer.contains("cands"); }, 3000), "offer sent");
+    std::vector<direct::Cand> client_cands;
+    std::string text;
+    {
+        std::lock_guard<std::mutex> l(mu);
+        text = offer.dump();
+        for (const auto& cd : offer["cands"]) {
+            const std::string a = cd.value("a", "");
+            if (a.rfind("127.0.0.1:", 0) == 0)
+                client_cands.push_back(
+                    {{0x7F000001, static_cast<uint16_t>(std::stoi(a.substr(10)))}, direct::CandType::Host});
+        }
+    }
+    CHECK(!client_cands.empty(), "the offer carries the loopback host candidate");
+    CHECK(text.find("srflx") == std::string::npos, "no STUN servers: no srflx candidate");
+    // The peer: a test-side Link with the same pair key.
+    constexpr uint32_t kPeer = 0x0A500009;
+    std::mutex gmu;
+    std::vector<std::vector<uint8_t>> got;
+    direct::Link peer;
+    direct::LinkOptions lo;
+    lo.test_host_ips = {0x7F000001};
+    CHECK(peer.start(lo,
+                     [&](uint32_t, direct::Type, uint16_t, uint16_t, std::vector<uint8_t> p) {
+                         std::lock_guard<std::mutex> l(gmu);
+                         got.push_back(std::move(p));
+                     },
+                     nullptr),
+          "peer link");
+    nlohmann::json cands = nlohmann::json::array();
+    for (const auto& pc : peer.local_candidates(200))
+        if (pc.addr.ip == 0x7F000001) cands.push_back({{"t", "host"}, {"a", "127.0.0.1:" + std::to_string(pc.addr.port)}});
+    uint8_t key[32];
+    std::string key_hex;
+    for (int i = 0; i < 32; i++) {
+        key[i] = static_cast<uint8_t>(0x40 + i);
+        char h[3];
+        std::snprintf(h, sizeof h, "%02x", key[i]);
+        key_hex += h;
+    }
+    peer.add_peer(kPeer, c.vip(), 0xABCD, key, client_cands);
+    s.send_json({{"ev", "direct_peer"}, {"vip", kPeer}, {"pair", 0xABCD}, {"key", key_hex}, {"cands", cands}});
+    CHECK(wait_until([&] { return c.direct_up(kPeer) && peer.is_up(c.vip()); }, 2000), "client <-> peer Up");
+    const uint8_t hello[5] = {'h', 'e', 'l', 'l', 'o'};
+    c.send_datagram(kPeer, 3658, 3659, hello, 5);
+    CHECK(wait_until([&] { std::lock_guard<std::mutex> l(gmu); return got.size() == 1; }, 1000),
+          "a game datagram goes over the direct path");
+    peer.send_dgram(c.vip(), 3659, 3658, hello, 5);
+    infra::Client::Datagram d;
+    CHECK(wait_until([&] { return c.pop_datagram(3659, &d); }, 1000) && d.vip == kPeer && d.payload.size() == 5,
+          "a direct datagram reaches the same per-port queue");
+    s.close_client();
+    CHECK(wait_until([&] { return !c.connected(); }, 3000), "the server connection is lost");
+    CHECK(!c.direct_up(kPeer), "loss_drops_peers: no peer after the loss");
+    c.send_datagram(kPeer, 3658, 3659, hello, 5);
+    sleep_ms(200);
+    {
+        std::lock_guard<std::mutex> l(gmu);
+        CHECK(got.size() == 1, "send_datagram goes nowhere after the loss");
+    }
+    peer.stop();
+    set_env("PSPRECOMP_INFRA_DIRECT_TEST_HOSTS", nullptr);
+}
+
 static void ws_against_real_server() {
     const char* url = std::getenv("INFRA_WS_URL");
     if (!url) return;
@@ -693,6 +854,11 @@ int main() {
     link_stats_refreshed_while_connected();
     link_stats_stop_on_old_server();
     link_gap_counts_from_the_ping();
+    direct_off_reasons();
+    caps_on_loopback();
+    no_caps_when_opted_out();
+    direct_events_not_forwarded();
+    loss_drops_peers();
     ws_against_real_server();
     if (failures) {
         std::printf("%d failure(s)\n", failures);

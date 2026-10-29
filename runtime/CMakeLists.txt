@@ -203,6 +203,10 @@ set(RUNTIME_SOURCES
     src/net/link_stats.cpp
     src/net/infra_stats.cpp
     src/net/secure_random.cpp
+    src/net/direct_crypto.cpp
+    src/net/stun.cpp
+    src/net/direct_path.cpp
+    src/net/direct_link.cpp
     src/net/np2_structs.cpp
     src/net/np2_rooms.cpp
     src/net/p2p_stream.cpp
@@ -1151,6 +1155,15 @@ target_compile_options(test_direct_path PRIVATE -O2 -Wall -Wextra -Wno-unused-pa
 target_link_libraries(test_direct_path PRIVATE monocypher)
 add_test(NAME direct_path_tests COMMAND test_direct_path)
 
+# Direct P2P I/O shell on real loopback UDP sockets.
+add_executable(test_direct_link tests/test_direct_link.cpp src/net/direct_link.cpp src/net/direct_path.cpp
+               src/net/direct_crypto.cpp src/net/stun.cpp src/net/secure_random.cpp)
+target_include_directories(test_direct_link PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                           ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
+target_compile_options(test_direct_link PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(test_direct_link PRIVATE monocypher pthread ${PSP_SOCKET_LIBS} ${PSP_RANDOM_LIBS})
+add_test(NAME direct_link_tests COMMAND test_direct_link)
+
 # Infrastructure-mode server frames (tools/infra_server.py wire format).
 add_executable(test_infra_protocol tests/test_infra_protocol.cpp src/net/infra_protocol.cpp)
 target_include_directories(test_infra_protocol PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -1161,21 +1174,25 @@ add_test(NAME infra_protocol_tests COMMAND test_infra_protocol)
 # Infrastructure-mode client against an in-process fake server.
 add_executable(test_infra_client tests/test_infra_client.cpp src/net/infra_client.cpp src/net/infra_stats.cpp
                src/net/link_stats.cpp
+               src/net/direct_link.cpp src/net/direct_path.cpp src/net/direct_crypto.cpp src/net/stun.cpp
+               src/net/secure_random.cpp
                src/net/infra_protocol.cpp src/net/relay_conn.cpp src/net/relay_protocol.cpp)
 target_include_directories(test_infra_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
                            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
 target_compile_options(test_infra_client PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
-target_link_libraries(test_infra_client PRIVATE pthread ${PSP_SOCKET_LIBS} ${PSP_WINHTTP_LIBS})
+target_link_libraries(test_infra_client PRIVATE monocypher pthread ${PSP_SOCKET_LIBS} ${PSP_RANDOM_LIBS} ${PSP_WINHTTP_LIBS})
 add_test(NAME infra_client_tests COMMAND test_infra_client)
 
 # PSPRECOMP_INFRA_STATS network event CSV, and the queue age a pop reports.
 add_executable(test_infra_stats tests/test_infra_stats.cpp src/net/infra_stats.cpp src/net/infra_client.cpp
                src/net/link_stats.cpp
+               src/net/direct_link.cpp src/net/direct_path.cpp src/net/direct_crypto.cpp src/net/stun.cpp
+               src/net/secure_random.cpp
                src/net/infra_protocol.cpp src/net/relay_conn.cpp src/net/relay_protocol.cpp)
 target_include_directories(test_infra_stats PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
                            ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
 target_compile_options(test_infra_stats PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
-target_link_libraries(test_infra_stats PRIVATE pthread ${PSP_SOCKET_LIBS} ${PSP_WINHTTP_LIBS})
+target_link_libraries(test_infra_stats PRIVATE monocypher pthread ${PSP_SOCKET_LIBS} ${PSP_RANDOM_LIBS} ${PSP_WINHTTP_LIBS})
 add_test(NAME infra_stats_tests COMMAND test_infra_stats)
 
 # sceNpMatching2 response structs written into guest memory.

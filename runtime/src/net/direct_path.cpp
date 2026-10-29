@@ -64,7 +64,8 @@ void Path::send_challenge(const Addr& to, Type type, int64_t now_ms, std::vector
     uint8_t body[8];
     for (int i = 0; i < 8; i++) body[i] = static_cast<uint8_t>(v >> (8 * i));
     emit(to, type, body, sizeof body, now_ms, out);
-    challenges_.push_back({v, to, now_ms});
+    challenges_.push_back({v, to, now_ms, type});
+    if (type == Type::Keepalive) stats_.keepalives++;
     if (challenges_.size() > kMaxChallenges) challenges_.erase(challenges_.begin());
 }
 
@@ -172,6 +173,7 @@ void Path::on_ack(const Addr& from, const Opened& o, int64_t now_ms) {
                           [&](const Challenge& ch) { return ch.value == v && ch.to == from; });
     if (c == challenges_.end()) return;
     rtts_.push_back(static_cast<int>(now_ms - c->sent_ms));
+    if (c->type == Type::Keepalive) stats_.keepalive_acks++;
     if (rtts_.size() > kRttSamples) rtts_.erase(rtts_.begin());
     challenges_.erase(c);
     if (state_ == PathState::Up && from == path_) return;

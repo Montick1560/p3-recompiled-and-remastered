@@ -9,8 +9,10 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "monocypher.h"
 #include "net/infra_stats.h"
 #include "net/relay_conn.h"
+#include "net/secure_random.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -25,6 +27,42 @@ using Clock = std::chrono::steady_clock;
 
 constexpr uint32_t kErrBadRequest = 0x80550D01;  // tools/infra_server.py BAD_REQUEST (unknown op on old servers)
 constexpr int kLinkStatsWaitMs = 750;  // disconnect waits this long at most for the link_stats answer
+constexpr int kDirectStatsWaitMs = 1000;
+constexpr int kGatherMs = 2000;  // STUN gathering before direct_offer
+
+std::atomic<bool> g_lab_hooks{false};
+
+// "a.b.c.d" -> host-order IPv4; false otherwise.
+bool parse_ipv4(const std::string& s, uint32_t* ip) {
+    unsigned a, b, c, d;
+    char tail;
+    if (std::sscanf(s.c_str(), "%u.%u.%u.%u%c", &a, &b, &c, &d, &tail) != 4 || a > 255 || b > 255 || c > 255 ||
+        d > 255)
+        return false;
+    *ip = a << 24 | b << 16 | c << 8 | d;
+    return true;
+}
+
+std::string ipv4_text(uint32_t ip) {
+    return std::to_string(ip >> 24) + "." + std::to_string((ip >> 16) & 255) + "." + std::to_string((ip >> 8) & 255) +
+           "." + std::to_string(ip & 255);
+}
+
+// A wait for one answer, shared with the callback so a late answer after the wait is harmless.
+struct AnswerWait {
+    std::mutex mu;
+    std::condition_variable cv;
+    bool done = false;
+    void finish() {
+        std::lock_guard<std::mutex> l(mu);
+        done = true;
+        cv.notify_all();
+    }
+    void wait(int ms) {
+        std::unique_lock<std::mutex> l(mu);
+        cv.wait_for(l, std::chrono::milliseconds(ms), [&] { return done; });
+    }
+};
 
 int64_t now_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
@@ -211,6 +249,16 @@ nlohmann::json login_fields(const std::string& console_hex, const char* invite) 
     return f;
 }
 
+const char* direct_off_reason(const Address& a, const char* env_direct, bool have_random) {
+    if (env_direct && (std::strcmp(env_direct, "0") == 0 || std::strcmp(env_direct, "false") == 0)) return "opted out";
+    const bool loopback = a.host == "127.0.0.1" || a.host == "localhost" || a.host == "::1";
+    if (a.kind != Address::Wss && !loopback) return "plain-text server";
+    if (!have_random) return "no randomness";
+    return nullptr;
+}
+
+void set_lab_hooks(bool on) { g_lab_hooks = on; }
+
 const char* login_error_name(uint32_t code) {
     switch (code) {
     case 0x80550DA1: return "INVITE_UNKNOWN";
@@ -259,6 +307,7 @@ bool Client::connect(const std::string& online_id, int timeout_ms, const nlohman
     if (reader_.joinable()) reader_.join();
     if (ticker_.joinable()) ticker_.join();
     if (writer_.joinable()) writer_.join();
+    if (offer_.joinable()) offer_.join();
     transport_ = opt_.transport_factory ? opt_.transport_factory(addr_.kind) : make_transport(addr_.kind);
     if (!transport_->open(addr_, timeout_ms)) {
         std::fprintf(stderr, "[INFRA] cannot reach %s\n", to_string(addr_).c_str());
@@ -291,6 +340,9 @@ bool Client::connect(const std::string& online_id, int timeout_ms, const nlohman
     nlohmann::json login = login_extra.is_object() ? login_extra : nlohmann::json::object();
     login["op"] = "login";
     login["online_id"] = online_id;
+    uint8_t probe[8];
+    const char* off = direct_off_reason(addr_, std::getenv("PSPRECOMP_INFRA_DIRECT"), net::secure_random(probe, 8));
+    if (!off) login["caps"] = {{"direct", 1}};
     request(std::move(login),
             [&](const nlohmann::json& j) {
                 std::lock_guard<std::mutex> l(wmu);
@@ -318,6 +370,9 @@ bool Client::connect(const std::string& online_id, int timeout_ms, const nlohman
     vip_ = answer.value("vip", 0u);
     std::fprintf(stderr, "[INFRA] connected to %s as %s, virtual IP %u.%u.%u.%u\n", to_string(addr_).c_str(),
                  online_id.c_str(), vip_ >> 24, (vip_ >> 16) & 255, (vip_ >> 8) & 255, vip_ & 255u);
+    direct_reason_ = off;
+    if (!off) start_direct(answer);
+    if (direct_reason_) std::fprintf(stderr, "[INFRA] direct: off (%s)\n", direct_reason_.load());
     return true;
 }
 
@@ -343,11 +398,19 @@ void Client::disconnect() {
             std::unique_lock<std::mutex> l(w->mu);
             w->cv.wait_for(l, std::chrono::milliseconds(kLinkStatsWaitMs), [&] { return w->done; });
         }
+        const nlohmann::json pairs = direct_.running() ? direct_.stats_json() : nlohmann::json::array();
+        if (!pairs.empty()) {
+            auto d = std::make_shared<AnswerWait>();
+            request({{"op", "direct_stats"}, {"pairs", pairs}}, [d](const nlohmann::json&) { d->finish(); },
+                    kDirectStatsWaitMs);
+            d->wait(kDirectStatsWaitMs);
+        }
     }
     lost("disconnect");  // closing the transport also unblocks a writer stuck in a send
     if (reader_.joinable()) reader_.join();
     if (ticker_.joinable()) ticker_.join();
     if (writer_.joinable()) writer_.join();
+    if (offer_.joinable()) offer_.join();
     transport_.reset();
 }
 
@@ -356,6 +419,8 @@ void Client::fail(Done& done) {
 }
 
 void Client::lost(const char* why) {
+    direct_.stop();  // first: once connected() is false no peer is left; keys wiped, nothing sent to the server
+    direct_reason_ = "not connected";
     std::map<uint32_t, Pending> pending;
     std::set<int64_t> rooms;
     EventFn fn;
@@ -482,6 +547,10 @@ void Client::on_event(EventFn fn) {
 void Client::send_datagram(uint32_t vip, uint16_t dst_port, uint16_t src_port, const uint8_t* data, size_t len) {
     if (!connected_) return;
     stats::record(stats::Ev::TxCall, kKindDatagram, vip, src_port, dst_port, data, len);
+    if (direct_.send_dgram(vip, dst_port, src_port, data, len)) {
+        stats::record(stats::Ev::TxDone, kKindDatagram, vip, src_port, dst_port, data, len);
+        return;
+    }
     send(Outgoing{encode_datagram(vip, dst_port, src_port, data, len), kKindDatagram, vip, src_port, dst_port});
 }
 
@@ -556,6 +625,8 @@ std::string Client::online_id() const {
 
 void Client::on_json(const nlohmann::json& j) {
     if (j.contains("ev")) {
+        const std::string ev = j.value("ev", "");
+        if (ev == "direct_peer" || ev == "direct_drop") return on_direct_event(j);  // never the game's
         EventFn fn;
         {
             std::lock_guard<std::mutex> lock(mu_);
@@ -610,8 +681,12 @@ void Client::reader() {
             }
             const int64_t rx_us = stats::now_us();
             stats::record(stats::Ev::Rx, f.kind, f.vip, f.src_port, f.dst_port, f.payload.data(), f.payload.size());
+            if (f.kind != kKindStream) {
+                enqueue_datagram(Datagram{f.vip, f.src_port, f.dst_port, std::move(f.payload), rx_us});
+                continue;
+            }
             std::lock_guard<std::mutex> lock(mu_);
-            if (f.kind == kKindStream) {
+            {
                 if (streams_.size() >= kStreamQueueCap || stream_bytes_ + f.payload.size() > kMaxStreamBytes) {
                     static int logged = 0;
                     if (logged++ < 4) std::fprintf(stderr, "[INFRA] stream queue full: a game stream lost data\n");
@@ -621,22 +696,6 @@ void Client::reader() {
                 }
                 stream_bytes_ += f.payload.size();
                 streams_.push_back(Datagram{f.vip, f.src_port, f.dst_port, std::move(f.payload), rx_us});
-                continue;
-            }
-            if (queued_bytes_ + f.payload.size() > kMaxQueuedBytes) {  // nobody reads them: drop new
-                stats::record(stats::Ev::Drop, f.kind, f.vip, f.src_port, f.dst_port, f.payload.data(),
-                              f.payload.size());
-                continue;
-            }
-            auto& q = queues_[f.dst_port];
-            queued_bytes_ += f.payload.size();
-            q.push_back(Datagram{f.vip, f.src_port, f.dst_port, std::move(f.payload), rx_us});
-            if (q.size() > kQueueCap) {
-                const Datagram& old = q.front();
-                stats::record(stats::Ev::Drop, kKindDatagram, old.vip, old.src_port, old.dst_port,
-                              old.payload.data(), old.payload.size(), rx_us - old.rx_us);
-                queued_bytes_ -= old.payload.size();
-                q.pop_front();
             }
         }
         if (r.broken()) {
@@ -644,6 +703,100 @@ void Client::reader() {
             return;
         }
     }
+}
+
+void Client::enqueue_datagram(Datagram d) {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (!connected_) return;  // a direct datagram that raced the loss
+    if (queued_bytes_ + d.payload.size() > kMaxQueuedBytes) {  // nobody reads them: drop new
+        stats::record(stats::Ev::Drop, kKindDatagram, d.vip, d.src_port, d.dst_port, d.payload.data(),
+                      d.payload.size());
+        return;
+    }
+    auto& q = queues_[d.dst_port];
+    queued_bytes_ += d.payload.size();
+    const int64_t rx_us = d.rx_us;
+    q.push_back(std::move(d));
+    if (q.size() > kQueueCap) {
+        const Datagram& old = q.front();
+        stats::record(stats::Ev::Drop, kKindDatagram, old.vip, old.src_port, old.dst_port, old.payload.data(),
+                      old.payload.size(), rx_us - old.rx_us);
+        queued_bytes_ -= old.payload.size();
+        q.pop_front();
+    }
+}
+
+void Client::start_direct(const nlohmann::json& answer) {
+    const nlohmann::json d = answer.value("direct", nlohmann::json::object());
+    if (!d.is_object() || !d.value("on", false)) {
+        direct_reason_ = "server off";
+        return;
+    }
+    direct::LinkOptions lo;
+    for (const auto& s : d.value("stun", nlohmann::json::array()))
+        if (s.is_string()) lo.stun.push_back(s.get<std::string>());
+    const char* impair = std::getenv("PSPRECOMP_INFRA_DIRECT_IMPAIR");
+    if (opt_.lab_hooks) {
+        if (impair) lo.impair = impair;
+        if (const char* hosts = std::getenv("PSPRECOMP_INFRA_DIRECT_TEST_HOSTS")) {
+            std::string list = hosts;
+            for (size_t at = 0; at <= list.size();) {
+                size_t end = list.find(',', at);
+                if (end == std::string::npos) end = list.size();
+                uint32_t ip;
+                if (parse_ipv4(list.substr(at, end - at), &ip)) lo.test_host_ips.push_back(ip);
+                at = end + 1;
+            }
+        }
+    } else if (impair && impair[0]) {
+        std::fprintf(stderr, "[INFRA] direct: lab impairment ignored in a beta build\n");
+    }
+    const uint32_t me = vip_;
+    if (!direct_.start(lo,
+                     [this](uint32_t vip, direct::Type type, uint16_t dst, uint16_t src, std::vector<uint8_t> p) {
+                         if (type != direct::Type::Dgram) return;
+                         stats::record(stats::Ev::Rx, kKindDatagram, vip, src, dst, p.data(), p.size());
+                         enqueue_datagram(Datagram{vip, src, dst, std::move(p), stats::now_us()});
+                     },
+                     nullptr)) {
+        direct_reason_ = "no randomness";
+        return;
+    }
+    std::fprintf(stderr, "[INFRA] direct: on (%zu STUN servers)\n", lo.stun.size());
+    offer_ = std::thread([this, me] {
+        const std::vector<direct::Cand> cands = direct_.local_candidates(kGatherMs);
+        if (cands.empty() || !connected_ || vip_ != me) return;
+        nlohmann::json list = nlohmann::json::array();
+        for (const direct::Cand& c : cands)
+            list.push_back({{"t", c.type == direct::CandType::Host ? "host" : "srflx"},
+                            {"a", ipv4_text(c.addr.ip) + ":" + std::to_string(c.addr.port)}});
+        request({{"op", "direct_offer"}, {"cands", list}}, [](const nlohmann::json&) {}, 5000);
+    });
+}
+
+void Client::on_direct_event(const nlohmann::json& j) {
+    if (!direct_.running()) return;  // relay-only: the keys of a plain-text or opted-out session are never used
+    const uint32_t peer = j.value("vip", 0u);
+    if (j.value("ev", "") == "direct_drop") return direct_.drop_peer(peer);
+    const std::string hex = j.value("key", "");
+    if (hex.size() != 64 || hex.find_first_not_of("0123456789abcdef") != std::string::npos) return;
+    uint8_t key[32];
+    for (int i = 0; i < 32; i++) key[i] = static_cast<uint8_t>(std::stoi(hex.substr(2 * i, 2), nullptr, 16));
+    std::vector<direct::Cand> cands;
+    for (const auto& c : j.value("cands", nlohmann::json::array())) {
+        if (!c.is_object() || !c.contains("a") || !c["a"].is_string()) continue;
+        const std::string a = c["a"].get<std::string>(), t = c.value("t", "");
+        const size_t colon = a.rfind(':');
+        uint32_t ip;
+        if (colon == std::string::npos || !parse_ipv4(a.substr(0, colon), &ip) || (t != "host" && t != "srflx"))
+            continue;
+        const int port = std::atoi(a.c_str() + colon + 1);
+        if (port <= 0 || port > 65535) continue;
+        cands.push_back({{ip, static_cast<uint16_t>(port)}, t == "host" ? direct::CandType::Host : direct::CandType::Srflx});
+    }
+    if (cands.size() > 4) cands.resize(4);
+    direct_.add_peer(vip_, peer, j.value("pair", 0u), key, std::move(cands));
+    crypto_wipe(key, sizeof key);
 }
 
 void Client::ticker() {
@@ -708,7 +861,11 @@ void Client::ticker() {
 
 Client& client() {
     // Leaked on purpose: no destructor joining network threads during exit.
-    static Client* c = new Client(parse_address(std::getenv("PSPRECOMP_INFRA_SERVER")));
+    static Client* c = [] {
+        Client::Options o;
+        o.lab_hooks = g_lab_hooks;
+        return new Client(parse_address(std::getenv("PSPRECOMP_INFRA_SERVER")), o);
+    }();
     return *c;
 }
 

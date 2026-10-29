@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "json.hpp"
+#include "net/direct_link.h"
 #include "net/infra_protocol.h"
 #include "net/link_stats.h"
 
@@ -45,13 +46,20 @@ struct Address {
 Address parse_address(const char* text);
 std::string to_string(const Address& a);
 
-// Wire protocol version sent in the login ("proto"); bumped when the protocol changes.
-constexpr int kProto = 2;
+// Wire protocol version sent in the login ("proto"); bumped when the protocol changes. 3: direct path.
+constexpr int kProto = 3;
 // The login's extra fields: console id, protocol, and the beta invite code
 // (PSPRECOMP_INFRA_INVITE, set by the launcher) when there is one.
 nlohmann::json login_fields(const std::string& console_hex, const char* invite);
 // Name of a beta-gate login refusal of tools/infra_server.py (INVITE_UNKNOWN...), nullptr for others.
 const char* login_error_name(uint32_t code);
+// Why this client stays relay-only ("opted out", "plain-text server", "no randomness"), nullptr when the direct
+// path may be offered: PSPRECOMP_INFRA_DIRECT (env_direct) is not 0/false, the server is wss:// or on loopback
+// (keys travel only over TLS), and the OS gives randomness.
+const char* direct_off_reason(const Address& a, const char* env_direct, bool have_random);
+// Lab hooks (PSPRECOMP_INFRA_DIRECT_IMPAIR, PSPRECOMP_INFRA_DIRECT_TEST_HOSTS) for the process-wide client():
+// main() turns them on only outside beta builds. Call before client() is first used.
+void set_lab_hooks(bool on);
 
 class Transport {
 public:
@@ -72,6 +80,7 @@ public:
         int ping_interval_ms = 2000;
         int dead_after_ms = 10000;  // no frame from the server for this long -> connection lost
         int link_report_ms = 60000;  // link_stats refresh while connected (the server overwrites the row)
+        bool lab_hooks = false;  // honour the direct path's lab env vars (never in beta builds)
         // Makes the transport of each connection; empty -> make_transport (tests inject slow ones).
         std::function<std::unique_ptr<Transport>(Address::Kind)> transport_factory;
     };
@@ -125,6 +134,10 @@ public:
     size_t queued_bytes() const;
     size_t queued_stream_bytes() const;
 
+    // The direct path: nullptr while it may run, else why it is off (see direct_off_reason, or "server off").
+    const char* direct_reason() const { return direct_reason_; }
+    bool direct_up(uint32_t peer_vip) const { return direct_.is_up(peer_vip); }
+
     int rtt_ms() const;  // median of the last 5 pings, -1 before the first answer
     LinkSummary link_summary() const { return link_.summary(); }  // this session's relay-link numbers
     uint32_t vip() const { return vip_; }
@@ -156,6 +169,10 @@ private:
     bool report_link(Done done, int timeout_ms);
     void log_link() const;
     void fail(Done& done);
+    // A received game datagram into its per-port queue (relayed or direct), with the same caps.
+    void enqueue_datagram(Datagram d);
+    void start_direct(const nlohmann::json& answer);
+    void on_direct_event(const nlohmann::json& j);
 
     Address addr_;
     Options opt_;
@@ -183,6 +200,9 @@ private:
     std::atomic<bool> link_refused_{false};
     std::string session_, online_id_;
     std::set<int64_t> rooms_;  // joined rooms (hideout + VS), for the room_destroyed synthesised on loss
+    direct::Link direct_;
+    std::atomic<const char*> direct_reason_{"not connected"};
+    std::thread offer_;  // gathers candidates and sends direct_offer after the login
 };
 
 // Process-wide client for PSPRECOMP_INFRA_SERVER (read once).

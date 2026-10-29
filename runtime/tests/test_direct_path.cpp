@@ -225,6 +225,8 @@ int main() {
         const int ka = sim.count(b.keys, kB, Type::Keepalive, 300, 10300);
         CHECK(ka >= 4 && ka <= 6, "keepalive: about every 2 s while silent");
         CHECK(a.path->state() == PathState::Up, "keepalive: still Up");
+        const PathStats ks = a.path->stats();
+        CHECK(ks.keepalives >= 4 && ks.keepalive_acks + 1 >= ks.keepalives, "keepalive: counted, and answered");
         sim.nodes = {&a};  // B goes silent
         sim.run_until(12200);
         CHECK(a.path->state() == PathState::Up, "dead: Up within 4 s of silence");

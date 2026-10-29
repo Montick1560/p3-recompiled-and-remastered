@@ -1,4 +1,5 @@
 #include "psp_beta.h"
+#include "net/infra_client.h"
 #include "psp_cpu.h"
 #include "psp_host_io.h"
 #include "recomp.h"
@@ -185,7 +186,8 @@ int main(int argc, char* argv[]) {
         const int v = std::atoi(p);
         if (v > 0 && v < 65536) debug_port = v;
     }
-    // Beta builds (players' packages) have no debug socket.
+    // Beta builds (players' packages) have no debug socket and no direct-path lab hooks.
+    infra::set_lab_hooks(psp_beta_debug_socket_allowed(psp_beta_until()));
     if (psp_beta_debug_socket_allowed(psp_beta_until())) psp_debug_socket_start(rdram, PSP_MEM_SIZE, debug_port);
     else std::fprintf(stderr, "[RT] beta build: debug socket off\n");
     {

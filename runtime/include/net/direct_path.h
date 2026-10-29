@@ -38,6 +38,7 @@ enum class PathState { Probing, Up, Down, Closed };
 struct PathStats {
     int rtt_p50 = -1, rtt_p95 = -1;
     uint64_t sent = 0, received = 0, dropped_auth = 0, dropped_replay = 0, dropped_rate = 0;
+    uint64_t keepalives = 0, keepalive_acks = 0;  // the direct path's loss estimate
     int64_t up_ms = 0;
     int fallbacks = 0;
 };
@@ -60,6 +61,7 @@ public:
     bool on_relayed(const uint8_t* pkt, size_t len, int64_t now_ms, Opened* app);
     void close(int64_t now_ms, std::vector<Out>* out);  // CLOSE to the path if Up, wipe, Closed
     PathState state() const { return state_; }
+    uint32_t pair_id() const { return pair_id_; }
     CandType path_type() const { return path_type_; }
     PathStats stats() const;
 
@@ -74,6 +76,7 @@ private:
         uint64_t value;
         Addr to;
         int64_t sent_ms;
+        Type type;
     };
 
     std::vector<uint8_t> seal_next(Type type, const uint8_t* body, size_t len);
