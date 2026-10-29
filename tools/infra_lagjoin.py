@@ -5,7 +5,8 @@ frame logs (PSPRECOMP_FRAMELOG), into delivery delays per hop and a list of the 
 Both instances run on one PC, so their steady_clock microseconds (QueryPerformanceCounter) are one clock. A frame
 log's t_ms = 0 is placed on that clock by the "[FRAMELOG] start steady_us=N" line of the instance's stderr log.
 
-Each tx_call on one side is matched, in order, to the rx and then the pop on the other side with the same
+Each tx_call on one side is matched, in order (one sent over 2 s before the rx counts as lost: the direct path is
+UDP), to the rx and then the pop on the other side with the same
 (kind, src, dst, len, hash). Per direction and kind it reports count, lost/dropped/unread and p50/p95/p99/max of
   send_block = tx_done - tx_call   (the guest thread waiting for the network)
   wire       = rx - tx_call        (until the peer's reader has it)
@@ -31,6 +32,7 @@ KINDS = {2: 'dgram', 3: 'stream'}
 STALL_MS = 100.0
 WINDOW_US = 2_000_000
 SYNC_US = 4_200_000  # gfx_tour.beat_sync polls the beat level over the debug socket for 4 s
+LOST_US = 2_000_000  # a send not received after this long is lost; the relay never loses, the direct path can
 
 
 def read_driver(path):
@@ -140,6 +142,8 @@ def join(net):
                 q.popleft().t_done = t
         elif ev == 'rx':
             q = on_wire[(other[side], key)]
+            while q and t - q[0].t_call > LOST_US:  # an identical one sent long before was lost (UDP path)
+                q.popleft()
             if q:
                 rec = q.popleft()
                 rec.t_rx = t
@@ -288,6 +292,12 @@ def selftest():
     pa, pb = os.path.join(tmp, 'net_A.csv'), os.path.join(tmp, 'net_B.csv')
     open(pa, 'w').write(a)
     open(pb, 'w').write(b)
+    # A lossy path (UDP): a repeated payload lost at 20 s does not take the rx of the one sent at 25 s.
+    pc, pd = os.path.join(tmp, 'net_C.csv'), os.path.join(tmp, 'net_D.csv')
+    open(pc, 'w').write(hdr + row(20_000_000, 'tx_call', 'bbbbbbbb') + row(25_000_000, 'tx_call', 'bbbbbbbb'))
+    open(pd, 'w').write(hdr + row(25_000_300, 'rx', 'bbbbbbbb'))
+    recs = join({'C': read_net(pc), 'D': read_net(pd)})[0][('C', 2)]
+    assert [r.t_rx for r in recs] == [None, 25_000_300], [r.t_rx for r in recs]
     lines, verdicts, n = report({'A': read_net(pa), 'B': read_net(pb)})
     d = n[('A->B', 'dgram')]
     assert d['sent'] == 5 and d['matched'] == 4 and d['lost'] == 1 and d['dropped'] == 1, d
