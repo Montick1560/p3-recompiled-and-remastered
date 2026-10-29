@@ -58,6 +58,12 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+
+#ifdef _WIN32
+// Hybrid laptops: the NVIDIA / AMD drivers run an exe exporting these on the dedicated GPU.
+extern "C" __declspec(dllexport) unsigned long NvOptimusEnablement = 1;
+extern "C" __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+#endif
 #include <sys/stat.h>
 #include <SDL.h>
 #ifdef _WIN32
