@@ -77,7 +77,7 @@ game ignores the section without logging.
 Launcher keys: `version` (last played release), `save_<release>` (the chosen save), `ppsspp_savedata` (the PPSSPP
 folder), `theme` (the applied launcher theme id, default `default`; a missing or locked one shows `default` and the
 key is left alone) and `music_volume` (`0`, `10`, …, `100`, default `70`; the only `[launcher]` key in
-`core_options.json`, so Options › General shows it). Themes and achievements: `docs/contracts/achievements-v1.md`.
+`core_options.json`, so Options › General shows it) and `render_scale_chosen` (`true` once the player saves a changed resolution in Opciones; while it is absent the launcher writes the detected `[display] render_scale` at each start: `4` when a DXGI hardware adapter has >= 2 GiB of dedicated video memory, `2` otherwise; the defaults fixture keeps `4`). Themes and achievements: `docs/contracts/achievements-v1.md`.
 
 `[controls]` remaps the PSP buttons. Each action has up to two keyboard keys, `<action>_keys`
 (comma separated SDL key names), and one gamepad button, `<action>_pad` (an SDL GameController
