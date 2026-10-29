@@ -1139,6 +1139,12 @@ target_compile_options(test_direct_crypto PRIVATE -O2 -Wall -Wextra -Wno-unused-
 target_link_libraries(test_direct_crypto PRIVATE monocypher)
 add_test(NAME direct_crypto_tests COMMAND test_direct_crypto)
 
+add_executable(test_stun tests/test_stun.cpp src/net/stun.cpp src/net/direct_crypto.cpp)
+target_include_directories(test_stun PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_stun PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(test_stun PRIVATE monocypher)
+add_test(NAME stun_tests COMMAND test_stun)
+
 # Infrastructure-mode server frames (tools/infra_server.py wire format).
 add_executable(test_infra_protocol tests/test_infra_protocol.cpp src/net/infra_protocol.cpp)
 target_include_directories(test_infra_protocol PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
