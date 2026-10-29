@@ -646,6 +646,17 @@ launcher's Saves screen sets this variable. Unset or missing save: the newest, a
   server's `--impair`.
 - **Set it when:** measuring the direct path against a bad link on one PC (`build/infra/p2p_baseline.sh direct`).
 
+### `PSPRECOMP_INFRA_DIRECT_IMPAIR_FILE`
+- **Read in:** `runtime/src/net/infra_client.cpp` (`Client::ticker`), every second while the direct path runs. Lab
+  hook, ignored by beta builds.
+- **Type:** env (file path). The file holds an impairment in the `PSPRECOMP_INFRA_DIRECT_IMPAIR` form; empty or
+  missing = none.
+- **Default:** unset.
+- **Effect:** Replaces the direct path's impairment whenever the file's text changes, logged as
+  `[INFRA] direct: lab impairment now '...'`. Writing `loss=100` kills the direct path mid-game (the game falls back
+  to the relay), and emptying the file brings it back after the next probing attempt.
+- **Set it when:** testing the fallback in the middle of a mission (Task 10 of the direct-P2P part 2 plan).
+
 ### `PSPRECOMP_INFRA_DIRECT_TEST_HOSTS`
 - **Read in:** `runtime/src/net/infra_client.cpp` (`Client::start_direct`). Lab hook, ignored by beta builds.
 - **Type:** env, comma-separated IPv4 addresses (e.g. `127.0.0.1`).

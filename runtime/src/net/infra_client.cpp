@@ -800,7 +800,10 @@ void Client::on_direct_event(const nlohmann::json& j) {
 }
 
 void Client::ticker() {
-    int64_t last_ping = 0, last_report = now_ms();
+    int64_t last_ping = 0, last_report = now_ms(), last_impair = 0;
+    // Lab only: the impairment of the direct path follows a file, so a test can kill and restore it mid-game.
+    const char* impair_file = opt_.lab_hooks ? std::getenv("PSPRECOMP_INFRA_DIRECT_IMPAIR_FILE") : nullptr;
+    std::string impair_now;
     while (running_) {
         {
             std::unique_lock<std::mutex> lock(mu_);
@@ -855,6 +858,21 @@ void Client::ticker() {
         if (opt_.link_report_ms > 0 && t - last_report >= opt_.link_report_ms) {
             last_report = t;
             report_link(nullptr, opt_.dead_after_ms);  // fire and forget: the server overwrites the row
+        }
+        if (impair_file && direct_.running() && t - last_impair >= 1000) {
+            last_impair = t;
+            std::string text;
+            if (FILE* f = std::fopen(impair_file, "rb")) {
+                char buf[128];
+                text.assign(buf, std::fread(buf, 1, sizeof buf - 1, f));
+                std::fclose(f);
+            }
+            while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' ')) text.pop_back();
+            if (text != impair_now) {
+                impair_now = text;
+                direct_.set_impair(text);
+                std::fprintf(stderr, "[INFRA] direct: lab impairment now '%s'\n", text.c_str());
+            }
         }
     }
 }
