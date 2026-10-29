@@ -316,6 +316,14 @@ never runs it). Each client reports its relay link (ping RTT p50/p95/max, pings 
 as `link_stats`, which a server with `--db` stores per session, without addresses. `--log FILE` also appends every
 server log line to a file. Each connection may send up to 1500 game datagrams per second (more are dropped and
 counted per session): at the beta a host with three visitors went over the earlier 400.
+Direct path (protocol 3, spec `docs/superpowers/specs/2026-10-24-p3-direct-p2p-design.md`): players of one room
+exchange game datagrams over an encrypted, authenticated UDP path found with STUN, and the relay stays the fallback.
+The server only signals: it hands each pair of room members a fresh key over TLS and forwards their candidates,
+never logging or storing an address or a key. `--no-direct` turns it off for everyone (clients stay on the relay),
+as does `"direct": false` in the beta config, read live; `--stun HOST:PORT,...` replaces the STUN servers the
+clients are given (default `stun.cloudflare.com:3478,stun.l.google.com:19302`). Clients that turned it off
+(`[online] direct = false`) or run an older version keep the relay. With `--db`, each client's per-pair numbers at
+the end of a session go to a `direct_stats` table (path kind, RTT, keepalive loss, seconds direct, fallbacks).
 
 ### Prerequisites
 

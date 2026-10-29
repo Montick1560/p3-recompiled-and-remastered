@@ -44,6 +44,8 @@ const CoreKey kCore[] = {
     {"online", "relay", "PSPRECOMP_ADHOC_RELAY", Kind::Bool, "false", 0, 0, nullptr},
     {"online", "port_offset", "PSPRECOMP_ADHOC_PORT_OFFSET", Kind::Int, "10000", 0, 65535, nullptr},
     {"online", "mac_file", "PSPRECOMP_ADHOC_MAC_FILE", Kind::Path, "adhoc_mac.txt", 0, 0, nullptr},
+    // Inverted: the direct path is on unless false sets PSPRECOMP_INFRA_DIRECT=0 (emitted below).
+    {"online", "direct", nullptr, Kind::Bool, "true", 0, 0, nullptr},
 };
 
 std::string lower(std::string s) {
@@ -148,6 +150,7 @@ SettingsResolution psp_settings_resolve(const std::string& ini_text, const std::
                                        k.values ? k.values : "", &r.log);
         if (std::string(k.key) == "hd_textures") { hd = v; continue; }
         if (std::string(k.key) == "texture_pack") { pack = v; continue; }
+        if (std::string(k.key) == "direct") { emit("PSPRECOMP_INFRA_DIRECT", "0", v == "true"); continue; }
         if (v.empty() && k.def[0] == '\0') continue;  // window_mode: absent or invalid sets nothing
         if (k.kind == Kind::Bool) emit(k.env, "1", v != "true");
         else if (k.kind == Kind::Path) emit(k.env, resolve_path(base_dir, v), false);

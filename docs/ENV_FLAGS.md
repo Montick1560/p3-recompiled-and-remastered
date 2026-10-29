@@ -613,12 +613,46 @@ launcher's Saves screen sets this variable. Unset or missing save: the newest, a
   each infrastructure login.
 - **Type:** env (invite code, e.g. `P3-K7QF-2MXD`; case, spaces and dashes do not matter).
 - **Default:** unset — the login carries no invite.
-- **Effect:** The beta invite code sent in the login (`"invite"`), next to `"proto": 2`. A server started with
+- **Effect:** The beta invite code sent in the login (`"invite"`), next to `"proto": 3`. A server started with
   `--beta` refuses a login without a valid code; the refusal is logged by name, e.g.
   `[INFRA] login to ... failed: INVITE_UNKNOWN {...}` (also `INVITE_DISABLED`, `BETA_CLOSED`, `OUTDATED`,
   `INVITE_IN_USE`). A server without `--beta` ignores it.
 - **Set it when:** the launcher sets it from `settings.ini` `[online] invite`; by hand for a test instance
   against a gated server.
+
+### `PSPRECOMP_INFRA_DIRECT`
+- **Read in:** `runtime/src/net/infra_client.cpp` (`Client::connect`, through `infra::direct_off_reason`), at each
+  infrastructure login.
+- **Type:** env (`0` or `false` to turn it off).
+- **Default:** unset — on. The launcher sets `0` when `settings.ini` `[online] direct = false`.
+- **Effect:** The direct player-to-player path: the login carries `"caps": {"direct": 1}`, and when the server
+  answers `direct.on`, the client gathers its candidates (STUN + LAN addresses), offers them, and sends the game's
+  datagrams over an encrypted UDP path to each room peer that also offered (the relay is the fallback). It stays off,
+  with one `[INFRA] direct: off (opted out | server off | plain-text server | no randomness)` line, when this is
+  `0`/`false`, when the server is not `wss://` and not on loopback (keys travel only over TLS), when the server
+  does not offer it, or when the OS gives no randomness. Logged: `[INFRA] direct: on (N STUN servers)`,
+  `[INFRA] direct: vip XXXXXXXX up (host|srflx, rtt N ms)`, `[INFRA] direct: vip XXXXXXXX back to relay (why)`;
+  never an address.
+- **Set it when:** `0` to compare against the relay, or to play with the relay only.
+
+### `PSPRECOMP_INFRA_DIRECT_IMPAIR`
+- **Read in:** `runtime/src/net/infra_client.cpp` (`Client::start_direct`), at each login that starts the direct
+  path. Lab hook: builds with `PSPRECOMP_BETA_UNTIL` ignore it and log
+  `[INFRA] direct: lab impairment ignored in a beta build`.
+- **Type:** env, `delay=MS,jitter=MS,loss=PCT,reorder=PCT` (any subset).
+- **Default:** unset — no impairment.
+- **Effect:** Impairs this instance's direct path: `loss` drops that percentage of packets both ways, `delay` and
+  `jitter` hold outgoing packets, `reorder` sends that percentage of them late. The relay leg is impaired by the
+  server's `--impair`.
+- **Set it when:** measuring the direct path against a bad link on one PC (`build/infra/p2p_baseline.sh direct`).
+
+### `PSPRECOMP_INFRA_DIRECT_TEST_HOSTS`
+- **Read in:** `runtime/src/net/infra_client.cpp` (`Client::start_direct`). Lab hook, ignored by beta builds.
+- **Type:** env, comma-separated IPv4 addresses (e.g. `127.0.0.1`).
+- **Default:** unset.
+- **Effect:** Adds these addresses (with the direct socket's port) as host candidates, first in the offer, so two
+  instances on one PC can pair over loopback.
+- **Set it when:** direct-path tests on one PC (`build/infra/two.py`).
 
 ### `PSPRECOMP_INFRA_STATS`
 - **Read in:** `runtime/src/net/infra_stats.cpp` (`infra::stats::enabled()`), once, at the first infrastructure

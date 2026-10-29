@@ -43,6 +43,7 @@ nickname = Patapon          ; PSPRECOMP_ADHOC_NICK
 relay = false               ; PSPRECOMP_ADHOC_RELAY=1 when true
 port_offset = 10000         ; PSPRECOMP_ADHOC_PORT_OFFSET
 mac_file = adhoc_mac.txt    ; PSPRECOMP_ADHOC_MAC_FILE
+direct = true               ; PSPRECOMP_INFRA_DIRECT=0 when false (direct player-to-player path)
 
 [controls]                  ; PSPRECOMP_CONTROLS: remappable keyboard keys / gamepad buttons
 up_keys = Up                ; up to two SDL key names, comma separated
@@ -164,6 +165,7 @@ invalid values, future version) that both the C++ and the Rust readers are teste
 | online.relay | PSPRECOMP_ADHOC_RELAY | bool | true -> `1`, false -> unset |
 | online.port_offset | PSPRECOMP_ADHOC_PORT_OFFSET | int 0..65535 | copied |
 | online.mac_file | PSPRECOMP_ADHOC_MAC_FILE | path | resolved |
+| online.direct | PSPRECOMP_INFRA_DIRECT | bool | false -> `0`, true -> unset (the runtime default is on) |
 | controls.*_keys + controls.*_pad | PSPRECOMP_CONTROLS | SDL key / button names | canonical spec of the actions present (see above) |
 | game.* | from `game_options.json` | per catalog | `map` or copied |
 
