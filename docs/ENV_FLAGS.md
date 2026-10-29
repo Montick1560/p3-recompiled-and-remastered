@@ -296,7 +296,7 @@ Read by the runtime binary at start-up or during execution.
 - **Effect:** runs the render-to-texture detector: hashes each GL-written framebuffer
   once per display list (CPU writes) and prints `[RTT] sample`, `[RTT] cpu-write` and
   `[RTT] xfer` lines when the game samples or transfers a target GL drew. Logs only;
-  off saves ~25 % of the runtime's CPU in the hideout.
+  off saves ~2.6 % of the runtime's CPU cycles in the hideout.
 - **Set it when:** checking whether a scene reads back a rendered framebuffer
   (the case the RTT plan's later tasks would handle).
 

@@ -607,7 +607,8 @@ static void drawlog_prim(const GeState& s, int index, int prim_type, int count) 
 // ---- RTT detector (logs only) ----
 // Which draws, transfers and CPU writes touch a GL-written target. GL never writes guest
 // VRAM, so a change of a target's guest bytes is the CPU (or a transfer) writing it.
-// Opt-in (PSPRECOMP_RTT_LOG=1): hashing every target once per list was ~25 % of the CPU.
+// Opt-in (PSPRECOMP_RTT_LOG=1): hashing every target once per list cost ~2.6 % of the
+// process cycles in the hideout (more on low-bandwidth PCs) for log lines only.
 static bool rtt_log_on() {
     static const bool on = [] {
         const char* e = std::getenv("PSPRECOMP_RTT_LOG");

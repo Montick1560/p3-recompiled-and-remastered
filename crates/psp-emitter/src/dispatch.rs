@@ -3,8 +3,8 @@
 //! The dispatch table maps PSP virtual addresses to C++ function pointers.
 //! `RECOMP_LOOKUP(vaddr)` uses it for indirect calls and cross-section jumps.
 //! Address 0x00000000 maps to a no-op function (safe sentinel for unresolved calls).
-//! It is a flat open-addressing table: libc++'s `std::unordered_map` find was
-//! ~9 % of the runtime's CPU (2026-10-29 profile).
+//! It is a flat open-addressing table: libc++'s `std::unordered_map` find was the
+//! runtime's top function in the 2026-10-29 CPU profile (~4 % of process cycles).
 use psp_parser::analysis_json::{JsonFunction, JsonMidEntry};
 
 /// Free slots kept for `psp_dispatch_register` calls made after init (HLE stubs, hooks).
