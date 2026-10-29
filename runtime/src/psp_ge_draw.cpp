@@ -1,6 +1,7 @@
 #include "psp_osk_overlay.h"
 #include "psp_exit.h"
 #include "psp_ge_draw.h"
+#include "psp_ge_batch.h"
 #include "psp_ge_texpatch.h"
 #include "psp_perf.h"
 #include "psp_ge_blend.h"
@@ -686,6 +687,48 @@ void ge_draw_note_transfer(const GeTransferRegs& r) {
                      x.src, x.dst, x.width, x.height, x.bpp, from, into);
 }
 
+// ---- Draw batching (PSPRECOMP_GE_BATCH, psp_ge_batch.h) ----
+// Consecutive PRIMs append their packed vertices here and ge_draw_flush draws
+// them at once with the live GL state. That state cannot change in between: the
+// GE command loop flushes before any command that changes draw-time state
+// (ge_cmd_flushes), and every return of the list processor flushes.
+static std::vector<PackedVertex> g_batch;
+static GLenum g_batch_mode = GL_TRIANGLES;
+static uint16_t g_batch_max_v = 0;   // texture replacement hash height: max over the batch
+static uint8_t* g_batch_rdram = nullptr;
+
+// Off with PSPRECOMP_GE_BATCH=0 and while a debug tool observes single draws.
+static bool batching_on() {
+    static const bool on = [] {
+        const char* e = std::getenv("PSPRECOMP_GE_BATCH");
+        return !(e && std::strcmp(e, "0") == 0) && !std::getenv("PSPRECOMP_TEX_WATCH") &&
+               !std::getenv("PSPRECOMP_VTX_WATCH");
+    }();
+    return on && g_drawlog_lists.load(std::memory_order_relaxed) == 0 &&
+           g_skip_lo.load(std::memory_order_relaxed) > g_skip_hi.load(std::memory_order_relaxed);
+}
+
+static PackedVertex pack_vertex(const DecodedVertex& v) {
+    return {{v.pos[0], v.pos[1], v.pos[2], v.w},
+            {v.uv[0], v.uv[1]},
+            {v.color[0], v.color[1], v.color[2], v.color[3]},
+            v.fog};
+}
+
+// Scissor (GE_CMD_SCISSOR1/2: inclusive x1,y1 / x2,y2, 10 bits each,
+// top-left origin) applies to every draw, clears included. The FBO uses
+// GL's bottom-left origin, so y is flipped.
+static void apply_scissor(const GeState& state) {
+    const GeScissor sc = ge_compute_scissor(state.scissor1, state.scissor2,
+                                            PSP_FB_HEIGHT, g_render_scale);
+    if (!sc.enabled) {
+        glDisable(GL_SCISSOR_TEST);  // never set: whole buffer
+    } else {
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(sc.x, sc.y, sc.w, sc.h);
+    }
+}
+
 void ge_draw_prim(
     uint8_t* rdram,
     int prim_type,
@@ -784,19 +827,6 @@ void ge_draw_prim(
         return;
     }
 
-    // Scissor (GE_CMD_SCISSOR1/2: inclusive x1,y1 / x2,y2, 10 bits each,
-    // top-left origin) applies to every draw, clears included. The FBO uses
-    // GL's bottom-left origin, so y is flipped.
-    {
-        const GeScissor sc = ge_compute_scissor(state.scissor1, state.scissor2,
-                                                PSP_FB_HEIGHT, g_render_scale);
-        if (!sc.enabled) {
-            glDisable(GL_SCISSOR_TEST);  // never set: whole buffer
-        } else {
-            glEnable(GL_SCISSOR_TEST);
-            glScissor(sc.x, sc.y, sc.w, sc.h);
-        }
-    }
     {
         int t_idx = (prim_type >= 0 && prim_type < 8) ? prim_type : 7;
         if (state.clear_mode) {
@@ -859,8 +889,9 @@ void ge_draw_prim(
         if (is_non_clear_first) non_clear_logged++;
     }
 
-    // Clear mode: use glClear instead of drawing
+    // Clear mode: use glClear instead of drawing. Nothing is pending: CLEARMODE flushes.
     if (state.clear_mode) {
+        apply_scissor(state);
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         // Decode first vertex for clear color
         std::vector<DecodedVertex> clear_verts;
@@ -929,21 +960,6 @@ void ge_draw_prim(
         glClear(clear_bits);
         g_has_drawn_prims = true;  // Clear counts as drawing
         return;
-    }
-
-    // Viewport / depth-range (issue #23). Transform-mode draws emit NDC via
-    // the real MVP path, so they must map through the PSP viewport
-    // scale/offset + depth range to land on screen. Through-mode (2D/sprite)
-    // already bakes the full-screen 240/136 mapping into NDC in
-    // ge_transform_vertices, so it keeps the full-buffer viewport set by
-    // ge_draw_begin_list and an identity depth range.
-    if (!ge_vtype_through(state.vertex_type)) {
-        const GeViewportDepth vp = compute_state_viewport_depth(state);
-        glViewport(vp.x, vp.y, vp.w, vp.h);
-        glDepthRange(vp.near_z, vp.far_z);
-    } else {
-        glViewport(0, 0, fb_w(), fb_h());
-        glDepthRange(0.0, 1.0);
     }
 
     // Decode vertices
@@ -1020,56 +1036,43 @@ void ge_draw_prim(
         prim_type = GE_PRIM_TRIANGLES;
     }
 
-    // Handle RECTANGLES: expand 2 verts to 6 (two tris)
-    std::vector<PackedVertex> packed;
+    // Append to the batch: triangle-class PRIMs as a triangle list (strips and
+    // fans re-indexed, rectangles expanded), the rest in their own GL mode.
+    const bool tri = prim_type >= GE_PRIM_TRIANGLES;
+    const GLenum mode = tri ? GL_TRIANGLES : map_prim_type(prim_type);
+    if (!g_batch.empty() && mode != g_batch_mode) ge_draw_flush();
+    g_batch_mode = mode;
+    g_batch_rdram = rdram;
+    const size_t first = g_batch.size();
     if (prim_type == GE_PRIM_RECTANGLES) {
         // Each rectangle is 2 vertices (top-left, bottom-right). The
         // corners arrive in clip space (transform mode); ge_expand_rectangle
         // divides by w and drops rectangles with a corner behind the eye
         // plane (w <= 0), emitting flat NDC quads with w = 1.
-        int rect_count = count / 2;
-        packed.reserve(rect_count * 6);
-        for (int r = 0; r < rect_count; r++) {
-            int i0 = r * 2;
-            int i1 = r * 2 + 1;
-            if (i1 >= static_cast<int>(decoded.size()))
-                break;
-
+        for (size_t i = 0; i + 1 < decoded.size(); i += 2) {
             DecodedVertex expanded[6];
-            if (!ge_expand_rectangle(decoded[i0], decoded[i1],
-                                     expanded))
-                continue;
-            for (int k = 0; k < 6; k++) {
-                const DecodedVertex& v = expanded[k];
-                packed.push_back({
-                    {v.pos[0], v.pos[1], v.pos[2], v.w},
-                    {v.uv[0], v.uv[1]},
-                    {v.color[0], v.color[1],
-                     v.color[2], v.color[3]},
-                    v.fog
-                });
-            }
+            if (!ge_expand_rectangle(decoded[i], decoded[i + 1], expanded)) continue;
+            for (const DecodedVertex& v : expanded) g_batch.push_back(pack_vertex(v));
         }
+    } else if (tri) {
+        static std::vector<uint32_t> idx;
+        idx.clear();
+        ge_triangle_list_indices(prim_type, decoded.size(), idx);
+        for (uint32_t i : idx) g_batch.push_back(pack_vertex(decoded[i]));
     } else {
-        // Pack decoded vertices
-        packed.resize(decoded.size());
-        for (size_t i = 0; i < decoded.size(); i++) {
-            const auto& v = decoded[i];
-            packed[i] = {
-                {v.pos[0], v.pos[1], v.pos[2], v.w},
-                {v.uv[0], v.uv[1]},
-                {v.color[0], v.color[1],
-                 v.color[2], v.color[3]},
-                v.fog
-            };
-        }
+        for (const DecodedVertex& v : decoded) g_batch.push_back(pack_vertex(v));
     }
+    g_batch_max_v = std::max(g_batch_max_v, draw_max_v);
 
     if (drawlog) {
         // Screen rectangle (PSP pixels, 480x272) covered by all vertices
         // with w > 0: finds the draw that paints a given screen region.
+        // Batching is off while logging, so this PRIM is the whole batch.
+        const PackedVertex* packed = g_batch.data() + first;
+        const size_t n = g_batch.size() - first;
         float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
-        for (const PackedVertex& pv : packed) {
+        for (size_t i = 0; i < n; i++) {
+            const PackedVertex& pv = packed[i];
             if (pv.pos[3] <= 0.0f) continue;
             const float px = (pv.pos[0] / pv.pos[3] + 1.0f) * 240.0f;
             const float py = (1.0f - pv.pos[1] / pv.pos[3]) * 136.0f;
@@ -1079,12 +1082,12 @@ void ge_draw_prim(
         // Draws over the screen centre log every vertex (up to 256), the
         // rest their first two.
         const bool centre = x0 <= 240.0f && x1 >= 240.0f && y0 <= 136.0f && y1 >= 136.0f;
-        const size_t nlog = centre ? std::min<size_t>(packed.size(), 256) : std::min<size_t>(packed.size(), 2);
+        const size_t nlog = centre ? std::min<size_t>(n, 256) : std::min<size_t>(n, 2);
         for (size_t i = 0; i < nlog; i++) {
             const PackedVertex& pv = packed[i];
             std::fprintf(stderr,
                 "[DL]   v%zu/%zu pos=%.3f,%.3f,%.3f,%.3f uv=%.3f,%.3f rgba=%u,%u,%u,%u fog=%.3f\n",
-                i, packed.size(), pv.pos[0], pv.pos[1], pv.pos[2], pv.pos[3],
+                i, n, pv.pos[0], pv.pos[1], pv.pos[2], pv.pos[3],
                 pv.uv[0], pv.uv[1], pv.color[0], pv.color[1], pv.color[2],
                 pv.color[3], pv.fog);
         }
@@ -1092,14 +1095,36 @@ void ge_draw_prim(
             std::fprintf(stderr, "[DL]   bbox x=%.0f..%.0f y=%.0f..%.0f\n", x0, x1, y0, y1);
         }
     }
-    if (packed.empty()) return;
+    // A line strip cannot be continued by the next PRIM's vertices.
+    if (!batching_on() || mode == GL_LINE_STRIP) ge_draw_flush();
+}
+
+void ge_draw_flush() {
+    if (g_batch.empty()) return;
+    const GeState& state = ge_get_state();
+    apply_scissor(state);
+
+    // Viewport / depth-range (issue #23). Transform-mode draws emit NDC via
+    // the real MVP path, so they must map through the PSP viewport
+    // scale/offset + depth range to land on screen. Through-mode (2D/sprite)
+    // already bakes the full-screen 240/136 mapping into NDC in
+    // ge_transform_vertices, so it uses the full buffer and an identity depth
+    // range. A through-mode change flushes first, so state matches the batch.
+    if (!ge_vtype_through(state.vertex_type)) {
+        const GeViewportDepth vp = compute_state_viewport_depth(state);
+        glViewport(vp.x, vp.y, vp.w, vp.h);
+        glDepthRange(vp.near_z, vp.far_z);
+    } else {
+        glViewport(0, 0, fb_w(), fb_h());
+        glDepthRange(0.0, 1.0);
+    }
 
     // Upload to VBO
     glBindVertexArray(g_vao);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
     glBufferData(GL_ARRAY_BUFFER,
-                 packed.size() * sizeof(PackedVertex),
-                 packed.data(),
+                 g_batch.size() * sizeof(PackedVertex),
+                 g_batch.data(),
                  GL_STREAM_DRAW);
 
     // Bind shader and set uniforms
@@ -1109,20 +1134,21 @@ void ge_draw_prim(
     // Bind texture if enabled
     if (state.texture_enable) {
         glActiveTexture(GL_TEXTURE0);
-        ge_texture_bind(rdram, g_frame_counter, draw_max_v);
-        // PSPRECOMP_TEX_WATCH companion: the watched texture's first vertex.
+        ge_texture_bind(g_batch_rdram, g_frame_counter, g_batch_max_v);
+        // PSPRECOMP_TEX_WATCH companion: the watched texture's first vertex
+        // (batching is off while it is set: the batch is one PRIM).
         static const char* watch = std::getenv("PSPRECOMP_TEX_WATCH");
         static int watch_logs = 0;
         if (watch &&
             (state.tex_addr[0] & 0x00FFFFFFu) ==
                 (static_cast<uint32_t>(std::strtoul(watch, nullptr, 16)) & 0x00FFFFFFu) &&
             (++watch_logs % 60) == 1) {
-            const PackedVertex& pv = packed[0];
+            const PackedVertex& pv = g_batch[0];
             std::fprintf(stderr,
                          "[TEX-WATCH] verts=%zu v0 pos=%.1f,%.1f,%.1f uv=%.3f,%.3f rgba=%u,%u,%u,%u\n",
-                         packed.size(), pv.pos[0], pv.pos[1], pv.pos[2], pv.uv[0], pv.uv[1],
+                         g_batch.size(), pv.pos[0], pv.pos[1], pv.pos[2], pv.uv[0], pv.uv[1],
                          pv.color[0], pv.color[1], pv.color[2], pv.color[3]);
-            const uint8_t* rv = rdram + (state.vertex_addr & 0x07FFFFFFu);
+            const uint8_t* rv = g_batch_rdram + (state.vertex_addr & 0x07FFFFFFu);
             std::fprintf(stderr,
                          "[TEX-WATCH] texfunc_raw=0x%X vaddr=0x%08X raw v0: "
                          "%02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X "
@@ -1190,13 +1216,13 @@ void ge_draw_prim(
     }
 
     // Draw
-    GLenum gl_prim = map_prim_type(prim_type);
     if (perf_enabled()) g_perf.draw_calls.fetch_add(1, std::memory_order_relaxed);
-    glDrawArrays(gl_prim, 0,
-                 static_cast<GLsizei>(packed.size()));
+    glDrawArrays(g_batch_mode, 0, static_cast<GLsizei>(g_batch.size()));
     g_has_drawn_prims = true;
 
     glBindVertexArray(0);
+    g_batch.clear();   // capacity kept across frames
+    g_batch_max_v = 0;
 }
 
 // Service the pending screenshot/auto-capture from the given front FBO.

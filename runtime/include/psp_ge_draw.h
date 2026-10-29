@@ -72,8 +72,8 @@ void ge_draw_mark_dirty();
 /// MUST be called from the main (GL) thread — wired into psp_event_loop.
 void ge_draw_present_if_stale(uint8_t* rdram);
 
-/// Full draw pipeline for a GE PRIM command:
-/// decode vertices -> transform -> upload VBO -> set GL state -> draw.
+/// GE PRIM command: decode vertices -> transform -> append to the pending
+/// batch (drawn by ge_draw_flush; at once when batching is off).
 ///
 /// predecoded: vertices already decoded (and expanded) by the caller, e.g. a
 /// tessellated GE_CMD_BEZIER surface; consumed (moved from), count ignored.
@@ -84,6 +84,10 @@ void ge_draw_prim(
     int count,
     std::vector<DecodedVertex>* predecoded = nullptr
 );
+
+/// Draw the pending PRIM batch with the live GE state (one upload + one GL
+/// draw); no-op when empty. Render (GL) thread.
+void ge_draw_flush();
 
 /// RTT detector, called at TRANSFERSTART before the memory copy: logs a block
 /// transfer that reads or writes a GL-rendered target ([RTT] xfer) and marks a

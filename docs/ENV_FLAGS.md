@@ -276,6 +276,19 @@ Read by the runtime binary at start-up or during execution.
   window > 1 can draw a stale texture for up to that many lists after the CPU
   rewrites it without a GE transfer.
 
+### `PSPRECOMP_GE_BATCH`
+- **Read in:** `runtime/src/psp_ge_draw.cpp` (`batching_on`); flush rule in
+  `runtime/include/psp_ge_batch.h`.
+- **Type:** env, `0` = off; anything else (or unset) = on.
+- **Default:** on.
+- **Effect:** consecutive GE PRIMs with the same draw-time state are drawn with one
+  upload + one GL draw (hideout: ~1 400 draws/frame -> ~45). `0` draws every PRIM
+  on its own. Batching is also off while the debug socket's `D` draw log or `X`
+  skip range is active, or `PSPRECOMP_TEX_WATCH` / `PSPRECOMP_VTX_WATCH` is set,
+  so those tools keep describing single draws.
+- **Set it when:** checking whether a rendering difference comes from batching
+  (same binary A/B), or as a player-side rollback.
+
 ### `PSPRECOMP_BUTTON_ICONS`
 - **Read in:** `runtime/src/psp_prompt_patcher.cpp` (`psp_prompts_register_atlas`).
 - **Type:** env, `gray` | `color` | `off`.

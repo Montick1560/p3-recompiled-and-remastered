@@ -8,6 +8,7 @@
 #include "psp_ge_constants.h"
 #include "psp_ge_fog.h"
 #include "psp_ge_draw.h"
+#include "psp_ge_batch.h"
 #include "psp_ge_transfer.h"
 #include "psp_ge_texture.h"
 #include "recomp.h"
@@ -171,6 +172,9 @@ GeListResult ge_process_display_list(
 
     // Begin list: bind FBO, set viewport
     ge_draw_begin_list();
+    // Every return (end, stall, signal, command limit) draws the pending batch: a stalled
+    // list resumes later, possibly after the target or the textures changed.
+    struct FlushOnReturn { ~FlushOnReturn() { ge_draw_flush(); } } flush_on_return;
 
     // Clear log-once flags for this list (allow re-warn per list)
     // Actually, keep across lists to avoid spam -- only clear on init
@@ -190,6 +194,11 @@ GeListResult ge_process_display_list(
         uint32_t word = psp_mem_read<uint32_t>(rdram, pc);
         uint8_t cmd = static_cast<uint8_t>(word >> 24);
         uint32_t data = word & 0x00FFFFFF;
+
+        // Draw batching: draw what is pending before a command that changes draw-time state.
+        static uint32_t last_word[256];
+        if (ge_cmd_flushes(cmd, last_word[cmd], word)) ge_draw_flush();
+        last_word[cmd] = word;
 
         if (g_ge_trace || ge_draw_log_active()) {
             std::fprintf(stderr,
