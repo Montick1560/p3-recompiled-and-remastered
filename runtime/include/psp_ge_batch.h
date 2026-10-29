@@ -54,13 +54,14 @@ inline bool ge_cmd_flushes(uint8_t cmd, uint32_t prev, uint32_t word) {
 }
 
 /// Append to `out` the triangle-list indices (into a source of `count` vertices) of a
-/// GE_PRIM_TRIANGLES / _STRIP / _FAN. Strip odd triangles swap their first two vertices
-/// (PPSSPP IndexGenerator::AddStrip) so culling sees GL's facing. Incomplete tails are dropped.
+/// GE_PRIM_TRIANGLES / _STRIP / _FAN (any other type: as a list). Strip odd triangles swap their
+/// first two vertices (PPSSPP IndexGenerator::AddStrip) so culling sees GL's facing. Incomplete
+/// tails are dropped.
 inline void ge_triangle_list_indices(int prim_type, size_t count, std::vector<uint32_t>& out) {
     if (count < 3) return;
     for (uint32_t t = 0; t + 2 < count; ++t) {
         switch (prim_type) {
-        case GE_PRIM_TRIANGLES:
+        default:   // GE_PRIM_TRIANGLES, and type 7 (PPSSPP KEEP_PREVIOUS) as the renderer always drew it
             if (t % 3 == 0) out.insert(out.end(), {t, t + 1, t + 2});
             break;
         case GE_PRIM_TRIANGLE_STRIP:

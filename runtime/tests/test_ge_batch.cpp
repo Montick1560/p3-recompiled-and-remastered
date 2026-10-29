@@ -49,6 +49,9 @@ static void list_indices() {
     i.clear();
     ge_triangle_list_indices(GE_PRIM_TRIANGLE_STRIP, 2, i);
     CHECK(i.empty(), "a strip shorter than 3 adds nothing");
+    i.clear();
+    ge_triangle_list_indices(7, 3, i);
+    CHECK(i == std::vector<uint32_t>({0, 1, 2}), "type 7 is drawn as a list, as before batching");
     i = {9};
     ge_triangle_list_indices(GE_PRIM_TRIANGLES, 3, i);
     CHECK(i == std::vector<uint32_t>({9, 0, 1, 2}), "indices are appended");
