@@ -12,7 +12,10 @@ room); room flags (HIDDEN, CLOSED, FULL) apply to search and join as on PSN.
 Wire format (docs/superpowers/specs/2026-10-22-p3-infrastructure-mode-design.md):
 frames `u32 length (LE, of kind + body) | u8 kind | body`; kind 1 = UTF-8 JSON
 (requests carry "id", answers echo it, events carry "ev"), kind 2 = datagram
-`u32 vip | u16 dst_port | u16 src_port | payload`. Two listeners speak it: raw
+`u32 vip | u16 dst_port | u16 src_port | payload`, kind 3 = game stream segment (same header), kind 4 =
+direct-path channel packet relayed between paired players (`u32 vip | opaque sealed bytes`). Protocol 3 adds the
+direct-path signaling: login caps, direct_offer, direct_peer / direct_drop events with a per-pair key, and
+direct_stats (docs/superpowers/specs/2026-10-24-p3-direct-p2p-design.md). Two listeners speak it: raw
 TCP (LAN, tests) and WebSocket (one frame per binary message, path /infra) for
 the public server behind a Cloudflare Tunnel.
 
@@ -24,6 +27,7 @@ import base64
 import calendar
 import hashlib
 import heapq
+import ipaddress
 import json
 import os
 import queue
@@ -55,6 +59,12 @@ INFRA_PROTO = 2              # login field "proto" of runtimes that speak this w
 BETA_CONNS_PER_ADDR = 64     # with a beta config: connections per address at the handshake (staff load tests)
 MAX_ROOMS_PER_ADDR = 8       # with a beta config: rooms owned by invitee sessions of one address
 CHECKS_PER_MIN = 30          # POST /beta/check per address
+DEFAULT_STUN = ["stun.cloudflare.com:3478", "stun.l.google.com:19302"]
+MAX_CANDS = 4                # direct_offer candidates
+OFFERS_PER_MIN = 4           # direct_offer per connection
+MAX_CHANNEL = 1500           # kind 4 opaque bytes
+MAX_DIRECT_PAIRS = 8         # direct_stats entries
+DIRECT_COLUMNS = ("rtt_p50", "rtt_p95", "loss_x10", "direct_s", "fallbacks")
 
 # SCE_NP_MATCHING2_ROOM_FLAG_ATTR_* (RPCS3 sceNp2.h)
 FLAG_CLOSED, FLAG_FULL, FLAG_HIDDEN = 0x40000000, 0x20000000, 0x10000000
@@ -148,6 +158,8 @@ CREATE TABLE IF NOT EXISTS sessions(id INTEGER PRIMARY KEY, label TEXT, staff IN
 CREATE TABLE IF NOT EXISTS rooms(id INTEGER PRIMARY KEY, kind TEXT, owner_session INT, created_utc TEXT,
     closed_utc TEXT, max_members INT);
 CREATE TABLE IF NOT EXISTS events(t_utc TEXT, session INT, kind TEXT, room INT, detail TEXT);
+CREATE TABLE IF NOT EXISTS direct_stats(session INT, path TEXT, rtt_p50 INT, rtt_p95 INT, loss_x10 INT,
+    direct_s INT, fallbacks INT);
 """
 # Relay-link numbers a client reports with link_stats (NULL until then). Added to older files in place.
 LINK_COLUMNS = ("pings", "slow_pings", "rtt_p50", "rtt_p95", "rtt_max", "max_rx_gap_ms")
@@ -277,7 +289,7 @@ def load_beta(path):
         raw = json.load(f)
     cfg = {"starts": raw["starts"], "ends": raw["ends"], "t0": parse_utc(raw["starts"]), "t1": parse_utc(raw["ends"]),
            "min_proto": int(raw.get("min_proto", INFRA_PROTO)), "max_per_code": int(raw.get("max_per_code", 2)),
-           "public": bool(raw.get("public", False)), "codes": {}}
+           "public": bool(raw.get("public", False)), "direct": bool(raw.get("direct", True)), "codes": {}}
     for c in raw.get("codes", []):
         sha = str(c["sha256"]).lower()
         if not re.fullmatch(r"[0-9a-f]{64}", sha):
@@ -454,6 +466,9 @@ class Conn:
         self.stream_window = 0.0
         self.stream_bytes = 0
         self.last_due = 0.0         # --impair: due time of the last frame queued to this connection
+        self.caps_direct = False    # protocol 3 login caps: speaks the direct path
+        self.cands = None           # its last direct_offer candidates; never logged or stored
+        self.offer_times = []
 
     def label(self):
         vip = socket.inet_ntoa(struct.pack(">I", self.vip)) if self.vip else "-"
@@ -464,11 +479,14 @@ class Server:
     def __init__(self, host="127.0.0.1", port=27320, ws_port=27321, ws_path="/infra", max_rooms=64,
                  idle=30.0, stats_every=60.0, delay_ms=0, max_per_addr=4, max_conns=512, signal_timeout=15.0,
                  loss=0, logger=log, beta_path=None, clock=time.time, db_path=None, impair=None, status_path=None,
-                 status_every=2.0):
+                 status_every=2.0, no_direct=False, stun=None):
         self.log = logger
         # --status: the public lobby summary (tools/beta_report_server.py serves it at beta.montick.app/salas)
         self.status_path = status_path
         self.status_every = status_every
+        self.no_direct = no_direct
+        self.stun = stun or DEFAULT_STUN
+        self.pairs = {}         # frozenset({Conn, Conn}) -> (pair id, 32-byte key); one per connection pair
         self.status_t = 0.0
         # Lab only (--impair): every frame to a connection is delayed, jittered and sometimes stalled like a TCP
         # link that lost a segment, keeping that connection's order. The public server never runs it.
@@ -597,6 +615,7 @@ class Server:
         conn.closed = True
         for room in list(conn.rooms.values()):
             self.leave_room(conn, room, CAUSE_DISAPPEARED, b"")
+        self.prune_pairs()
         try:
             self.sel.unregister(conn.sock)
         except (KeyError, ValueError):
@@ -793,8 +812,14 @@ class Server:
             if mtime == self.beta_mtime:
                 return
             self.beta_mtime = mtime
+            was_on = self.direct_on()
             self.beta = load_beta(self.beta_path)
             self.log("beta config reloaded: %d codes" % len(self.beta["codes"]))
+            if self.direct_on() and not was_on:
+                self.pair_all()
+            elif was_on and not self.direct_on():
+                for key in list(self.pairs):
+                    self.unpair(key)
         except (OSError, ValueError, KeyError, TypeError) as e:
             self.log("beta config not read (%s: %s): keeping the previous one" % (type(e).__name__, e))
 
@@ -880,6 +905,8 @@ class Server:
             return self.on_datagram(conn, body)
         if kind == 3:
             return self.on_stream(conn, body)
+        if kind == 4 and conn.caps_direct:
+            return self.on_channel(conn, body)
         if kind != 1:
             return self.drop(conn, "unknown frame kind %d" % kind)
         try:
@@ -962,6 +989,129 @@ class Server:
         else:
             self.send_frame(dst, out)
 
+    def on_channel(self, conn, body):
+        """A direct-path packet relayed between two paired players (opaque, sealed by them): forwarded in order like
+        a stream segment and counted in the same byte budget; without a pairing, or over MAX_CHANNEL, dropped."""
+        if conn.session is None or len(body) < 4 or len(body) - 4 > MAX_CHANNEL:
+            conn.dgram_dropped += 1
+            return
+        now = time.monotonic()
+        if now - conn.stream_window >= 1.0:
+            conn.stream_window, conn.stream_bytes = now, 0
+        conn.stream_bytes += len(body)
+        if conn.stream_bytes > STREAM_BYTES_PER_S:
+            return self.drop(conn, "stream flood")
+        dst = self.by_vip.get(struct.unpack_from("<I", body)[0])
+        if dst is None or frozenset((conn, dst)) not in self.pairs:
+            conn.dgram_dropped += 1
+            return
+        out = frame(4, struct.pack("<I", conn.vip) + body[4:])
+        if self.delay:
+            self.later(dst, out)
+        else:
+            self.send_frame(dst, out)
+
+    # ---- direct path signaling (no address or key is ever logged or stored) ----
+    def direct_on(self):
+        return not self.no_direct and (self.beta is None or self.beta["direct"])
+
+    @staticmethod
+    def parse_cands(cands):
+        if not isinstance(cands, list) or not 1 <= len(cands) <= MAX_CANDS:
+            raise Err(BAD_REQUEST)
+        for c in cands:
+            if (not isinstance(c, dict) or set(c) != {"t", "a"} or c["t"] not in ("srflx", "host")
+                    or not isinstance(c["a"], str)):
+                raise Err(BAD_REQUEST)
+            ip, _, port = c["a"].partition(":")
+            try:
+                addr = ipaddress.IPv4Address(ip)
+            except ValueError:
+                raise Err(BAD_REQUEST)
+            if (addr.is_multicast or addr.is_unspecified or addr.is_reserved or str(addr) != ip
+                    or not port.isdigit() or not 1 <= int(port) <= 65535):
+                raise Err(BAD_REQUEST)
+        return [{"t": c["t"], "a": c["a"]} for c in cands]
+
+    @staticmethod
+    def cands_for(to, about):
+        """about's candidates as sent to `to`: host ones only when both sit behind one NAT (same srflx IP)."""
+        def srflx_ips(conn):
+            return {c["a"].partition(":")[0] for c in conn.cands if c["t"] == "srflx"}
+        same_nat = bool(srflx_ips(to) & srflx_ips(about))
+        return [c for c in about.cands if c["t"] == "srflx" or same_nat]
+
+    def maybe_pair(self, a, b):
+        key = frozenset((a, b))
+        if (a is b or key in self.pairs or not self.direct_on() or a.closed or b.closed or not a.caps_direct
+                or not b.caps_direct or not a.cands or not b.cands or not self.share_room(a, b)):
+            return
+        live = {p for p, _ in self.pairs.values()}
+        pair_id = 0
+        while pair_id == 0 or pair_id in live:
+            pair_id = secrets.randbits(32)
+        secret = secrets.token_bytes(32)
+        self.pairs[key] = (pair_id, secret)
+        for to, about in ((a, b), (b, a)):
+            self.send_json(to, {"ev": "direct_peer", "vip": about.vip, "pair": pair_id, "key": secret.hex(),
+                                "cands": self.cands_for(to, about)})
+        self.event("direct_pair", a)
+        self.log("direct: pair %s <-> %s" % (a.online_id, b.online_id))
+
+    def unpair(self, key):
+        pair_id, _ = self.pairs.pop(key)
+        a, b = tuple(key)
+        for to, about in ((a, b), (b, a)):
+            if not to.closed:
+                self.send_json(to, {"ev": "direct_drop", "vip": about.vip, "pair": pair_id})
+        self.event("direct_drop", a)
+        self.log("direct: drop %s <-> %s" % (a.online_id, b.online_id))
+
+    def prune_pairs(self):
+        """Pairings whose two connections no longer share a room (or one is gone) end."""
+        for key in [k for k in self.pairs if any(c.closed for c in k) or not self.share_room(*k)]:
+            self.unpair(key)
+
+    def pair_all(self):
+        for a in list(self.conns.values()):
+            for room in list(a.rooms.values()):
+                for m in room.members:
+                    self.maybe_pair(a, m.conn)
+
+    def op_direct_offer(self, conn, msg):
+        if not conn.caps_direct:
+            raise Err(BAD_REQUEST)
+        cands = self.parse_cands(msg.get("cands"))
+        now = time.monotonic()
+        conn.offer_times = [t for t in conn.offer_times if now - t < 60]
+        if len(conn.offer_times) >= OFFERS_PER_MIN:
+            raise Err(SERVICE_UNAVAILABLE)
+        conn.offer_times.append(now)
+        conn.cands = cands
+        for key in [k for k in self.pairs if conn in k]:  # a new offer replaces the pairing: drop, then a fresh key
+            self.unpair(key)
+        for room in list(conn.rooms.values()):
+            for m in room.members:
+                self.maybe_pair(conn, m.conn)
+        return {}
+
+    def op_direct_stats(self, conn, msg):
+        # Per-pair direct-path numbers (client direct::Link::stats_json): the path kind and numbers only.
+        pairs = msg.get("pairs")
+        if set(msg) - {"id", "op"} != {"pairs"} or not isinstance(pairs, list) or len(pairs) > MAX_DIRECT_PAIRS:
+            raise Err(BAD_REQUEST)
+        for p in pairs:
+            if (not isinstance(p, dict) or set(p) != {"path", *DIRECT_COLUMNS}
+                    or p["path"] not in ("direct", "relay")
+                    or not all(type(p[k]) is int and 0 <= p[k] <= LINK_MAX for k in DIRECT_COLUMNS)):
+                raise Err(BAD_REQUEST)
+        for p in pairs:
+            self.metrics.put("INSERT INTO direct_stats(session, path, %s) VALUES (?, ?, ?, ?, ?, ?, ?)"
+                             % ", ".join(DIRECT_COLUMNS), (conn.sid, p["path"], *(p[k] for k in DIRECT_COLUMNS)))
+            self.log("%s direct_stats: %s p50 %d p95 %d loss %d/1000 %d s fallbacks %d"
+                     % (conn.online_id, p["path"], *(p[k] for k in DIRECT_COLUMNS)))
+        return {}
+
     @staticmethod
     def share_room(a, b):
         return not a.rooms.keys().isdisjoint(b.rooms.keys())
@@ -987,13 +1137,18 @@ class Server:
             raise Err(SERVICE_UNAVAILABLE)
         conn.online_id, conn.session, conn.vip = oid, secrets.token_hex(8), VIP_BASE + n
         conn.console = console
+        caps = msg.get("caps")
+        conn.caps_direct = isinstance(caps, dict) and caps.get("direct") == 1
         self.by_vip[conn.vip] = conn
         conn.sid = self.metrics.session_id()
         self.metrics.put("INSERT INTO sessions(id, label, staff, online_id, transport, proto, start_utc) "
                          "VALUES (?, ?, ?, ?, ?, ?, ?)",
                          (conn.sid, conn.code_label, int(conn.staff), oid, conn.kind, conn.proto, self.now_utc()))
         self.log("login %s" % conn.label())
-        return {"session": conn.session, "vip": conn.vip}
+        answer = {"session": conn.session, "vip": conn.vip}
+        if isinstance(caps, dict):
+            answer["direct"] = {"on": self.direct_on(), "stun": self.stun}
+        return answer
 
     def op_ping(self, conn, msg):
         answer = {"id": msg.get("id"), "ok": True, "t": msg.get("t")}
@@ -1126,6 +1281,7 @@ class Server:
                                     "opt": opt.hex()})
             room.waiting[(member, m)] = deadline
             room.waiting[(m, member)] = deadline
+            self.maybe_pair(conn, m.conn)
         self.resolve(room)
         return None
 
@@ -1158,7 +1314,7 @@ class Server:
                                         "opt": opt.hex()})
             self.log("%s left room %d: room destroyed (%d members told)"
                      % (conn.label(), room.id, len(room.members)))
-            return
+            return self.prune_pairs()
         for m in room.members:
             self.send_json(m.conn, {"ev": "member_left", "room_id": room.id, "member": member.json(),
                                     "cause": cause, "opt": opt.hex()})
@@ -1167,6 +1323,7 @@ class Server:
             if m in told and m is room.owner:
                 self.signal(m.conn, room, member, SIG_DEAD)
         self.log("%s left room %d (cause %d, %d left)" % (conn.label(), room.id, cause, len(room.members)))
+        self.prune_pairs()
 
     def op_leave(self, conn, msg):
         room = conn.rooms.get(int(msg["room_id"]))
@@ -1303,6 +1460,7 @@ class TestClient:
         self.ws = ws
         self.rx = b""
         self.events, self.dgrams, self.streams, self.answers = [], [], [], {}
+        self.channels = []  # kind 4: (src vip, opaque bytes)
         self.next_id = 0
         if ws:
             key = base64.b64encode(secrets.token_bytes(16))
@@ -1361,7 +1519,9 @@ class TestClient:
             return False
         finally:
             self.sock.settimeout(3)
-        if kind in (2, 3):
+        if kind == 4:
+            self.channels.append((struct.unpack_from("<I", body)[0], body[4:]))
+        elif kind in (2, 3):
             vip, dst, src = struct.unpack_from("<IHH", body)
             (self.dgrams if kind == 2 else self.streams).append((vip, dst, src, body[8:]))
         else:
@@ -1799,6 +1959,7 @@ def selftest():
 
     beta_selftest(run, quiet, lines)
     link_stats_selftest(run, quiet, lines)
+    direct_selftest(run, quiet, lines)
     impair_selftest(run, quiet)
     lobby_status_selftest(run, quiet)
     print("selftest OK")
@@ -1949,6 +2110,207 @@ def impair_selftest(run, quiet):
     late.sort()
     assert late[10] < 0.008, "median lateness %.1f ms" % (late[10] * 1000)
     stop(srv, th, a, b)
+
+
+def direct_selftest(run, quiet, lines):
+    """Direct-path signaling (protocol 3): caps, offers, one pairing per connection pair with a fresh key, the
+    host-candidate rule, kind 4 between paired connections only, direct_stats, and no address or key in the logs
+    or the database."""
+    import os
+    import sqlite3
+    import tempfile
+
+    tmp = tempfile.mkdtemp(prefix="p3direct_")
+    db = os.path.join(tmp, "beta.db")
+    first = len(lines)
+    offered = ["203.0.113.5", "198.51.100.7", "192.168.1.20", "192.168.1.21", "203.0.113.9", "10.0.0.5"]
+    srv = Server("127.0.0.1", 0, None, max_per_addr=16, logger=quiet, db_path=db)
+    th = run(srv)
+    caps = {"direct": 1}
+
+    def srflx(a):
+        return {"t": "srflx", "a": a}
+
+    def direct_events(*cls):
+        for cl in cls:
+            cl.pump(0.1)
+        return [e for cl in cls for e in cl.events if e["ev"].startswith("direct")]
+
+    # direct_caps_answer
+    a, b, c, old = (TestClient(srv.port) for _ in range(4))
+    la = a.ok("login", online_id="DIR_A", proto=3, caps=caps)
+    assert la["direct"] == {"on": True, "stun": DEFAULT_STUN}, la
+    b.ok("login", online_id="DIR_B", proto=3, caps=caps)
+    c.ok("login", online_id="DIR_C", proto=3, caps=caps)
+    lo = old.ok("login", online_id="DIR_OLD", proto=2)
+    assert "direct" not in lo, lo
+    # offer_validation
+    for bad in ([srflx("203.0.113.5:%d" % (4000 + i)) for i in range(5)], [srflx("999.1.1.1:5")],
+                [{"t": "host", "a": "10.0.0.1:0"}], [srflx("224.0.0.1:5")], [srflx("0.0.0.0:5")],
+                [srflx("255.255.255.255:5")], [{"t": "relay", "a": "203.0.113.5:5"}], [srflx(5)],
+                ["203.0.113.5:5"], [], "203.0.113.5:5", [srflx("203.0.113.5:65536")], [srflx("203.0.113.5")],
+                [dict(srflx("203.0.113.5:5"), x=1)], [srflx("203.0.113.05:5")]):
+        ans = a.req("direct_offer", cands=bad)
+        assert not ans["ok"] and ans["error"] == BAD_REQUEST, (bad, ans)
+    ans = old.req("direct_offer", cands=[srflx("203.0.113.5:5")])
+    assert not ans["ok"] and ans["error"] == BAD_REQUEST, "no caps, no offer"
+    # pair_on_join: A creates, both offer, B joins
+    hide = a.ok("create", max_slot=4, ints=GAME_INTS)["room"]
+    a.ok("direct_offer", cands=[srflx("203.0.113.5:4000"), {"t": "host", "a": "192.168.1.20:4001"}])
+    b.ok("direct_offer", cands=[srflx("198.51.100.7:5000"), {"t": "host", "a": "192.168.1.21:5001"}])
+    assert not direct_events(a, b), "no pairing before a shared room"
+    b.ok("join", room_id=hide["id"])
+    pa = a.event(lambda e: e["ev"] == "direct_peer", what="A: direct_peer")
+    pb = b.event(lambda e: e["ev"] == "direct_peer", what="B: direct_peer")
+    assert pa["pair"] == pb["pair"] and pa["pair"] and pa["key"] == pb["key"], (pa, pb)
+    assert re.fullmatch(r"[0-9a-f]{64}", pa["key"]), pa
+    assert (pa["vip"], pb["vip"]) == (0x0A500002, 0x0A500001), (pa, pb)
+    assert pa["cands"] == [srflx("198.51.100.7:5000")], pa
+    assert pb["cands"] == [srflx("203.0.113.5:4000")], pb
+    # no_caps_no_pair: a protocol-2 client joins the same room; C (caps, no offer yet) too
+    old.ok("join", room_id=hide["id"])
+    c.ok("join", room_id=hide["id"])
+    time.sleep(0.3)
+    assert not direct_events(a, b, c, old), "nobody paired with OLD or with C before its offer"
+    assert len(srv.pairs) == 1, srv.pairs
+    # host_rule_same_nat: C behind A's NAT (same srflx IP) offers -> pairs with A (hosts included) and B (not)
+    c.ok("direct_offer", cands=[srflx("203.0.113.5:4100"), {"t": "host", "a": "10.0.0.5:4101"}])
+    ca = c.event(lambda e: e["ev"] == "direct_peer" and e["vip"] == 0x0A500001, what="C: peer A")
+    cb = c.event(lambda e: e["ev"] == "direct_peer" and e["vip"] == 0x0A500002, what="C: peer B")
+    ac = a.event(lambda e: e["ev"] == "direct_peer" and e["vip"] == 0x0A500003, what="A: peer C")
+    b.event(lambda e: e["ev"] == "direct_peer" and e["vip"] == 0x0A500003, what="B: peer C")
+    assert ca["cands"] == [srflx("203.0.113.5:4000"), {"t": "host", "a": "192.168.1.20:4001"}], ca
+    assert ac["cands"] == [srflx("203.0.113.5:4100"), {"t": "host", "a": "10.0.0.5:4101"}], ac
+    assert cb["cands"] == [srflx("198.51.100.7:5000")], cb
+    assert len({ca["key"], cb["key"], pa["key"]}) == 3 and len({ca["pair"], cb["pair"], pa["pair"]}) == 3
+    # kind4_only_when_paired: A->B delivered byte for byte with A's vip; A->OLD (no pairing) and an oversize frame
+    # are dropped and counted
+    a.send_raw_frame(frame(4, struct.pack("<I", 0x0A500002) + b"sealed bytes"))
+    a.send_raw_frame(frame(4, struct.pack("<I", 0x0A500004) + b"to old"))
+    a.send_raw_frame(frame(4, struct.pack("<I", 0x0A500002) + b"x" * 1501))
+    deadline = time.monotonic() + 3
+    while not b.channels:
+        assert time.monotonic() < deadline, "B: no kind 4"
+        b.pump(0.1)
+    time.sleep(0.3)
+    b.pump(0.1)
+    old.pump(0.2)
+    assert b.channels == [(0x0A500001, b"sealed bytes")], b.channels
+    assert not old.channels
+    conn_a = next(x for x in srv.conns.values() if x.online_id == "DIR_A")
+    assert conn_a.dgram_dropped == 2, conn_a.dgram_dropped
+    # pair_once_across_rooms: A and B also share a VS room; leaving it sends no drop
+    vs = a.ok("create", max_slot=2, ints=GAME_INTS)["room"]
+    b.ok("join", room_id=vs["id"])
+    b.ok("leave", room_id=vs["id"])
+    time.sleep(0.3)
+    assert not direct_events(a, b), "one pairing across rooms"
+    assert len(srv.pairs) == 3, srv.pairs
+    # reoffer_rekeys: B offers again -> drop, then a new peer with a new key and pair id
+    b.ok("direct_offer", cands=[srflx("198.51.100.7:5002")])
+    seen = []
+    deadline = time.monotonic() + 3
+    while len(seen) < 2:
+        assert time.monotonic() < deadline, a.events
+        a.pump(0.2)
+        seen = [e for e in a.events if e["ev"] in ("direct_drop", "direct_peer")]
+    assert [e["ev"] for e in seen] == ["direct_drop", "direct_peer"], seen
+    assert seen[0]["pair"] == pa["pair"] and seen[1]["pair"] != pa["pair"] and seen[1]["key"] != pa["key"], seen
+    assert seen[1]["cands"] == [srflx("198.51.100.7:5002")], seen
+    a.events.clear()
+    # leaving the last shared room sends direct_drop to the one left, and kind 4 stops
+    b.ok("leave", room_id=hide["id"])
+    d = a.event(lambda e: e["ev"] == "direct_drop", what="A: drop B")
+    assert d["vip"] == 0x0A500002 and d["pair"] == seen[1]["pair"], d
+    c.event(lambda e: e["ev"] == "direct_drop" and e["vip"] == 0x0A500002, what="C: drop B")
+    a.send_raw_frame(frame(4, struct.pack("<I", 0x0A500002) + b"after drop"))
+    time.sleep(0.3)
+    b.pump(0.2)
+    assert b.channels == [(0x0A500001, b"sealed bytes")], "kind 4 after the drop"
+    # offer rate: A offered once; three more pass, the fifth within a minute is refused
+    for _ in range(3):
+        a.ok("direct_offer", cands=[srflx("203.0.113.5:4000")])
+    ans = a.req("direct_offer", cands=[srflx("203.0.113.5:4000")])
+    assert not ans["ok"] and ans["error"] == SERVICE_UNAVAILABLE, ans
+    # one disconnects: C closes -> A gets direct_drop for C
+    a.events.clear()
+    c.close()
+    a.event(lambda e: e["ev"] == "direct_drop" and e["vip"] == 0x0A500003, what="A: drop C on disconnect")
+    deadline = time.monotonic() + 3
+    while srv.pairs:
+        assert time.monotonic() < deadline, srv.pairs
+        time.sleep(0.05)
+    # direct_stats_stored, invalid forms refused
+    good = {"path": "direct", "rtt_p50": 40, "rtt_p95": 90, "loss_x10": 12, "direct_s": 300, "fallbacks": 1}
+    a.ok("direct_stats", pairs=[good, dict(good, path="relay", direct_s=0)])
+    for bad in ([dict(good, path="udp")], [dict(good, rtt_p50=-1)], [dict(good, rtt_p95=600001)],
+                [dict(good, loss_x10=1.5)], [dict(good, ip="203.0.113.5")], [good] * 9, good,
+                [dict(good, fallbacks=True)], [{k: v for k, v in good.items() if k != "direct_s"}]):
+        ans = a.req("direct_stats", pairs=bad)
+        assert not ans["ok"] and ans["error"] == BAD_REQUEST, (bad, ans)
+    srv.metrics.flush(3)
+    with sqlite3.connect(db) as cx:
+        rows = cx.execute("SELECT path, rtt_p50, rtt_p95, loss_x10, direct_s, fallbacks FROM direct_stats").fetchall()
+        assert rows == [("direct", 40, 90, 12, 300, 1), ("relay", 40, 90, 12, 0, 1)], rows
+        kinds = [r[0] for r in cx.execute("SELECT kind FROM events WHERE kind LIKE 'direct%'")]
+        assert "direct_pair" in kinds and "direct_drop" in kinds, kinds
+        assert not cx.execute("SELECT COUNT(*) FROM events WHERE kind LIKE 'direct%' AND detail IS NOT NULL"
+                              ).fetchone()[0]
+        dump = "\n".join(str(r) for t in ("sessions", "rooms", "events", "direct_stats")
+                         for r in cx.execute("SELECT * FROM " + t))
+    # privacy: no offered address and no key in any log line or table
+    keys = [pa["key"], ca["key"], cb["key"], seen[1]["key"]]
+    for line in lines[first:] + [dump]:
+        assert not any(ip in line for ip in offered) and not any(k in line for k in keys), line
+    assert any("direct" in line for line in lines[first:]), "direct-path log lines exist"
+    for cl in (a, b, old):
+        cl.close()
+    srv.running = False
+    th.join(timeout=5)
+    # --no-direct: caps answered with on false and the --stun list; offers accepted, nobody paired
+    srv = Server("127.0.0.1", 0, None, logger=quiet, no_direct=True, stun=["stun.example.org:3478"])
+    th = run(srv)
+    a, b = TestClient(srv.port), TestClient(srv.port)
+    ans = a.ok("login", online_id="ND_A", proto=3, caps=caps)
+    assert ans["direct"] == {"on": False, "stun": ["stun.example.org:3478"]}, ans
+    b.ok("login", online_id="ND_B", proto=3, caps=caps)
+    hide = a.ok("create", max_slot=4, ints=GAME_INTS)["room"]
+    b.ok("join", room_id=hide["id"])
+    a.ok("direct_offer", cands=[srflx("203.0.113.5:4000")])
+    b.ok("direct_offer", cands=[srflx("198.51.100.7:5000")])
+    time.sleep(0.3)
+    assert not srv.pairs and not direct_events(a, b)
+    for cl in (a, b):
+        cl.close()
+    srv.running = False
+    th.join(timeout=5)
+    # beta config "direct": false -> off; the reload that turns it on pairs the waiting offers, and off drops them
+    cfg = os.path.join(tmp, "beta.json")
+
+    def write_cfg(on):
+        with open(cfg, "w", encoding="utf-8") as f:
+            json.dump({"starts": "2026-01-01T00:00:00Z", "ends": "2099-01-01T00:00:00Z", "public": True,
+                       "direct": on}, f)
+        os.utime(cfg, ns=(time.time_ns(), time.time_ns() + (1 if on else 0)))
+    write_cfg(False)
+    srv = Server("127.0.0.1", 0, None, logger=quiet, beta_path=cfg)
+    th = run(srv)
+    a, b = TestClient(srv.port), TestClient(srv.port)
+    assert a.ok("login", online_id="BD_A", proto=3, caps=caps)["direct"]["on"] is False
+    b.ok("login", online_id="BD_B", proto=3, caps=caps)
+    hide = a.ok("create", max_slot=4, ints=GAME_INTS)["room"]
+    b.ok("join", room_id=hide["id"])
+    a.ok("direct_offer", cands=[srflx("203.0.113.5:4000")])
+    b.ok("direct_offer", cands=[srflx("198.51.100.7:5000")])
+    write_cfg(True)
+    a.event(lambda e: e["ev"] == "direct_peer", timeout=4, what="A: paired after the reload")
+    b.event(lambda e: e["ev"] == "direct_peer", what="B: paired after the reload")
+    write_cfg(False)
+    a.event(lambda e: e["ev"] == "direct_drop", timeout=4, what="A: dropped when direct turns off")
+    for cl in (a, b):
+        cl.close()
+    srv.running = False
+    th.join(timeout=5)
 
 
 def link_stats_selftest(run, quiet, lines):
@@ -2316,6 +2678,10 @@ def main():
     ap.add_argument("--db", help="SQLite file for beta metrics (sessions, rooms, events); none = no metrics")
     ap.add_argument("--log", help="also append every log line to this file (the console keeps them too)")
     ap.add_argument("--status", help="write the public lobby summary (players, rooms) to this JSON file every 2 s")
+    ap.add_argument("--no-direct", action="store_true",
+                    help="no direct-path pairing: every client stays on the relay (login answers direct.on false)")
+    ap.add_argument("--stun", type=lambda v: [x for x in v.split(",") if x], default=None, metavar="HOST:PORT,...",
+                    help="STUN servers sent to clients for the direct path (default %s)" % ",".join(DEFAULT_STUN))
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
@@ -2325,7 +2691,8 @@ def main():
     alog = AsyncLog(sink=tee_sink(args.log) if args.log else None)
     srv = Server(args.host, args.port, args.ws_port, args.ws_path, args.max_rooms, args.idle, args.stats_every,
                  args.delay_ms, args.max_per_addr, signal_timeout=args.signal_timeout, loss=args.loss, logger=alog,
-                 beta_path=args.beta, db_path=args.db, impair=args.impair, status_path=args.status)
+                 beta_path=args.beta, db_path=args.db, impair=args.impair, status_path=args.status,
+                 no_direct=args.no_direct, stun=args.stun)
     if disable_quick_edit():
         alog("console QuickEdit turned off: a click in this window no longer pauses the server")
     alog("infrastructure server: tcp %s:%d, ws %s:%d%s" % (args.host, srv.port, args.host, srv.ws_port, args.ws_path))
