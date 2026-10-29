@@ -380,7 +380,13 @@ void psp_dispatch_request_backtrace(int tid) {
     g_bt_request.store(tid, std::memory_order_relaxed);
 }
 
-void psp_trace_checkpoint(uint32_t addr) {
+// True until the first-call env init, then only while an opt-in diagnostic
+// (PC_TRACE, FUNC_WATCH, FUNC_CENSUS) is on. Keeps those paths, and the
+// registers they need, out of the per-function-entry hot path.
+static bool g_trace_slow = true;
+
+// Runs before this entry is recorded: FUNC_WATCH prints the caller and path.
+[[gnu::cold, gnu::noinline]] static void trace_slow_path(uint32_t addr) {
     if (!g_pc_trace_checked) {
         const char* env = std::getenv("PSPRECOMP_PC_TRACE");
         g_pc_trace = (env && env[0] == '1');
@@ -391,6 +397,7 @@ void psp_trace_checkpoint(uint32_t addr) {
         if (g_pc_trace) {
             psp_on_exit(psp_dump_pc_trace);
         }
+        g_trace_slow = g_pc_trace || g_func_watch_count > 0 || g_census;
     }
     for (int i = 0; i < g_func_watch_count; i++) {
         if (g_func_watch[i] == addr &&
@@ -408,26 +415,6 @@ void psp_trace_checkpoint(uint32_t addr) {
         const uint32_t slot = (addr - kCensusBase) >> 2;
         if (slot < kCensusSlots) g_census[slot].fetch_add(1, std::memory_order_relaxed);
     }
-    g_prev_func_addr = g_last_func_addr;
-    g_last_func_addr = addr;
-    // Per-thread last entry for the debug socket I command (the shared ring
-    // below interleaves every thread).
-    static thread_local PspThread* const self = psp_get_current_thread();
-    if (self) self->last_func.store(addr, std::memory_order_relaxed);
-    // Debug socket K <tid>: the thread dumps its guest call stack here.
-    if (self && g_bt_request.load(std::memory_order_relaxed) == self->id) {
-        g_bt_request.store(-1, std::memory_order_relaxed);
-        char tag[32];
-        std::snprintf(tag, sizeof(tag), "thread %d at %08X", self->id, addr);
-        psp_print_host_backtrace(tag);
-    }
-    g_func_ring[(g_func_ring_pos++) & 31u] = addr;
-    // [#35] shared (cross-thread) ring for the debug socket I command.
-    // One relaxed fetch_add + store per function entry; measured noise is
-    // acceptable for a diagnostics-first runtime.
-    g_shared_func_ring[g_shared_func_ring_pos.fetch_add(
-        1, std::memory_order_relaxed) & 63u]
-        .store(addr, std::memory_order_relaxed);
 
     // (The PSPRECOMP_SPLEAK shadow-stack sp-leak detector that hung here was
     // a Patapon-tuned investigation probe — deleted in #47 Phase 5;
@@ -442,6 +429,34 @@ void psp_trace_checkpoint(uint32_t addr) {
         std::fprintf(stderr,
             "[PC-TRACE] func=0x%08X count=%d\n", addr, c);
     }
+}
+
+// Debug socket K <tid>: the thread dumps its guest call stack here.
+[[gnu::cold, gnu::noinline]] static void trace_backtrace(PspThread* self, uint32_t addr) {
+    g_bt_request.store(-1, std::memory_order_relaxed);
+    char tag[32];
+    std::snprintf(tag, sizeof(tag), "thread %d at %08X", self->id, addr);
+    psp_print_host_backtrace(tag);
+}
+
+void psp_trace_checkpoint(uint32_t addr) {
+    if (__builtin_expect(g_trace_slow, false)) trace_slow_path(addr);
+    g_prev_func_addr = g_last_func_addr;
+    g_last_func_addr = addr;
+    // Per-thread last entry for the debug socket I command (the shared ring
+    // below interleaves every thread).
+    static thread_local PspThread* const self = psp_get_current_thread();
+    if (self) {
+        self->last_func.store(addr, std::memory_order_relaxed);
+        if (g_bt_request.load(std::memory_order_relaxed) == self->id) trace_backtrace(self, addr);
+    }
+    g_func_ring[(g_func_ring_pos++) & 31u] = addr;
+    // [#35] shared (cross-thread) ring for the debug socket I command. A plain
+    // load + store, not fetch_add: the locked add cost every function entry,
+    // and two threads racing for one slot only lose an approximate entry.
+    const uint32_t pos = g_shared_func_ring_pos.load(std::memory_order_relaxed);
+    g_shared_func_ring_pos.store(pos + 1, std::memory_order_relaxed);
+    g_shared_func_ring[pos & 63u].store(addr, std::memory_order_relaxed);
 }
 
 /// Dump the most-called functions sorted by count.
