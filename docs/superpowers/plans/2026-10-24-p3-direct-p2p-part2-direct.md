@@ -22,13 +22,30 @@ encrypted, authenticated UDP path found with STUN and NAT hole punching. The rel
 **Tech Stack:** C++20 runtime + Monocypher 4.0.2 (vendored), Winsock UDP; Python 3 server; Tauri launcher
 (Rust + React); lab tools from Part 1.
 
-**Spec:** `docs/superpowers/specs/2026-10-24-p3-direct-p2p-design.md`. **Prerequisite:**
-`docs/superpowers/plans/2026-10-24-p3-direct-p2p-part1-measure.md` Tasks 1–4 are done. Its baseline is
-`build/infra/p2p_baseline/REPORT.md`, and its `--impair` server option is used here.
+**Spec:** `docs/superpowers/specs/2026-10-24-p3-direct-p2p-design.md` — read its "Revision (29 Oct 2026)" section
+first. **Prerequisite (done 24 Oct, pushed 25 Oct):** `docs/superpowers/plans/2026-10-24-p3-direct-p2p-part1-measure.md`.
+Its baseline is `build/infra/p2p_baseline/REPORT.md`, and its `--impair` server option is used here.
+
+**Revised 29 Oct 2026.** New Tasks 0a–0c (real beta numbers, boss-mission traffic, desync meter) come first.
+Delivery is split into two auto-updater releases:
+- **Release A (u7)** = Tasks 0a–0c, 1–6, 9, 10 (datagram parts), 11, 12.
+- **Release B (u8)** = Tasks 7–8, then Task 10's stream parts and Task 11 again.
+- If Task 0b finds stream traffic inside the boss mission, Tasks 7–8 move into Release A (ledger the ruling).
+
+## Decisions for the user (before Task 0a / before Task 11)
+
+1. **Task 0a:** OK to open the SMB session to `tester` and copy `beta.db` (+ `-wal`/`-shm`) and `infra_server.log`
+   (copies only, memory `beta-server-logs-access`). Without it, Task 0a is skipped and the field comparison in
+   Task 11 has no "before".
+2. **Task 11:** u7 as a **mandatory** update (recommended: a pair goes direct only when both players have u7, and the
+   updater makes it one click) or optional.
+3. **Task 10 Step 6:** a time when `tester` can run a client on the LAN with this PC.
 
 ## Global Constraints
 
-- Branch `direct-p2p` (from Part 1). Nothing is pushed; ask before any push.
+- psprecomp branch `direct-p2p-2` from `ge-batching` (198e094; its pushed twin is p3/main 34cb608). Launcher branch
+  `direct-option` from `updater` (09184d6 = origin/main). Nothing is pushed; ask before any push. A push follows the
+  `push-p3-NN` recipe (next: `push-p3-34`): never the icon commit f639180 nor the debug_menu commit 067ac6e.
 - Commits:
   - psprecomp and launcher author `Patapon Community <rexgamer1560@gmail.com>`;
   - no Claude co-author trailer;
@@ -56,10 +73,14 @@ encrypted, authenticated UDP path found with STUN and NAT hole punching. The rel
   | Signaling | offer rate 4/min; kind 4 frame ≤ 1500 B |
 
 - Gates for runtime tasks:
-  - `ninja && ctest` in `build/rtw`;
-  - rt_regress 30 fps PASS (recipe in Part 1's Global Constraints);
+  - `ninja && ctest` in `build/rtw` (115 tests on 29 Oct);
+  - rt_regress 30 fps PASS against `build/tour/batch_base` (not `relevo_base`, stale), run at the same hour as the
+    reference (the hideout sky follows the real clock);
   - for tasks that touch infra: `two.py` co-op smoke (`host_join.sh`).
+- Run `python -I build/infra/diskquiet.py 60 900` before every tour or timed run: the C: SSD stalls 5–50 s and eats
+  scripted key presses (`pc-disk-stalls`). Test instances use debug ports 9997/9998 (and two.py's C/D); never 9999.
 - Gates for server tasks: `--selftest` → `selftest OK`, and `sh build/infra/regress_vs.sh`.
+- Telemetry and the new `direct_stats` table stay in SQLite `beta.db` (spec "Revision", point 3).
 
 ## Review Focus
 
@@ -75,7 +96,74 @@ encrypted, authenticated UDP path found with STUN and NAT hole punching. The rel
    path does not flood and the channel does not resend a burst beyond its window. Task 5 test
    `stall_then_resume` and Task 7 test `long_stall_bounded_burst`.
 
+6. **Mixed versions in one room** (a u6 player with u7 players, the first nights after the release): the u6 pair
+   stays relayed with no error on either side. Task 4 selftest `no_caps_no_pair` and Task 10 Step 3.
+
 ---
+
+### Task 0a: Real beta link numbers (`beta.db`)
+
+**Files:**
+- Create (local, not in a repo): `build/infra/campo/beta_link_report.py`, `build/infra/campo/REPORT.md`.
+- Input: copies in `build/beta/reportes_2026-10-29/copia/` (never the originals on `tester`).
+
+**Interfaces:**
+- Produces: `python -I build/infra/campo/beta_link_report.py <beta.db> [--log <infra_server.log>]` prints Markdown
+  tables; `--selftest` runs assert checks on an in-memory DB and prints `selftest OK`.
+- Reads only `sessions` (`pings, slow_pings, rtt_p50, rtt_p95, rtt_max, max_rx_gap_ms`, label, staff, transport,
+  times) and `rooms`/`events` (who shared a room). Never prints an IP, an online_id or a nickname: sessions are
+  numbered in the report.
+
+- [ ] **Step 1:** With the user's OK (Decision 1), open the SMB session and copy `beta.db`, `-wal`, `-shm` and
+  `infra_server.log` to the folder above.
+- [ ] **Step 2: Write `--selftest` first:** an in-memory DB with 6 sessions (2 without link_stats) and 2 rooms →
+  asserts on: sessions counted, the share with `rtt_p95 >= 250` or `max_rx_gap_ms >= 400`, the per-room "worst
+  member" pick, and no IP-shaped string in the output. Run → FAIL (functions missing).
+- [ ] **Step 3: Implement**, run `--selftest` → `selftest OK`.
+- [ ] **Step 4: Run on the copy.** `REPORT.md` (Spanish summary first):
+  - sessions with link_stats, and the distribution of their p50 / p95 / max RTT and longest gap;
+  - the share of multi-player sessions (shared a room with someone) over the 250 ms / 400 ms lines;
+  - the count of `database is locked` lines in the log (the only signal that would reopen the PostgreSQL question).
+- [ ] **Step 5:** Ledger line with the two headline numbers. No commit (build/ is not tracked).
+
+### Task 0b: Boss mission, four players: does the mission use streams?
+
+**Files:**
+- Create: `build/infra/boss4/cmd.txt` (the two.py script), `build/infra/boss4/REPORT.md`.
+
+- [ ] **Step 1:** `python -I build/infra/diskquiet.py 60 900`, then `two.py` with four instances (A–D), the local
+  server with `--impair delay=90,jitter=15,stall=2,stall_ms=400`, and `LAG_DIR=build/infra/boss4`. Mission: the
+  video's "[Multi] Torre de la Nevisca de la Legión" if `build/save_weather` reaches it, else the first co-op
+  mission with a boss in that save (ledger which one). `SHOTS_DIR` on E:.
+- [ ] **Step 2:** `tools/infra_lagjoin.py` over `net_<X>.csv` inside the mission window (M marks): datagrams/s and
+  stream segments/s per instance, delivery p50/p99.
+- [ ] **Step 3: Rule.** Stream segments ≤ 1/s per instance inside the mission → "datagram-only confirmed",
+  Release A stays as planned. More → Tasks 7–8 move into Release A. Either way a `Ruling:` ledger line, and
+  `REPORT.md` with the numbers.
+- [ ] **Step 4:** If four instances do not fit (RAM, disk stalls), run three, then two, and say so in the report.
+
+### Task 0c: Desync meter (game state from RAM, two instances at once)
+
+**Files:**
+- Create: `build/infra/desync_meter.py`, `build/infra/desync_fields.json`.
+
+**Interfaces:**
+- Produces: `python -I build/infra/desync_meter.py --ports 9997,9998 --fields build/infra/desync_fields.json
+  --seconds N --out <csv>`: samples every field on every instance through the debug socket every 100 ms (same wall
+  clock tick for all), and prints per field: samples, max |a−b|, p95 |a−b|, and the time to agree after a change
+  (p50/p95). `--selftest` checks the pure `compare(a_series, b_series)` with asserts.
+- `desync_fields.json`: `[{"name": "boss_hp", "addr": "0x...", "type": "u32|i32|f32", "via": "pointer chain or
+  null"}]`.
+
+- [ ] **Step 1 (timebox 45 min):** find, in a single-player boss mission, the boss HP and the boss X position:
+  memory search through the debug socket (values that drop when the boss is hit / move when it walks), then the
+  pointer that leads to them, so the address survives a new mission. Check what `efonte/patapon-re` and the
+  `analysis/` notes already name. Not found in time → ledger it, and the meter ships with whatever fields were found
+  (at least the hero X of each instance as seen by the other, if that is all).
+- [ ] **Step 2:** `--selftest` first (identical series → 0; a lagged copy → time to agree = the lag), FAIL → implement
+  → `selftest OK`.
+- [ ] **Step 3: Baseline.** Run it during Task 0b's mission (or a 2-instance rerun) over the relay with the
+  "international" profile. The numbers go to `build/infra/boss4/REPORT.md` as the "before" for Task 10.
 
 ### Task 1: Vendor Monocypher and a CSPRNG
 
@@ -529,7 +617,7 @@ encrypted, authenticated UDP path found with STUN and NAT hole punching. The rel
 ### Task 9: Launcher option, settings, docs
 
 **Files:**
-- Modify (launcher repo, branch `beta-1`):
+- Modify (launcher repo, branch `direct-option`):
   - `src-tauri/core_options.json`: the new option;
   - `src/screens/Options.tsx` + `src/styles.css`: description line breaks (`white-space: pre-line` on
     `.description`);
@@ -586,14 +674,16 @@ encrypted, authenticated UDP path found with STUN and NAT hole punching. The rel
   the matching `--impair` for the relay leg. Expected, in `REPORT.md` next to Part 1's numbers:
   - stream delivery p99 ≤ one-way delay + 1 RTT + 50 ms (intl: ≤ 320 ms) and below the relay baseline's p99;
   - fewer gaps ≥ 250 ms than the baseline.
+  - Release A (datagrams only): the same bounds on **mission datagram** delivery (intl p99 ≤ 320 ms vs the
+    baseline's 473 / 329 ms), and Task 0c's meter shows a lower p95 |a−b| and time to agree than its relay "before".
 - [ ] **Step 2:** A mission with the direct path killed mid-mission: impair `loss=100` switched on for 20 s
   through a lab-only debug socket command or a file the link polls in non-beta builds (the builder chooses one and
   documents it in ENV_FLAGS). The game continues over kind 4 with no disconnect; frames over 100 ms ≤ 1 per
   instance outside the 4 s detection window; the path comes back Up after the impairment ends.
 - [ ] **Step 3:** Compatibility matrix, each with the co-op smoke passing:
-  - one instance opted out (`PSPRECOMP_INFRA_DIRECT=0`) → that pair relayed. On the wire this is what an old
-    protocol-2 client looks like (no `caps`); Task 4's `no_caps_no_pair` covers the server side. No old exe is
-    rebuilt: the disk is 90 % full.
+  - one instance opted out (`PSPRECOMP_INFRA_DIRECT=0`) → that pair relayed;
+  - one instance is a real protocol-2 client: the u6 beta exe from `build/beta/Patapon3Recomp/game/<id>/`
+    (copied to a scratch folder, no rebuild) → that pair relayed, the others direct, no error on either side.
   - server `--no-direct` → all relayed.
 - [ ] **Step 4:** Regression gates: 30 fps rt_regress PASS; `regress_vs.sh`; ad hoc smoke; the server selftest.
 - [ ] **Step 5: Privacy check.**
@@ -605,21 +695,48 @@ encrypted, authenticated UDP path found with STUN and NAT hole punching. The rel
   through the same-NAT host-candidate rule, and a co-op mission plays. Write the result to the ledger.
 - [ ] **Step 7:** Write `REPORT.md` (Spanish summary first). No psprecomp commit (outputs live in `build/`).
 
-### Task 11: Beta field test
+### Task 11: Release through the auto-updater, then the field test
 
 **Files:**
-- Create: `build/beta/ACTUALIZACION_<n>.md` (next number).
-- User-side: deploy the server to `tester` (backup first, ask first), restart.
+- Create: `build/beta/ACTUALIZACION_7.md` (Release A; `_8` for Release B), `build/beta/notas_u7.txt`,
+  `build/beta/patapon3-beta1-u7.zip` + `.sha256`, `build/beta/latest.json`.
+- Modify: launcher version `0.3.0-beta.2` (u7) / `0.3.0-beta.3` (u8) in `package.json`, `src-tauri/Cargo.toml`,
+  `src-tauri/tauri.conf.json`; `build/beta/CHANGELOG.md` section "Actualización 7".
+- User-side: deploy `tools/infra_server.py` to `tester` (backup first, ask first), restart.
 
-- [ ] **Step 1:** Package the beta exactly as in update 2's Task 4: new launcher version, beta exes, zip, checks,
-  smoke. Also check that a beta exe ignores `PSPRECOMP_INFRA_DIRECT_IMPAIR` (its log says so).
-- [ ] **Step 2:** Server deploy with the user's OK. `curl https://online.montick.app/beta` answers.
-- [ ] **Step 3:** `ACTUALIZACION_<n>.md` with the player text. It explains the new option in the words of the
-  launcher description and says how to turn it off.
-- [ ] **Step 4:** After the next beta night:
-  - copy `beta.db` (read-only copy);
+- [ ] **Step 1:** Build and package by `build/beta/PUBLICAR_ACTUALIZACION.md`: launcher without
+  `P3_UPDATE_PUBKEY` / `P3_NO_BETA_GATE`; game closed + diskquiet, `sh build/beta/make_beta_exes.sh` (UNTIL stays
+  `2027-01-01T05:59:59Z`); `make_zip.py`; smoke from a fresh unzip. Also check that a beta exe ignores
+  `PSPRECOMP_INFRA_DIRECT_IMPAIR` (its log says so).
+- [ ] **Step 2: Update e2e before publishing.** Unzip u6 into `E:\p3_upd_e2e` (the Task 6 recipe of
+  `2026-10-29-launcher-autoupdater.md`: test-key launchers, local `http.server`, WebView2 CDP driver
+  `cdp.mjs`), serve u7 signed with the test key, and check u6 → u7 installs, protected files identical, the game
+  starts and the new option shows.
+- [ ] **Step 3:** Sign with the real key: `--min-version 0.3.0-beta.2` if Decision 2 = mandatory, else
+  `0.3.0-beta.1`. `ACTUALIZACION_7.md` with the user's steps (R2 zip first, then `update/latest.json`; server copy
+  to `tester`; `DOWNLOAD_URL` bump in `tools/beta_report_server.py`) and the player text, which explains the new
+  option in the words of the launcher description and says how to turn it off.
+- [ ] **Step 4:** Server deploy with the user's OK. `curl https://online.montick.app/beta` answers.
+- [ ] **Step 5:** After the next beta night:
+  - copy `beta.db` (read-only copy) and rerun Task 0a's report on it;
   - report the direct success rate (pairs that went direct / pairs offered), RTT direct vs relay per pair,
-    fallbacks, and Part 1's `link_stats` for the relay-only pairs.
-- [ ] **Step 5:** The user's international playtest, in the same mission as the video if possible. The boss comes
+    fallbacks, and `link_stats` for the relay-only pairs, next to Task 0a's "before".
+- [ ] **Step 6:** The user's international playtest, in the same mission as the video if possible. The boss comes
   out on every screen; hits land on every screen. Record the outcome (and a clip if the user records one) in the
   ledger.
+
+### Task 12: Launcher leftovers from update 6 (ships in Release A)
+
+**Files:**
+- Modify (launcher, branch `direct-option`): `src-tauri/Cargo.toml`, `src/screens/Update.tsx`,
+  `src/screens/Update.test.tsx`, `lang/es.json`, `lang/en.json`.
+
+- [ ] **Step 1: Failing test** `restart failure after a good install says it is installed` (Update.test.tsx):
+  `installUpdate` resolves, `restartLauncher` rejects → the screen shows `update.installed_reopen` ("La
+  actualización ya se instaló. Cierra y vuelve a abrir el launcher." / "The update is installed. Close and reopen
+  the launcher.") and not `update.failed`. Run → FAIL.
+- [ ] **Step 2:** Implement (one catch around `restartLauncher` only); both lang files. `npm test` → PASS.
+- [ ] **Step 3:** `zip` with only the decoder it needs: replace `features = ["deflate"]` by the crate's flate2-only
+  deflate feature (look it up in the registry copy of zip 2.x; zopfli and deflate64 must leave `cargo tree`).
+  `cargo test` → all PASS (the update_apply tests read deflated zips); the release exe is smaller (record both sizes).
+- [ ] **Step 4:** Commit `fix(launcher): say the update is installed when only the restart fails; slimmer zip`.

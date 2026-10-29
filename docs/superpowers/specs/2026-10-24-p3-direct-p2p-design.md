@@ -33,6 +33,31 @@ Known:
 Guess (to confirm in Phase 0): with a long relayed path and TCP head-of-line stalls, state messages reach each
 console late and in bursts, so the consoles drift apart. The boss's "come out" state is the visible case.
 
+## Revision (29 Oct 2026): what Phase 0 found and how this now ships
+
+Phase 0 (Part 1) ran on 24 Oct; numbers in `build/infra/p2p_baseline/REPORT.md`.
+- **The guess holds in the lab.** With the "international" relay profile (90 ms each way, 2 % TCP stalls of 400 ms),
+  mission datagrams arrive at **p99 473 / 329 ms** instead of the ~140 ms the delay alone explains; 30 packets were
+  held ≥ 250 ms in 98 s. The game itself does not freeze: what the other player sends arrives late.
+- **Inside a mission the game sends only datagrams** (~5/s per player). Stream segments (~20/s from the host) flow in
+  the hideout, at mission choice and at deploy. This contradicts the 23 Oct `lag_final` reading above ("most sync
+  traffic is stream traffic"), which counted the whole session. It held in 4 runs of one co-op mission; it is not yet
+  checked on a boss mission or with 4 players.
+- **Screenshots cannot measure the drift** (each camera follows its own hero). Acceptance needs the game state read
+  from both instances' RAM at the same time.
+
+Consequences (they replace the matching lines of "Phases" and "Calls made by Claude"):
+1. If a boss mission with 4 players also shows datagrams only, **Phase 1 alone carries the mission traffic** and
+   ships first, as its own update. Phase 2 (streams, `reliable_channel`, kind 4) ships in the next update. If the
+   boss mission shows streams, Phases 1 and 2 ship together.
+2. Updates reach players through the launcher's auto-updater (launcher 0.3.0-beta.1+, `PUBLICAR_ACTUALIZACION.md`).
+   A pair goes direct only when both players run the new version; old clients keep the relay (protocol 2 is still
+   accepted).
+3. The telemetry stays in the server's SQLite `beta.db` (29 Oct: a PostgreSQL move was weighed and declined: a few
+   dozen players, two writer processes, WAL is enough; it would add a driver and credentials to the live server).
+4. Before Phase 1, the real beta's `link_stats` (stored since update 3) are analysed to state how many sessions
+   suffer from the relay, so the field acceptance can be compared with real numbers, not only the lab.
+
 ## Goals
 
 1. Players in the same room exchange game traffic (datagrams **and** stream segments) over a direct, encrypted,
@@ -320,5 +345,5 @@ online options, and the help text says so if the options screen shows that note 
   trusted.
 - Public STUN servers (Cloudflare, Google), set from the server config.
 - IPv4 only.
-- Streams over the direct path need our own reliability layer (Phase 2), because the measurement shows missions
-  sync mostly over streams.
+- Streams over the direct path need our own reliability layer (Phase 2). (29 Oct: missions turned out to be
+  datagram-only in Phase 0; streams still matter for the hideout and deploy. See "Revision".)
