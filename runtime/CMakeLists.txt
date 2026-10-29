@@ -20,6 +20,7 @@ if(WIN32)
     target_include_directories(zlibstatic INTERFACE ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR})
     add_library(ZLIB::ZLIB ALIAS zlibstatic)
     set(PSP_SOCKET_LIBS ws2_32 advapi32)  # advapi32: MachineGuid for the ad hoc MAC file
+    set(PSP_RANDOM_LIBS bcrypt)  # BCryptGenRandom (net/secure_random)
     set(PSP_WINHTTP_LIBS winhttp)  # infrastructure-mode WebSocket transport
 else()
     # Find SDL2 via pkg-config (Homebrew installs pkg-config file)
@@ -201,6 +202,7 @@ set(RUNTIME_SOURCES
     src/net/infra_client.cpp
     src/net/link_stats.cpp
     src/net/infra_stats.cpp
+    src/net/secure_random.cpp
     src/net/np2_structs.cpp
     src/net/np2_rooms.cpp
     src/net/p2p_stream.cpp
@@ -315,6 +317,11 @@ target_compile_options(at3_standalone PRIVATE -w $<IF:$<CONFIG:Debug>,-O1,-O2>)
 add_library(xxhash STATIC third_party/xxhash/xxhash.c)
 target_include_directories(xxhash PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/xxhash)
 target_compile_options(xxhash PRIVATE -w -O2)
+
+# Vendored Monocypher (BSD-2/CC0; third_party/monocypher/README.md): the direct P2P path's AEAD and BLAKE2b.
+add_library(monocypher STATIC third_party/monocypher/monocypher.c)
+target_include_directories(monocypher PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/monocypher)
+target_compile_options(monocypher PRIVATE -w -O2)
 
 # Vendored PPSSPP PRX decrypter (GPL-2.0; third_party/kirk/README.md): decrypts a "~PSP" boot
 # file in memory for [image] source = "disc" builds (psp_eboot_loader.cpp).
@@ -456,12 +463,14 @@ target_link_libraries(psprecomp_runtime PRIVATE
     psp::recomp
     at3_standalone
     xxhash
+    monocypher
     kirk
     ${PSP_SDL2_LIBS}
     OpenGL::GL
     ZLIB::ZLIB
     pthread
     ${PSP_SOCKET_LIBS}
+    ${PSP_RANDOM_LIBS}
     ${PSP_WINHTTP_LIBS}
 )
 if(TARGET psp_ffmpeg)
@@ -1116,6 +1125,13 @@ add_executable(test_relay_protocol tests/test_relay_protocol.cpp src/net/relay_p
 target_include_directories(test_relay_protocol PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_relay_protocol PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME relay_protocol_tests COMMAND test_relay_protocol)
+
+# Direct P2P: vendored Monocypher against published vectors, and the OS CSPRNG.
+add_executable(test_direct_crypto_primitives tests/test_direct_crypto_primitives.cpp src/net/secure_random.cpp)
+target_include_directories(test_direct_crypto_primitives PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_direct_crypto_primitives PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(test_direct_crypto_primitives PRIVATE monocypher ${PSP_RANDOM_LIBS})
+add_test(NAME direct_crypto_primitives_tests COMMAND test_direct_crypto_primitives)
 
 # Infrastructure-mode server frames (tools/infra_server.py wire format).
 add_executable(test_infra_protocol tests/test_infra_protocol.cpp src/net/infra_protocol.cpp)
