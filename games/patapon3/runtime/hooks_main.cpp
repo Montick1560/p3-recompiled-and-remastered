@@ -26,6 +26,8 @@
 #include "p3_achievements.h"
 #include "p3_prompts.h"
 #include "psp_achievements_run.h"
+#include "psp_presence_run.h"
+#include "p3_presence_text.h"
 #include "psp_anim_blend.h"
 #include "psp_code_match.h"
 #include "psp_frame_latch.h"
@@ -1280,6 +1282,7 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
     size_t ach_sources = 0;
     const PspAchievementSource* ach = p3_achievement_sources(&ach_sources);
     psp_achievements_register(ach, ach_sources);  // main() starts the system (psp_achievements_run.h)
+    psp_presence_register({"1565627786004275340", p3_presence_activity_from_ram});  // Discord app "Patapon 3 DxD Remastered"
     p3_prompts_register();  // help bars show the player's keyboard / controller buttons
     const char* fast_load = std::getenv("PSPRECOMP_P3_FAST_LOAD");
     if (!(fast_load && fast_load[0] == '0')) {

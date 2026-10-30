@@ -25,6 +25,8 @@ public:
     bool connect(const std::string& client_id);
     // SET_ACTIVITY with this process id; null clears. False (and closed) on ERROR or a broken pipe.
     bool set_activity(const nlohmann::json& activity_or_null);
+    // Cheap liveness probe (no I/O wait): closes and returns false when Discord went away.
+    bool alive();
     void close();
     bool connected() const { return pipe_ != nullptr; }
 

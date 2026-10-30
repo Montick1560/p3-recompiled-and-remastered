@@ -168,6 +168,7 @@ set(RUNTIME_SOURCES
     src/psp_ach_store.cpp
     src/psp_toast.cpp
     src/psp_discord.cpp
+    src/psp_presence_run.cpp
     src/psp_vblank_hook.cpp
     src/psp_achievements_run.cpp
     src/psp_present.cpp
@@ -789,6 +790,13 @@ target_include_directories(test_discord_frame PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 target_compile_options(test_discord_frame PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME discord_frame_tests COMMAND test_discord_frame)
 
+# Discord presence runner: send rule and off switches.
+add_executable(test_presence_run tests/test_presence_run.cpp src/psp_presence_run.cpp src/psp_discord.cpp)
+target_include_directories(test_presence_run PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                           ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
+target_compile_options(test_presence_run PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME presence_run_tests COMMAND test_presence_run)
+
 # Achievements in a running game: hook, worker, unlocked.json, toasts (fake source, no GL).
 add_executable(test_achievements_run tests/test_achievements_run.cpp src/psp_achievements_run.cpp
                src/psp_achievements.cpp src/psp_ach_store.cpp src/psp_toast.cpp src/psp_vblank_hook.cpp)
@@ -819,6 +827,17 @@ if(PSPRECOMP_GAME STREQUAL "patapon3")
                                ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime)
     target_compile_options(test_p3_presence PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
     add_test(NAME p3_presence_tests COMMAND test_p3_presence)
+
+    # Patapon 3 Discord activity text (Spanish / English).
+    add_executable(test_p3_presence_text tests/test_p3_presence_text.cpp
+                   ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime/p3_presence_text.cpp
+                   ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime/p3_presence.cpp
+                   ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime/p3_achievements.cpp src/psp_achievements.cpp)
+    target_include_directories(test_p3_presence_text PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                               ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann
+                               ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime)
+    target_compile_options(test_p3_presence_text PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+    add_test(NAME p3_presence_text_tests COMMAND test_p3_presence_text)
 
     # Patapon 3 help-bar word tables: drawable, inside their rows, fitting at >= 75 %.
     add_executable(test_p3_prompt_labels tests/test_p3_prompt_labels.cpp src/psp_bar_text.cpp

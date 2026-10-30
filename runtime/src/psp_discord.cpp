@@ -113,6 +113,12 @@ bool DiscordIpc::set_activity(const nlohmann::json& activity_or_null) {
     return false;
 }
 
+bool DiscordIpc::alive() {
+    DWORD avail = 0;
+    if (pipe_ && !PeekNamedPipe(pipe_, nullptr, 0, nullptr, &avail, nullptr)) close();
+    return pipe_ != nullptr;
+}
+
 void DiscordIpc::close() {
     if (pipe_) CloseHandle(pipe_);
     pipe_ = nullptr;
@@ -124,6 +130,7 @@ bool DiscordIpc::write_frame(uint32_t, const nlohmann::json&) { return false; }
 bool DiscordIpc::read_frame(uint32_t*, nlohmann::json*, int) { return false; }
 bool DiscordIpc::connect(const std::string&) { return false; }
 bool DiscordIpc::set_activity(const nlohmann::json&) { return false; }
+bool DiscordIpc::alive() { return false; }
 void DiscordIpc::close() { pipe_ = nullptr; }
 
 #endif

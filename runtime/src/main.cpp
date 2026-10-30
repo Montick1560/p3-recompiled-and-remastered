@@ -23,6 +23,7 @@
 #include "psp_patch_sets.h"
 #include "psp_settings.h"
 #include "psp_achievements_run.h"
+#include "psp_presence_run.h"
 #include "psp_osk_overlay.h"
 #include "psp_eboot_loader.h"
 #include "psp_exit.h"
@@ -267,6 +268,11 @@ int main(int argc, char* argv[]) {
         char* base = SDL_GetBasePath();
         psp_achievements_start({base ? base : "", psp_toast_post});
         SDL_free(base);
+    }
+    {
+        // Discord Rich Presence: off without a registered client id or with PSPRECOMP_DISCORD=0.
+        const char* ui = std::getenv("PSPRECOMP_UI_LANG");
+        psp_presence_start(rdram, ui && std::string(ui) == "en" ? "en" : "es");
     }
     psp_func_args_install();  // PSPRECOMP_FUNC_ARGS debug wrappers
 
@@ -604,6 +610,7 @@ int main(int argc, char* argv[]) {
         stage(buf);
     }
     stage("host writes idle");
+    psp_presence_stop();  // clears the Discord activity
     psp_achievements_stop();  // writes what is still queued
     psp_audio_out_shutdown();
     ge_draw_shutdown();  // also writes frame.tga for the Patapon 1 scripts
