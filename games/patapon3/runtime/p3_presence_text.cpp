@@ -18,6 +18,7 @@ std::string utf8(const std::u16string& s) {
         uint32_t c = s[i];
         if (c >= 0xD800 && c < 0xDC00 && i + 1 < s.size() && s[i + 1] >= 0xDC00 && s[i + 1] < 0xE000)
             c = 0x10000 + ((c - 0xD800) << 10) + (s[++i] - 0xDC00);
+        else if (c >= 0xD800 && c < 0xE000) c = 0xFFFD;  // lone surrogate: a torn read, not valid UTF-8
         if (c < 0x80) o += static_cast<char>(c);
         else if (c < 0x800) { o += static_cast<char>(0xC0 | c >> 6); o += static_cast<char>(0x80 | (c & 0x3F)); }
         else if (c < 0x10000) { o += static_cast<char>(0xE0 | c >> 12); o += static_cast<char>(0x80 | (c >> 6 & 0x3F)); o += static_cast<char>(0x80 | (c & 0x3F)); }

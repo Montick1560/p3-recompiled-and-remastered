@@ -26,7 +26,8 @@ std::string evtOf(const nlohmann::json& j) {
 }  // namespace
 
 std::string discord_frame(uint32_t op, const nlohmann::json& body) {
-    const std::string j = body.dump();
+    // replace: guest RAM text may hold invalid UTF-8, which the strict default would throw on.
+    const std::string j = body.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     std::string f;
     put32(f, op);
     put32(f, static_cast<uint32_t>(j.size()));

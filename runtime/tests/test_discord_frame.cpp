@@ -42,10 +42,22 @@ static void unframe_rejects_huge_length() {
     CHECK(discord_unframe(exact, &op, &out, &used) && used == 8 + 65536, "length exactly 64 KiB is accepted");
 }
 
+static void invalid_utf8_does_not_throw() {
+    bool threw = false;
+    std::string f;
+    try { f = discord_frame(1, {{"state", std::string("bad \xED\xA0\x80 byte \xFF")}}); } catch (...) { threw = true; }
+    CHECK(!threw, "invalid UTF-8 in a string");
+    uint32_t op;
+    nlohmann::json out;
+    size_t used;
+    CHECK(discord_unframe(f, &op, &out, &used), "the replaced frame still parses");
+}
+
 int main() {
     frame_roundtrip();
     unframe_needs_whole_frame();
     unframe_rejects_huge_length();
+    invalid_utf8_does_not_throw();
     if (failures) return 1;
     std::puts("discord_frame: OK");
     return 0;

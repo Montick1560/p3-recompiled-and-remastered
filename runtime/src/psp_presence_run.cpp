@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <exception>
 #include <mutex>
 #include <thread>
 
@@ -38,34 +39,43 @@ void run_main(Run* r) {
     bool tried = false;
     for (;;) {
         const int64_t t = now_ms();
-        if (!ipc.connected() && (!tried || t - last_try >= kReconnectMs)) {
-            tried = true;
-            last_try = t;
-            if (ipc.connect(g_source.client_id)) {
-                std::fprintf(stderr, "[DISCORD] connected\n");
-                last = nlohmann::json();  // a fresh Discord knows nothing: send the current state
-                last_send = t - kPresenceMinSendGapMs;
-            }
-        }
-        if (ipc.connected() && !ipc.alive()) {  // Discord closed: notice now, not at the next change
-            std::fprintf(stderr, "[DISCORD] lost, retrying in 30 s\n");
-            last_try = t;
-        }
-        if (ipc.connected()) {
-            const nlohmann::json now = g_source.activity(r->rdram, r->lang.c_str(), r->start_unix);
-            if (!now.is_null() && psp_presence_should_send(last, now, t - last_send)) {
-                last_send = t;
-                last = now;  // also after a failure: the same activity is not resent until it changes
-                if (!ipc.set_activity(now)) {
-                    std::fprintf(stderr, "[DISCORD] lost, retrying in 30 s\n");
-                    last_try = t;
+        try {  // nothing may escape the thread (std::terminate): a throw counts as a failed send
+            if (!ipc.connected() && (!tried || t - last_try >= kReconnectMs)) {
+                tried = true;
+                last_try = t;
+                if (ipc.connect(g_source.client_id)) {
+                    std::fprintf(stderr, "[DISCORD] connected\n");
+                    last = nlohmann::json();  // a fresh Discord knows nothing: send the current state
+                    last_send = t - kPresenceMinSendGapMs;
                 }
             }
+            if (ipc.connected() && !ipc.alive()) {  // Discord closed: notice now, not at the next change
+                std::fprintf(stderr, "[DISCORD] lost, retrying in 30 s\n");
+                last_try = t;
+            }
+            if (ipc.connected()) {
+                const nlohmann::json now = g_source.activity(r->rdram, r->lang.c_str(), r->start_unix);
+                if (!now.is_null() && psp_presence_should_send(last, now, t - last_send)) {
+                    last_send = t;
+                    last = now;  // also after a failure: the same activity is not resent until it changes
+                    if (!ipc.set_activity(now)) {
+                        std::fprintf(stderr, "[DISCORD] lost, retrying in 30 s\n");
+                        last_try = t;
+                    }
+                }
+            }
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "[DISCORD] error: %s; retrying in 30 s\n", e.what());
+            ipc.close();
+            last_try = t;
         }
         std::unique_lock<std::mutex> lk(r->m);
         if (r->cv.wait_for(lk, std::chrono::seconds(1), [r] { return r->stop; })) break;
     }
-    if (ipc.connected()) ipc.set_activity(nullptr);  // the profile clears when the game quits
+    try {
+        if (ipc.connected()) ipc.set_activity(nullptr);  // the profile clears when the game quits
+    } catch (...) {
+    }
     ipc.close();
 }
 

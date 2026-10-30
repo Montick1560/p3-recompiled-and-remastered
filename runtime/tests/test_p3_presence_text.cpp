@@ -37,11 +37,24 @@ static void activity_title() {
     CHECK(p3_presence_activity({P3Place::Unknown, 0, 0, false, u""}, "es", 5).is_null(), "unknown place sends nothing");
 }
 
+static void lone_surrogate_is_replaced() {
+    std::u16string name = u"a";
+    name += char16_t(0xD800);  // torn read from guest RAM
+    name += u"x";
+    name += char16_t(0xDC00);  // low surrogate alone
+    const auto a = p3_presence_activity({P3Place::Mission, 3, 10, false, name}, "es", 5);
+    CHECK(a["state"] == "Misi\xC3\xB3n: a\xEF\xBF\xBDx\xEF\xBF\xBD", "lone surrogates become U+FFFD");
+    bool threw = false;
+    try { a.dump(); } catch (...) { threw = true; }
+    CHECK(!threw, "dump does not throw");
+}
+
 int main() {
     activity_hideout_es();
     activity_mission_en();
     activity_versus_hides_class();
     activity_title();
+    lone_surrogate_is_replaced();
     if (failures) return 1;
     std::puts("p3_presence_text: OK");
     return 0;
