@@ -14,6 +14,8 @@
 namespace {
 
 constexpr int64_t kReconnectMs = 30000;
+constexpr int kClearReplyMs = 400;  // the clear on quit must not hold the <1 s exit
+constexpr int kStopWaitMs = 1000;
 
 PspPresenceSource g_source{nullptr, nullptr};
 
@@ -25,6 +27,7 @@ struct Run {
     std::mutex m;
     std::condition_variable cv;
     bool stop = false;
+    bool done = false;  // run_main finished; set under m, last thing the thread does with the Run
 };
 Run* g_run = nullptr;
 
@@ -73,10 +76,13 @@ void run_main(Run* r) {
         if (r->cv.wait_for(lk, std::chrono::seconds(1), [r] { return r->stop; })) break;
     }
     try {
-        if (ipc.connected()) ipc.set_activity(nullptr);  // the profile clears when the game quits
+        if (ipc.connected()) ipc.set_activity(nullptr, kClearReplyMs);  // the profile clears when the game quits
     } catch (...) {
     }
     ipc.close();
+    std::lock_guard<std::mutex> lk(r->m);
+    r->done = true;
+    r->cv.notify_all();  // under the lock: after this the thread never touches r
 }
 
 }  // namespace
@@ -109,8 +115,14 @@ void psp_presence_stop() {
     Run* r = g_run;
     g_run = nullptr;
     if (!r) return;
-    { std::lock_guard<std::mutex> lk(r->m); r->stop = true; }
+    std::unique_lock<std::mutex> lk(r->m);
+    r->stop = true;
     r->cv.notify_all();
-    r->thread.join();
-    delete r;
+    if (r->cv.wait_for(lk, std::chrono::milliseconds(kStopWaitMs), [r] { return r->done; })) {
+        lk.unlock();
+        r->thread.join();
+        delete r;
+    } else {
+        r->thread.detach();  // stuck in a pipe wait: leak it, the process is about to exit
+    }
 }

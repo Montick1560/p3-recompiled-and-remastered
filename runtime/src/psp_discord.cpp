@@ -100,14 +100,14 @@ bool DiscordIpc::connect(const std::string& client_id) {
     return false;
 }
 
-bool DiscordIpc::set_activity(const nlohmann::json& activity_or_null) {
+bool DiscordIpc::set_activity(const nlohmann::json& activity_or_null, int reply_timeout_ms) {
     if (!pipe_) return false;
     const nlohmann::json cmd = {{"cmd", "SET_ACTIVITY"},
                                 {"args", {{"pid", static_cast<uint32_t>(GetCurrentProcessId())}, {"activity", activity_or_null}}},
                                 {"nonce", std::to_string(GetCurrentProcessId()) + "-" + std::to_string(++nonce_)}};
     uint32_t op = 0;
     nlohmann::json reply;
-    if (write_frame(kFrame, cmd) && read_frame(&op, &reply, kReplyMs) && op == kFrame &&
+    if (write_frame(kFrame, cmd) && read_frame(&op, &reply, reply_timeout_ms) && op == kFrame &&
         evtOf(reply) != "ERROR")
         return true;
     close();
@@ -130,7 +130,7 @@ void DiscordIpc::close() {
 bool DiscordIpc::write_frame(uint32_t, const nlohmann::json&) { return false; }
 bool DiscordIpc::read_frame(uint32_t*, nlohmann::json*, int) { return false; }
 bool DiscordIpc::connect(const std::string&) { return false; }
-bool DiscordIpc::set_activity(const nlohmann::json&) { return false; }
+bool DiscordIpc::set_activity(const nlohmann::json&, int) { return false; }
 bool DiscordIpc::alive() { return false; }
 void DiscordIpc::close() { pipe_ = nullptr; }
 

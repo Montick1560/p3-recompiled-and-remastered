@@ -1,6 +1,7 @@
 // Discord presence runner: the send rule and the off switches (no pipe, no thread).
 #include "psp_presence_run.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 
@@ -33,9 +34,17 @@ static void stays_off() {
     psp_presence_stop();  // safe when never started
 }
 
+static void stop_is_bounded() {
+    const auto t0 = std::chrono::steady_clock::now();
+    psp_presence_stop();  // never started: nothing to wait for
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    CHECK(ms < 1500, "stop returns within 1.5 s");
+}
+
 int main() {
     should_send();
     stays_off();
+    stop_is_bounded();
     if (failures) return 1;
     std::puts("presence_run: OK");
     return 0;

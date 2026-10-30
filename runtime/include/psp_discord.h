@@ -24,7 +24,8 @@ public:
     // Tries discord-ipc-0..9, handshakes and consumes the READY answer. False leaves it closed.
     bool connect(const std::string& client_id);
     // SET_ACTIVITY with this process id; null clears. False (and closed) on ERROR or a broken pipe.
-    bool set_activity(const nlohmann::json& activity_or_null);
+    // reply_timeout_ms: how long to wait for Discord's answer (shortened on shutdown).
+    bool set_activity(const nlohmann::json& activity_or_null, int reply_timeout_ms = 2000);
     // Cheap liveness probe (no I/O wait): closes and returns false when Discord went away.
     bool alive();
     void close();
