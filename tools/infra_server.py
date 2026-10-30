@@ -1132,6 +1132,12 @@ class Server:
             raise Err(BAD_REQUEST)
         if self.beta is not None:
             self.beta_login(conn, msg)
+        # A game that froze or crashed is back within seconds, but its old session lives until the idle timeout and
+        # keeps its console id in the room (DUPLICATE_CONSOLE): the same player from the same address replaces it.
+        stale = next((c for c in self.conns.values() if c.session and not c.closed and c.online_id == oid
+                      and console and c.console == console and conn.addr_key and c.addr_key == conn.addr_key), None)
+        if stale is not None:
+            self.drop(stale, "replaced")
         proto = msg.get("proto")
         conn.proto = proto if type(proto) is int else None
         n = 1
@@ -1825,12 +1831,58 @@ def selftest():
     r4 = ca.ok("create", max_slot=4)["room"]
     dup = cb.req("join", room_id=r4["id"])
     assert not dup["ok"] and dup["error"] == DUPLICATE_CONSOLE, dup
+    assert not ca.is_closed(0.3), "another nickname with the same console does not replace the host"
     assert any("refused: same console id as CONA" in l for l in lines), "refusal logged"
     cc.ok("join", room_id=r4["id"])
     cd.ok("join", room_id=r4["id"])
     bad = ce.req("login", online_id="CONE", console="xyz")
     assert not bad["ok"] and bad["error"] == BAD_REQUEST, bad
     for cl in (ca, cb, cc, cd, ce):
+        cl.close()
+    srv.running = False
+    th.join(timeout=2)
+
+    # ---- a game that froze or crashed logs in again: the same player from the same address replaces the stale
+    # session ----
+    srv = Server("127.0.0.1", 0, 0, max_per_addr=16, logger=quiet)
+    th = run(srv)
+
+    def at(ip):
+        return TestClient(srv.ws_port, ws=True, headers="CF-Connecting-IP: %s\r\n" % ip)
+    host, old, new = at("203.0.113.20"), at("203.0.113.21"), at("203.0.113.21")
+    host.ok("login", online_id="RHOST", console="02000000001a")
+    old.ok("login", online_id="RBACK", console="02000000001b")
+    room_id = host.ok("create", max_slot=4)["room"]["id"]
+    old.ok("join", room_id=room_id)
+    host.event(lambda x: x["ev"] == "member_joined")
+    new.ok("login", online_id="RBACK", console="02000000001b")
+    assert old.is_closed(), "stale session closed by the new login"
+    host.event(lambda x: x["ev"] == "member_left" and x["room_id"] == room_id, what="stale member left")
+    new.ok("join", room_id=room_id)
+    assert any("close RBACK" in l and ": replaced" in l for l in lines), "replacement logged"
+    # The stale session was the host: its room goes, and the new login still gets in and hosts again.
+    h1, v, h2 = at("203.0.113.30"), at("203.0.113.31"), at("203.0.113.30")
+    h1.ok("login", online_id="RHOST2", console="02000000002a")
+    v.ok("login", online_id="RVIS2", console="02000000002b")
+    v.ok("join", room_id=h1.ok("create", max_slot=4)["room"]["id"])
+    h2.ok("login", online_id="RHOST2", console="02000000002a")
+    assert h1.is_closed(), "stale host closed by the new login"
+    v.event(lambda x: x["ev"] == "room_destroyed", what="room_destroyed")
+    h2.ok("create", max_slot=4)
+    # The same player from another address (a phone hotspot) is not replaced and is still refused.
+    c1, c2 = at("203.0.113.40"), at("198.51.100.40")
+    c1.ok("login", online_id="RFAR", console="02000000003a")
+    c1.ok("join", room_id=room_id)
+    c2.ok("login", online_id="RFAR", console="02000000003a")
+    assert not c1.is_closed(0.3), "another address does not replace the session"
+    far = c2.req("join", room_id=room_id)
+    assert not far["ok"] and far["error"] == DUPLICATE_CONSOLE, far
+    # An older runtime sends no console id: never replaced.
+    d1, d2 = at("203.0.113.50"), at("203.0.113.50")
+    d1.ok("login", online_id="RNOCON")
+    d2.ok("login", online_id="RNOCON")
+    assert not d1.is_closed(0.3), "no console id, no replacement"
+    for cl in (host, old, new, h1, v, h2, c1, c2, d1, d2):
         cl.close()
     srv.running = False
     th.join(timeout=2)
