@@ -38,6 +38,7 @@ struct Node {
     Addr from;                    // the source address its packets carry
     std::vector<Addr> receives;   // addresses delivered to it
     std::vector<Opened> got;
+    int64_t paused_until = 0;     // its process stalls: no tick, its packets wait for it
 };
 
 struct Sent {
@@ -53,6 +54,7 @@ struct Sim {
     int delay = 20;
     int relay_delay = -1;
     bool relay_on = true;  // false: a u7 peer, which drops kind 4
+    bool rx_first = false; // deliver before the ticks, as direct::Link::run does
     std::function<bool(const Addr&)> deliver = [](const Addr&) { return true; };
     std::vector<Sent> flight, log, relay_flight, relay_log;
     std::vector<Node*> nodes;
@@ -67,10 +69,16 @@ struct Sim {
         }
         rel.clear();
     }
-    static std::vector<Sent> take_due(std::vector<Sent>& q, int64_t now) {
+    bool paused(const Addr& to) const {
+        for (Node* n : nodes)
+            if (now < n->paused_until && std::find(n->receives.begin(), n->receives.end(), to) != n->receives.end())
+                return true;
+        return false;
+    }
+    std::vector<Sent> take_due(std::vector<Sent>& q) {
         std::vector<Sent> due;
         for (auto it = q.begin(); it != q.end();) {
-            if (it->at <= now) {
+            if (it->at <= now && !paused(it->to)) {
                 due.push_back(std::move(*it));
                 it = q.erase(it);
             } else {
@@ -89,13 +97,22 @@ struct Sim {
     }
     void step(int ms) {
         now += ms;
+        if (!rx_first) ticks();
+        rx();
+        if (rx_first) ticks();
+    }
+    void ticks() {
         std::vector<Out> outs;
         for (Node* n : nodes) {
+            if (now < n->paused_until) continue;
             n->path->tick(now, &outs, relay_out());
             send(*n, outs);
             relay(*n);
         }
-        for (auto& s : take_due(relay_flight, now)) {
+    }
+    void rx() {
+        std::vector<Out> outs;
+        for (auto& s : take_due(relay_flight)) {
             for (Node* n : nodes) {
                 if (!(n->from == s.to)) continue;
                 Opened app;
@@ -103,7 +120,7 @@ struct Sim {
                 relay(*n);
             }
         }
-        for (auto& s : take_due(flight, now)) {
+        for (auto& s : take_due(flight)) {
             for (Node* n : nodes) {
                 if (std::find(n->receives.begin(), n->receives.end(), s.to) == n->receives.end()) continue;
                 Opened app;
@@ -455,6 +472,20 @@ int main() {
         CHECK(!a.path->relay_preferred(), "stall: no switch");
         CHECK(a.path->stats().relay_p95 < 1000, "stall: no fake relay loss");
         CHECK(a.path->direct_score() < 1000 && a.path->relay_score() < 1000, "stall: no fake loss in the scores");
+    }
+    {   // stall_ack_before_tick: the answer to an in-flight challenge is read before the first tick after a stall
+        Sim sim;
+        sim.delay = 15, sim.relay_delay = 20, sim.rx_first = true;
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
+        sim.nodes = {&a, &b};
+        sim.run_until(20000);
+        const uint64_t k0 = a.path->stats().keepalives;
+        while (a.path->stats().keepalives == k0) sim.step(10);
+        a.paused_until = sim.now + 3000;  // only A stalls: B's answers wait in A's socket
+        sim.run_until(sim.now + 8000);
+        CHECK(a.path->stats().rtt_p95 < 1000, "stall, rx first: no 3 s direct sample");
+        CHECK(a.path->stats().relay_p95 < 1000, "stall, rx first: no 3 s relay sample");
     }
     {   // one_lost_challenge_no_switch
         Sim sim;

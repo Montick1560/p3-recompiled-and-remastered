@@ -105,6 +105,7 @@ private:
     void learn(const Addr& from);
     void start_attempt(int64_t now_ms);
     void go_down(int64_t now_ms);
+    void catch_up(int64_t now_ms);  // a gap over kStallMs since the last call was our own stall: shift the timers
     void leave_up(int64_t now_ms);  // the Up time and relay time end; the relay is no longer preferred
     void sample(std::deque<int>* win, int ms);
     int score(const std::deque<int>& win) const;

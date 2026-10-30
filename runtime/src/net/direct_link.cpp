@@ -128,24 +128,30 @@ bool Link::start(const LinkOptions& opt, DeliverFn deliver, RelayFn relay) {
     finished_.clear();
     running_ = true;
     thread_ = std::thread([this] { run(); });
+    thread_id_ = thread_.get_id();
     return true;
 }
 
 void Link::stop() {
     {
         std::lock_guard<std::mutex> l(mu_);
-        if (!running_) return;
-        running_ = false;
-        const int64_t now = now_ms();
-        for (auto& [vip, p] : peers_) {
-            std::vector<Out> outs;
-            p.path->close(now, &outs);
-            for (const Out& o : outs) sendto_now(o);
+        if (running_) {
+            running_ = false;
+            const int64_t now = now_ms();
+            for (auto& [vip, p] : peers_) {
+                std::vector<Out> outs;
+                p.path->close(now, &outs);
+                for (const Out& o : outs) sendto_now(o);
+            }
+            peers_.clear();  // ~Path wipes the keys
+            held_.clear();
         }
-        peers_.clear();  // ~Path wipes the keys
-        held_.clear();
     }
     stun_cv_.notify_all();
+    // From the Link's own thread (a RelayFn whose send lost the client's connection) it cannot join itself: the
+    // next stop(), from start() or ~Link, joins it and closes the socket.
+    if (std::this_thread::get_id() == thread_id_) return;
+    std::lock_guard<std::mutex> j(join_mu_);
     if (thread_.joinable()) thread_.join();
     std::lock_guard<std::mutex> l(mu_);
     if (fd_ >= 0) psp_sock_close(fd_);

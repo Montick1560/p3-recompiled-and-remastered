@@ -198,6 +198,16 @@ int main() {
         p.a.stop();
         p.b.stop();
     }
+    {   // stop_from_own_thread: a RelayFn whose send loses the client's connection stops the Link from its thread
+        Pair p;
+        std::atomic<bool> called{false};
+        CHECK(p.start(1, 1, [&](uint32_t, std::vector<uint8_t>) { called = true, p.a.stop(); }, nullptr),
+              "own thread: start");
+        CHECK(wait_until([&] { return called.load() && !p.a.running(); }, 5000), "own thread: stopped, no crash");
+        CHECK(!p.a.send_dgram(kVipB, 1, 2, nullptr, 0), "own thread: nothing sent after");
+        p.a.stop();  // joins now
+        p.b.stop();
+    }
     {   // stun_only_from_asked_server
         uint16_t sport = 0, oport = 0;
         const int server = udp_socket(&sport), other = udp_socket(&oport);

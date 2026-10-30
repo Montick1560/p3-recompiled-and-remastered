@@ -101,8 +101,7 @@ int Path::score(const std::deque<int>& win) const {
     return at(50) + at(95);
 }
 
-void Path::tick(int64_t now_ms, std::vector<Out>* out, std::vector<std::vector<uint8_t>>* relay) {
-    if (state_ == PathState::Closed) return;
+void Path::catch_up(int64_t now_ms) {
     const int64_t gap = now_ms - last_tick_;
     if (gap > kStallMs) {  // resume as if no time passed: no burst, and the peer is not declared dead for our stall
         for (int64_t* t : {&attempt_start_, &next_probe_, &last_rx_, &last_tx_, &up_since_, &last_ka_, &last_switch_})
@@ -110,7 +109,12 @@ void Path::tick(int64_t now_ms, std::vector<Out>* out, std::vector<std::vector<u
         if (retry_at_ >= 0) retry_at_ += gap;
         for (Challenge& c : challenges_) c.sent_ms += gap;
     }
-    last_tick_ = now_ms;
+    last_tick_ = std::max(last_tick_, now_ms);
+}
+
+void Path::tick(int64_t now_ms, std::vector<Out>* out, std::vector<std::vector<uint8_t>>* relay) {
+    if (state_ == PathState::Closed) return;
+    catch_up(now_ms);
     if (state_ == PathState::Down && retry_at_ >= 0 && now_ms >= retry_at_) start_attempt(now_ms);
     if (state_ == PathState::Probing && now_ms - attempt_start_ >= cfg_.attempt_ms) go_down(now_ms);
     if (state_ == PathState::Up && now_ms - last_rx_ >= cfg_.dead_ms) {
@@ -248,6 +252,7 @@ void Path::on_ack(const Addr& from, const Opened& o, int64_t now_ms) {
 bool Path::on_packet(const Addr& from, const uint8_t* pkt, size_t len, int64_t now_ms, std::vector<Out>* out,
                      Opened* app) {
     if (state_ == PathState::Closed) return false;
+    catch_up(now_ms);  // answers read before the first tick after a stall must not be measured across it
     if (!rate_ok(len, now_ms)) {
         stats_.dropped_rate++;
         return false;
@@ -278,6 +283,7 @@ bool Path::on_packet(const Addr& from, const uint8_t* pkt, size_t len, int64_t n
 bool Path::on_relayed(const uint8_t* pkt, size_t len, int64_t now_ms, Opened* app,
                       std::vector<std::vector<uint8_t>>* relay) {
     if (state_ == PathState::Closed) return false;
+    catch_up(now_ms);
     Opened o;
     if (!accept(pkt, len, &o)) return false;
     if (o.type == Type::Close) {
