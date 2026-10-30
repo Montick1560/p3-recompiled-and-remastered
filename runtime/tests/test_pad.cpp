@@ -51,13 +51,68 @@ static void combine_sources() {
 static void unplug_releases() {
     PadSet p;
     p.set_button(7, 0x0010, true);
-    p.set_stick(7, 10, 250);
-    CHECK(p.analog_x() == 10 && p.analog_y() == 250, "stick of the moved pad");
-    CHECK(p.stick_x(7) == 10 && p.stick_y(7) == 250, "per-pad stick read back");
-    CHECK(p.stick_x(8) == 128 && p.stick_y(8) == 128, "unknown pad stick centred");
+    p.set_axis(7, 2, -32768);
+    p.set_axis(7, 3, 32767);
+    CHECK(p.analog_x() == 0 && p.analog_y() == 255, "right stick of the moved pad (default analog)");
     p.remove(7);
     CHECK(p.buttons() == 0, "unplugging releases its buttons");
     CHECK(p.analog_x() == 128 && p.analog_y() == 128, "and centres the stick");
+}
+
+static void sticks() {
+    PadSet p;  // default config: left nothing, right analog
+    p.set_axis(1, 2, -32768);
+    CHECK(p.analog_x() == pad_axis_to_psp(-32768, 8191) && p.buttons() == 0, "default: right = analog, no buttons");
+    p.set_axis(1, 0, 32767);
+    CHECK(p.buttons() == 0 && p.analog_x() == pad_axis_to_psp(-32768, 8191), "default: left stick does nothing");
+
+    PadSet f;
+    f.configure({StickMode::Analog, StickMode::Face, 8000});
+    f.set_axis(1, 2, 20000);
+    CHECK(f.buttons() == 0x2000, "right = circle (PON)");
+    f.set_axis(1, 2, 7000);
+    CHECK(f.buttons() == 0x2000, "inside the 3/4 band: still held");
+    f.set_axis(1, 2, 5000);
+    CHECK(f.buttons() == 0, "below 6000: released");
+    f.set_axis(1, 3, -20000);
+    CHECK(f.buttons() == 0x1000, "up = triangle (CHAKA)");
+    f.set_axis(1, 2, 25000);
+    CHECK(f.buttons() == 0x2000, "dominant axis wins: one drum only");
+    f.set_axis(1, 2, 0);
+    f.set_axis(1, 3, 0);
+    CHECK(f.buttons() == 0, "centred");
+    f.set_axis(1, 3, 20000);
+    CHECK(f.buttons() == 0x4000, "down = cross (DON)");
+    f.set_axis(1, 3, 0);
+    f.set_axis(1, 2, -20000);
+    CHECK(f.buttons() == 0x8000, "left = square (PATA)");
+
+    PadSet d;
+    d.configure({StickMode::Dpad, StickMode::Off, 8000});
+    d.set_axis(1, 1, 30000);
+    CHECK(d.buttons() == 0x0040 && d.analog_y() == 128, "left = D-pad down, analog centred");
+    d.set_axis(1, 2, 30000);
+    CHECK(d.buttons() == 0x0040 && d.analog_x() == 128, "right off: nothing");
+
+    PadSet two;
+    two.configure({StickMode::Analog, StickMode::Face, 8000});
+    two.set_axis(1, 2, 30000);
+    two.set_axis(2, 2, 0);
+    CHECK(two.buttons() == 0x2000, "another pad's idle stick does not release it");
+    two.remove(1);
+    CHECK(two.buttons() == 0, "unplugged pad releases its stick button");
+
+    PadSet both;
+    both.configure({StickMode::Analog, StickMode::Analog, 8000});
+    both.set_axis(1, 0, 30000);
+    CHECK(both.analog_x() == 128 && both.buttons() == 0, "only one analog stick: the right one");
+    both.set_axis(1, 2, 30000);
+    CHECK(both.analog_x() == pad_axis_to_psp(30000, 8000), "right stays analog");
+
+    StickMode m;
+    CHECK(parse_stick_mode("Face", &m) && m == StickMode::Face && !parse_stick_mode("x", &m) &&
+              parse_stick_mode("off", &m) && m == StickMode::Off,
+          "parse");
 }
 
 int main() {
@@ -65,6 +120,7 @@ int main() {
     deadzone_centres();
     combine_sources();
     unplug_releases();
+    sticks();
     if (failures == 0) std::printf("test_pad: all passed\n");
     return failures == 0 ? 0 : 1;
 }

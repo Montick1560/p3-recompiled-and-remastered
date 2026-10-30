@@ -1,6 +1,9 @@
 #include "psp_pad.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <string>
 
 uint32_t pad_button_to_psp(int b) {
     // SDL_GameControllerButton values (SDL 2.0.x, stable ABI).
@@ -41,11 +44,43 @@ void PadSet::set_trigger(int32_t pad, bool left, bool down) {
     (left ? p.ltrig : p.rtrig) = down;
 }
 
-void PadSet::set_stick(int32_t pad, uint8_t x, uint8_t y) {
+bool parse_stick_mode(const char* text, StickMode* out) {
+    std::string t = text ? text : "";
+    for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    static const std::pair<const char*, StickMode> kModes[] = {
+        {"analog", StickMode::Analog}, {"dpad", StickMode::Dpad}, {"face", StickMode::Face}, {"off", StickMode::Off}};
+    for (const auto& [name, mode] : kModes)
+        if (t == name) return *out = mode, true;
+    return false;
+}
+
+void PadSet::configure(const StickConfig& c) {
+    cfg_ = c;
+    if (cfg_.left == StickMode::Analog && cfg_.right == StickMode::Analog) cfg_.left = StickMode::Off;
+}
+
+// The one button a Dpad / Face stick holds: the dominant axis, pressed beyond the dead zone and kept down to 3/4
+// of it, so a stick resting near the edge does not flicker and a diagonal never presses two.
+static uint32_t stick_button(StickMode mode, int x, int y, int deadzone, uint32_t held) {
+    static const uint32_t kDpad[4] = {0x0010, 0x0020, 0x0040, 0x0080};  // up right down left
+    static const uint32_t kFace[4] = {0x1000, 0x2000, 0x4000, 0x8000};  // triangle circle cross square
+    const bool horizontal = std::abs(x) >= std::abs(y);
+    const int v = horizontal ? x : y;
+    const int dir = horizontal ? (v > 0 ? 1 : 3) : (v > 0 ? 2 : 0);
+    const uint32_t b = (mode == StickMode::Dpad ? kDpad : kFace)[dir];
+    const int threshold = b == held ? deadzone * 3 / 4 : deadzone;
+    return std::abs(v) > threshold ? b : 0;
+}
+
+void PadSet::set_axis(int32_t pad, int axis, int raw) {
+    if (axis < 0 || axis > 3) return;
     Pad& p = pads_[pad];
-    p.x = x;
-    p.y = y;
-    last_stick_pad_ = pad;
+    p.axis[axis] = raw;
+    const int s = axis / 2;
+    const StickMode mode = s == 0 ? cfg_.left : cfg_.right;
+    if (mode == StickMode::Analog) last_stick_pad_ = pad;
+    else if (mode != StickMode::Off)
+        p.stick_held[s] = stick_button(mode, p.axis[2 * s], p.axis[2 * s + 1], cfg_.deadzone, p.stick_held[s]);
 }
 
 void PadSet::remove(int32_t pad) {
@@ -56,22 +91,19 @@ void PadSet::remove(int32_t pad) {
 uint32_t PadSet::buttons() const {
     uint32_t m = 0;
     for (const auto& [id, p] : pads_) {
-        m |= p.buttons;
+        m |= p.buttons | p.stick_held[0] | p.stick_held[1];
         if (p.ltrig) m |= 0x0100;
         if (p.rtrig) m |= 0x0200;
     }
     return m;
 }
 
-uint8_t PadSet::analog_x() const { return stick_x(last_stick_pad_); }
-uint8_t PadSet::analog_y() const { return stick_y(last_stick_pad_); }
+uint8_t PadSet::analog_x() const { return analog(0); }
+uint8_t PadSet::analog_y() const { return analog(1); }
 
-uint8_t PadSet::stick_x(int32_t pad) const {
-    const auto it = pads_.find(pad);
-    return it == pads_.end() ? 128 : it->second.x;
-}
-
-uint8_t PadSet::stick_y(int32_t pad) const {
-    const auto it = pads_.find(pad);
-    return it == pads_.end() ? 128 : it->second.y;
+uint8_t PadSet::analog(int axis) const {
+    const int stick = cfg_.right == StickMode::Analog ? 1 : cfg_.left == StickMode::Analog ? 0 : -1;
+    const auto it = pads_.find(last_stick_pad_);
+    if (stick < 0 || it == pads_.end()) return 128;
+    return pad_axis_to_psp(it->second.axis[2 * stick + axis], cfg_.deadzone);
 }

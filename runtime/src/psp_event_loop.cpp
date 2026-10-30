@@ -186,10 +186,10 @@ static bool handle_controller_event(const SDL_Event& ev) {
                                pad_trigger_pressed(v));
             break;
         case SDL_CONTROLLER_AXIS_LEFTX:
-            g_pads.set_stick(id, pad_axis_to_psp(v, kStickDeadzone), g_pads.stick_y(id));
-            break;
         case SDL_CONTROLLER_AXIS_LEFTY:
-            g_pads.set_stick(id, g_pads.stick_x(id), pad_axis_to_psp(v, kStickDeadzone));
+        case SDL_CONTROLLER_AXIS_RIGHTX:
+        case SDL_CONTROLLER_AXIS_RIGHTY:
+            g_pads.set_axis(id, ev.caxis.axis, v);  // SDL order 0..3 = PadSet's axes
             break;
         default:
             return true;
