@@ -128,8 +128,17 @@ static void config_from_env() {
     CHECK(c.left == StickMode::Off && c.deadzone == 8191 && log.size() == 2, "invalid: defaults + two lines");
 }
 
+static void keys_as_stick() {
+    CHECK(analog_from_keys(0, 0x6050) == 0x6050, "no key: the pad's stick");
+    CHECK(analog_from_keys(kAnalogLeft, 0x6050) == 0x6000, "left: x = 0, pad y kept");
+    CHECK(analog_from_keys(kAnalogRight | kAnalogDown, 0x8080) == 0xFFFF, "right + down: 255, 255");
+    CHECK(analog_from_keys(kAnalogLeft | kAnalogRight, 0x8050) == 0x8080, "both ways: x centres");
+    CHECK(analog_from_keys(kAnalogUp | 0x4000, 0x8080) == 0x0080, "up: y = 0, other buttons ignored");
+}
+
 int main() {
     buttons();
+    keys_as_stick();
     deadzone_centres();
     combine_sources();
     unplug_releases();

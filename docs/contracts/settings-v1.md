@@ -71,6 +71,14 @@ start_keys = Space
 start_pad = start
 select_keys = V, Tab
 select_pad = back
+analog_up_keys =            ; the four analog stick directions: unbound by default
+analog_up_pad =
+analog_down_keys =
+analog_down_pad =
+analog_left_keys =
+analog_left_pad =
+analog_right_keys =
+analog_right_pad =
 left_stick = off            ; PSPRECOMP_PAD_LEFT_STICK: analog | dpad | face | off
 right_stick = analog        ; PSPRECOMP_PAD_RIGHT_STICK: analog | dpad | face | off
 stick_deadzone = 25         ; PSPRECOMP_PAD_DEADZONE: 10..60 (% of the stick's travel)
@@ -87,8 +95,10 @@ key is left alone) and `music_volume` (`0`, `10`, …, `100`, default `70`; the 
 `[controls]` remaps the PSP buttons. Each action has up to two keyboard keys, `<action>_keys`
 (comma separated SDL key names), and one gamepad button, `<action>_pad` (an SDL GameController
 button name). Actions, in this order: `up down left right cross circle square triangle l r start
-select`. An empty value unbinds. The defaults above are exactly the fixed mapping from before
-this section meant anything.
+select analog_up analog_down analog_left analog_right`. An empty value unbinds. The defaults above are exactly
+the fixed mapping from before this section meant anything. The four `analog_*` actions push the PSP analog stick
+to the edge in that direction (per axis they override the gamepad's analog stick; opposite directions held
+together centre it); the game never sees them as buttons.
 
 - **Key names** are SDL's (`X`, `Return`, `Space`, `Tab`, `Left Shift`, `Up`, `1`, `F2`, `Keypad 4`
   ...), case-insensitive. **Pad names** are SDL's GameController button names (`a b x y back start

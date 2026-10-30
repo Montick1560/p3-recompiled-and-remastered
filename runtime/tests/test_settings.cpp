@@ -237,6 +237,9 @@ static void stick_keys() {
     r = psp_settings_resolve("", "", "C:/P", kNoEnv);
     CHECK(val(r, "PSPRECOMP_PAD_LEFT_STICK") == "off" && val(r, "PSPRECOMP_PAD_RIGHT_STICK") == "analog",
           "old ini without the keys: left off, right analog");
+    r = psp_settings_resolve("[controls]\nanalog_up_keys = I\n", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_CONTROLS").find("analog_up=I|") != std::string::npos, "stick key -> PSPRECOMP_CONTROLS");
+    CHECK(!logged(r, "unknown key"), "analog_up_keys is known");
 }
 
 static void discord_key() {

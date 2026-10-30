@@ -2,6 +2,7 @@
 #include "psp_runtime.h"
 #include "psp_scheduler.h"
 #include "psp_memory.h"
+#include "psp_pad.h"
 #include "recomp.h"
 
 #include <cstdio>
@@ -40,10 +41,11 @@ static void write_ctrl_data(
         buttons |= g_injected_buttons.load(
             std::memory_order_relaxed);
     }
-    psp_mem_write<uint32_t>(rdram, ptr + 4, buttons);
+    // Keys bound to the analog stick come as kAnalog* bits: they become the stick, never a button.
+    psp_mem_write<uint32_t>(rdram, ptr + 4, buttons & ~kAnalogBits);
 
-    // Analog stick: game controller left stick (128, 128 = centre)
-    const uint16_t analog = g_pad_analog.load(std::memory_order_relaxed);
+    // Analog stick: the gamepad's analog stick (128, 128 = centre), overridden per axis by stick keys
+    const uint16_t analog = analog_from_keys(buttons, g_pad_analog.load(std::memory_order_relaxed));
     psp_mem_write<uint8_t>(rdram, ptr + 8, static_cast<uint8_t>(analog & 0xFF));
     psp_mem_write<uint8_t>(rdram, ptr + 9, static_cast<uint8_t>(analog >> 8));
 

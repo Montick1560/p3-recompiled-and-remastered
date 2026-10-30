@@ -15,7 +15,7 @@ static int failures = 0;
 static const std::map<std::string, int32_t> kKeys = {
     {"up", 1}, {"down", 2}, {"left", 3}, {"right", 4}, {"x", 5}, {"return", 6}, {"z", 7}, {"a", 8},
     {"s", 9}, {"q", 10}, {"w", 11}, {"space", 12}, {"v", 13}, {"tab", 14}, {"k", 15}, {"f1", 16},
-    {"f11", 17}, {"left shift", 18}};
+    {"f11", 17}, {"left shift", 18}, {"j", 19}, {"l", 20}};
 static const std::map<std::string, int> kPads = {
     {"a", 0}, {"b", 1}, {"x", 2}, {"y", 3}, {"back", 4}, {"guide", 5}, {"start", 6},
     {"leftstick", 7}, {"rightstick", 8}, {"leftshoulder", 9}, {"rightshoulder", 10},
@@ -113,8 +113,21 @@ static void reverse_lookup_remap() {
     CHECK(d.pad_name(0x2000).empty(), "dropped duplicate pad button is not returned");
 }
 
+static void stick_actions() {
+    std::vector<std::string> log;
+    CHECK(control_actions().size() == 16 && std::string(control_actions()[12].name) == "analog_up" &&
+              control_actions()[15].mask == kAnalogRight,
+          "four stick actions after select");
+    CHECK(ControlMap::build("", kKey, kPad, &log).key_mask(19) == 0 && log.empty(), "unbound by default");
+    const ControlMap m = ControlMap::build("analog_left=J|;analog_right=L|", kKey, kPad, &log);
+    CHECK(m.key_mask(19) == kAnalogLeft && m.key_mask(20) == kAnalogRight && log.empty(), "bind keys");
+    const ControlMap d = ControlMap::build("analog_up=X|", kKey, kPad, &log);
+    CHECK(d.key_mask(5) == 0x4000 && logged(log, "analog_up: key X already used by cross"), "cross keeps X");
+}
+
 int main() {
     defaults_are_todays_mapping();
+    stick_actions();
     spec_replaces_named_actions_only();
     invalid_entries_fall_back();
     duplicates_keep_the_first_action();

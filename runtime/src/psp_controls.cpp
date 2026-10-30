@@ -1,4 +1,5 @@
 #include "psp_controls.h"
+#include "psp_pad.h"
 
 #include <algorithm>
 #include <cctype>
@@ -51,6 +52,8 @@ const std::vector<ControlAction>& control_actions() {
         {"square", 0x8000, "A", "x"},          {"triangle", 0x1000, "S", "y"},
         {"l", 0x0100, "Q", "leftshoulder"},    {"r", 0x0200, "W", "rightshoulder"},
         {"start", 0x0008, "Space", "start"},   {"select", 0x0001, "V, Tab", "back"},
+        {"analog_up", kAnalogUp, "", ""},      {"analog_down", kAnalogDown, "", ""},
+        {"analog_left", kAnalogLeft, "", ""},  {"analog_right", kAnalogRight, "", ""},
     };
     return a;
 }

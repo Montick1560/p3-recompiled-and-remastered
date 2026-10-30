@@ -11,6 +11,14 @@ uint32_t pad_button_to_psp(int sdl_button);
 uint8_t pad_axis_to_psp(int axis_value, int deadzone);
 bool pad_trigger_pressed(int axis_value);
 
+// Keys (or pad buttons) bound to the analog stick ([controls] analog_up ...) travel in the button words as these
+// bits, which no PSP button uses; analog_from_keys turns them into the analog bytes and the game never sees them.
+constexpr uint32_t kAnalogUp = 0x10000000, kAnalogDown = 0x20000000, kAnalogLeft = 0x40000000,
+                   kAnalogRight = 0x80000000, kAnalogBits = 0xF0000000;
+// pad_analog and the result are packed x | y << 8. Per axis: one direction held gives 0 or 255, both give 128,
+// neither keeps the pad's value.
+uint16_t analog_from_keys(uint32_t buttons, uint16_t pad_analog);
+
 // What a stick does: the PSP analog stick, the D-pad, the four face buttons (up triangle, right circle, down
 // cross, left square), or nothing.
 enum class StickMode : uint8_t { Analog, Dpad, Face, Off };

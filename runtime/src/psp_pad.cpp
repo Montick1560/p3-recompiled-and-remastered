@@ -32,6 +32,15 @@ uint8_t pad_axis_to_psp(int v, int deadzone) {
     return static_cast<uint8_t>(std::clamp(out, 0, 255));
 }
 
+uint16_t analog_from_keys(uint32_t buttons, uint16_t pad_analog) {
+    const auto axis = [&](uint32_t neg, uint32_t pos, uint16_t pad) -> uint16_t {
+        const bool n = buttons & neg, p = buttons & pos;
+        return n && p ? 128 : n ? 0 : p ? 255 : pad;
+    };
+    return static_cast<uint16_t>(axis(kAnalogLeft, kAnalogRight, pad_analog & 0xFF) |
+                                 axis(kAnalogUp, kAnalogDown, pad_analog >> 8) << 8);
+}
+
 bool pad_trigger_pressed(int v) { return v > 32767 / 3; }
 
 void PadSet::set_button(int32_t pad, uint32_t mask, bool down) {

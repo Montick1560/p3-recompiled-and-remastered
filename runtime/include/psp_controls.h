@@ -15,7 +15,8 @@ struct ControlAction {
     const char* pad;   // default SDL GameController button name
 };
 
-// The 12 actions in contract order (the order decides who keeps a duplicate), with today's defaults.
+// The 16 actions in contract order (the order decides who keeps a duplicate), with today's defaults: the 12 PSP
+// buttons, then the four analog stick directions (psp_pad.h kAnalog*, unbound by default).
 const std::vector<ControlAction>& control_actions();
 
 using KeyLookup = std::function<int32_t(const std::string&)>;  // name -> keycode, 0 = unknown
