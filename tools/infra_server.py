@@ -65,6 +65,8 @@ OFFERS_PER_MIN = 4           # direct_offer per connection
 MAX_CHANNEL = 1500           # kind 4 opaque bytes
 MAX_DIRECT_PAIRS = 8         # direct_stats entries
 DIRECT_COLUMNS = ("rtt_p50", "rtt_p95", "loss_x10", "direct_s", "fallbacks")
+# Relay-route numbers a u8 client adds to each direct_stats entry (NULL from u7 clients).
+RELAY_COLUMNS = ("relay_p50", "relay_p95", "relay_s")
 
 # SCE_NP_MATCHING2_ROOM_FLAG_ATTR_* (RPCS3 sceNp2.h)
 FLAG_CLOSED, FLAG_FULL, FLAG_HIDDEN = 0x40000000, 0x20000000, 0x10000000
@@ -159,7 +161,7 @@ CREATE TABLE IF NOT EXISTS rooms(id INTEGER PRIMARY KEY, kind TEXT, owner_sessio
     closed_utc TEXT, max_members INT);
 CREATE TABLE IF NOT EXISTS events(t_utc TEXT, session INT, kind TEXT, room INT, detail TEXT);
 CREATE TABLE IF NOT EXISTS direct_stats(session INT, path TEXT, rtt_p50 INT, rtt_p95 INT, loss_x10 INT,
-    direct_s INT, fallbacks INT);
+    direct_s INT, fallbacks INT, relay_p50 INT, relay_p95 INT, relay_s INT);
 """
 # Relay-link numbers a client reports with link_stats (NULL until then). Added to older files in place.
 LINK_COLUMNS = ("pings", "slow_pings", "rtt_p50", "rtt_p95", "rtt_max", "max_rx_gap_ms")
@@ -188,6 +190,10 @@ class MetricsDb:
             for col in LINK_COLUMNS:
                 if col not in have:
                     c.execute("ALTER TABLE sessions ADD COLUMN %s INT" % col)
+            have = {r[1] for r in c.execute("PRAGMA table_info(direct_stats)")}
+            for col in RELAY_COLUMNS:
+                if col not in have:
+                    c.execute("ALTER TABLE direct_stats ADD COLUMN %s INT" % col)
             now = iso_utc(time.time())
             # A server that died without stopping left these open: closed by this restart.
             n = c.execute("UPDATE sessions SET end_utc=?, end_reason='server_stop' WHERE end_utc IS NULL",
@@ -1105,16 +1111,19 @@ class Server:
         pairs = msg.get("pairs")
         if set(msg) - {"id", "op"} != {"pairs"} or not isinstance(pairs, list) or len(pairs) > MAX_DIRECT_PAIRS:
             raise Err(BAD_REQUEST)
+        # u7 clients send the DIRECT_COLUMNS form, u8 adds RELAY_COLUMNS.
+        forms = ({"path", *DIRECT_COLUMNS}, {"path", *DIRECT_COLUMNS, *RELAY_COLUMNS})
         for p in pairs:
-            if (not isinstance(p, dict) or set(p) != {"path", *DIRECT_COLUMNS}
-                    or p["path"] not in ("direct", "relay")
-                    or not all(type(p[k]) is int and 0 <= p[k] <= LINK_MAX for k in DIRECT_COLUMNS)):
+            if (not isinstance(p, dict) or set(p) not in forms or p["path"] not in ("direct", "relay")
+                    or not all(type(p[k]) is int and 0 <= p[k] <= LINK_MAX for k in set(p) - {"path"})):
                 raise Err(BAD_REQUEST)
+        cols = DIRECT_COLUMNS + RELAY_COLUMNS
         for p in pairs:
-            self.metrics.put("INSERT INTO direct_stats(session, path, %s) VALUES (?, ?, ?, ?, ?, ?, ?)"
-                             % ", ".join(DIRECT_COLUMNS), (conn.sid, p["path"], *(p[k] for k in DIRECT_COLUMNS)))
-            self.log("%s direct_stats: %s p50 %d p95 %d loss %d/1000 %d s fallbacks %d"
-                     % (conn.online_id, p["path"], *(p[k] for k in DIRECT_COLUMNS)))
+            self.metrics.put("INSERT INTO direct_stats(session, path, %s) VALUES (?, ?%s)"
+                             % (", ".join(cols), ", ?" * len(cols)), (conn.sid, p["path"], *(p.get(k) for k in cols)))
+            relay = " relay p50 %d p95 %d %d s" % tuple(p[k] for k in RELAY_COLUMNS) if "relay_s" in p else ""
+            self.log("%s direct_stats: %s p50 %d p95 %d loss %d/1000 %d s fallbacks %d%s"
+                     % (conn.online_id, p["path"], *(p[k] for k in DIRECT_COLUMNS), relay))
         return {}
 
     @staticmethod
@@ -2300,15 +2309,21 @@ def direct_selftest(run, quiet, lines):
     # direct_stats_stored, invalid forms refused
     good = {"path": "direct", "rtt_p50": 40, "rtt_p95": 90, "loss_x10": 12, "direct_s": 300, "fallbacks": 1}
     a.ok("direct_stats", pairs=[good, dict(good, path="relay", direct_s=0)])
-    for bad in ([dict(good, path="udp")], [dict(good, rtt_p50=-1)], [dict(good, rtt_p95=600001)],
+    a.ok("direct_stats", pairs=[dict(good, relay_p50=210, relay_p95=300, relay_s=95)])
+    assert any(line.endswith("relay p50 210 p95 300 95 s") for line in lines[first:]), "relay numbers logged"
+    for bad in ([dict(good, relay_p50=210)], [dict(good, relay_p50=1, relay_p95=1, relay_s=-1)],
+                [dict(good, relay_p50=1, relay_p95="x", relay_s=1)],
+                [dict(good, path="udp")], [dict(good, rtt_p50=-1)], [dict(good, rtt_p95=600001)],
                 [dict(good, loss_x10=1.5)], [dict(good, ip="203.0.113.5")], [good] * 9, good,
                 [dict(good, fallbacks=True)], [{k: v for k, v in good.items() if k != "direct_s"}]):
         ans = a.req("direct_stats", pairs=bad)
         assert not ans["ok"] and ans["error"] == BAD_REQUEST, (bad, ans)
     srv.metrics.flush(3)
     with sqlite3.connect(db) as cx:
-        rows = cx.execute("SELECT path, rtt_p50, rtt_p95, loss_x10, direct_s, fallbacks FROM direct_stats").fetchall()
-        assert rows == [("direct", 40, 90, 12, 300, 1), ("relay", 40, 90, 12, 0, 1)], rows
+        rows = cx.execute("SELECT path, rtt_p50, rtt_p95, loss_x10, direct_s, fallbacks, relay_p50, relay_p95, relay_s"
+                          " FROM direct_stats").fetchall()
+        assert rows == [("direct", 40, 90, 12, 300, 1, None, None, None), ("relay", 40, 90, 12, 0, 1, None, None, None),
+                        ("direct", 40, 90, 12, 300, 1, 210, 300, 95)], rows
         kinds = [r[0] for r in cx.execute("SELECT kind FROM events WHERE kind LIKE 'direct%'")]
         assert "direct_pair" in kinds and "direct_drop" in kinds, kinds
         assert not cx.execute("SELECT COUNT(*) FROM events WHERE kind LIKE 'direct%' AND detail IS NOT NULL"
@@ -2397,6 +2412,8 @@ def link_stats_selftest(run, quiet, lines):
 CREATE TABLE sessions(id INTEGER PRIMARY KEY, label TEXT, staff INT, online_id TEXT, transport TEXT,
     proto INT, start_utc TEXT, end_utc TEXT, end_reason TEXT, bytes_in INT, bytes_out INT, dgrams_dropped INT);
 INSERT INTO sessions(id, label, online_id, end_utc) VALUES (1, 'invitado 01', 'OLD', '2026-10-23T03:00:00Z');
+CREATE TABLE direct_stats(session INT, path TEXT, rtt_p50 INT, rtt_p95 INT, loss_x10 INT, direct_s INT, fallbacks INT);
+INSERT INTO direct_stats VALUES (1, 'direct', 225, 1299, 0, 2580, 0);
 """)
     MetricsDb(db, quiet)
     cols = columns(db)
@@ -2404,6 +2421,7 @@ INSERT INTO sessions(id, label, online_id, end_utc) VALUES (1, 'invitado 01', 'O
     MetricsDb(db, quiet)
     assert columns(db) == cols, "a migrated file is left alone"
     assert q("SELECT online_id, pings, rtt_p95 FROM sessions WHERE id=1") == [("OLD", None, None)]
+    assert q("SELECT rtt_p95, relay_p50, relay_s FROM direct_stats") == [(1299, None, None)], "u7 rows kept"
 
     srv = Server("127.0.0.1", 0, None, logger=quiet, db_path=db)
     th = run(srv)
