@@ -232,6 +232,9 @@ const PspAchievementSource kSources[] = {
 
 }  // namespace
 
+uint32_t p3_save_base(const uint8_t* rdram) { return follow<0x08AABD94u, 0x50u>(rdram); }
+bool p3_save_sane(const uint8_t* rdram, uint32_t base) { return sane(rdram, base); }
+
 const PspAchievementSource* p3_achievement_sources(size_t* n) {
     *n = sizeof kSources / sizeof kSources[0];
     return kSources;

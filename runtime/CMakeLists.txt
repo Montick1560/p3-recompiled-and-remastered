@@ -802,6 +802,16 @@ if(PSPRECOMP_GAME STREQUAL "patapon3")
     target_compile_options(test_p3_achievements PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
     add_test(NAME p3_achievements_tests COMMAND test_p3_achievements)
 
+    # Patapon 3 presence facts (place, class, level, mission name) read from guest RAM.
+    add_executable(test_p3_presence tests/test_p3_presence.cpp
+                   ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime/p3_presence.cpp
+                   ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime/p3_achievements.cpp src/psp_achievements.cpp)
+    target_include_directories(test_p3_presence PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                               ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann
+                               ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime)
+    target_compile_options(test_p3_presence PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+    add_test(NAME p3_presence_tests COMMAND test_p3_presence)
+
     # Patapon 3 help-bar word tables: drawable, inside their rows, fitting at >= 75 %.
     add_executable(test_p3_prompt_labels tests/test_p3_prompt_labels.cpp src/psp_bar_text.cpp
                    src/stb_truetype_impl.cpp ${CMAKE_CURRENT_BINARY_DIR}/bar_fonts_data.cpp  # embedded below
