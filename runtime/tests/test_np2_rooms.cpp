@@ -11,8 +11,10 @@ static int failures = 0;
 
 static constexpr uint64_t kH = 0x1000000773ULL, kV = 0x1000000774ULL;
 
-static nlohmann::json room(uint64_t id, uint16_t me, std::vector<std::pair<uint16_t, uint32_t>> members) {
+static nlohmann::json room(uint64_t id, uint16_t me, std::vector<std::pair<uint16_t, uint32_t>> members,
+                            int max_slot = 4) {
     nlohmann::json r = {{"id", id}, {"me", me}, {"members", nlohmann::json::array()}};
+    if (max_slot >= 0) r["max_slot"] = max_slot;  // negative: the key is omitted
     for (auto [mid, vip] : members) r["members"].push_back({{"member_id", mid}, {"vip", vip}, {"port", 3658}});
     return r;
 }
@@ -77,11 +79,83 @@ static void unknown_room_is_empty() {
     CHECK(rs.ids().size() == 2, "leaving an unknown room changes nothing");
 }
 
+static void party_is_first_room() {
+    np2::Rooms rs;
+    enter_two_rooms(rs);
+    np2::Party pt;
+    CHECK(rs.party(&pt) && pt.room == kH && pt.size == 2 && pt.max == 4, "the party is the first room entered");
+}
+
+static void party_hideout_over_bigger_vs() {
+    np2::Rooms rs;
+    rs.enter(room(kH, 0x10, {{0x10, 1}}), np2::RoomCallback{});
+    rs.enter(room(kV, 0x10, {{0x10, 1}, {0x11, 2}, {0x12, 3}}, 6), np2::RoomCallback{});
+    np2::Party pt;
+    CHECK(rs.party(&pt) && pt.room == kH && pt.size == 1 && pt.max == 4, "a bigger VS room is not the party");
+}
+
+static void party_follows_joins_and_leaves() {
+    np2::Rooms rs;
+    rs.enter(room(kH, 0x10, {{0x10, 1}}), np2::RoomCallback{});
+    np2::Party pt;
+    rs.member_joined(kH, 0x12, np2::Peer{});
+    CHECK(rs.party(&pt) && pt.size == 2, "a join counts, even without a vip");
+    rs.member_joined(kH, 0x13, np2::Peer{});
+    CHECK(rs.party(&pt) && pt.size == 3, "a second join");
+    rs.member_left(kH, 0x12);
+    CHECK(rs.party(&pt) && pt.size == 2, "a leave");
+}
+
+static void party_after_leaving_hideout() {
+    np2::Rooms rs;
+    enter_two_rooms(rs);
+    rs.leave(kH);
+    np2::Party pt;
+    CHECK(rs.party(&pt) && pt.room == kV && pt.size == 1, "the next room becomes the party");
+    rs.leave(kV);
+    CHECK(!rs.party(&pt), "no room, no party");
+    enter_two_rooms(rs);
+    rs.clear();
+    CHECK(!rs.party(&pt), "clear drops the party");
+}
+
+static void party_needs_max_slot() {
+    np2::Rooms rs;
+    np2::Party pt;
+    rs.enter(room(kH, 0x10, {{0x10, 1}}, -1), np2::RoomCallback{});
+    CHECK(!rs.party(&pt), "no max_slot key: no party");
+    rs.enter(room(kH, 0x10, {{0x10, 1}}, 0), np2::RoomCallback{});
+    CHECK(!rs.party(&pt), "max_slot 0: no party");
+}
+
+static void party_clamps_to_max() {
+    np2::Rooms rs;
+    rs.enter(room(kH, 0x10, {{0x10, 1}, {0x11, 2}, {0x12, 3}}, 2), np2::RoomCallback{});
+    np2::Party pt;
+    CHECK(rs.party(&pt) && pt.size == 2 && pt.max == 2, "size is clamped to max_slot");
+}
+
+static void party_reenter_moves_to_back() {
+    np2::Rooms rs;
+    rs.enter(room(kH, 0x10, {{0x10, 1}}), np2::RoomCallback{});
+    rs.enter(room(kV, 0x10, {{0x10, 1}}), np2::RoomCallback{});
+    rs.enter(room(kH, 0x10, {{0x10, 1}}), np2::RoomCallback{});
+    np2::Party pt;
+    CHECK(rs.party(&pt) && pt.room == kV, "entering a room again puts it last");
+}
+
 int main() {
     test_enter_two_rooms();
     leave_keeps_other_rooms();
     member_events_per_room();
     unknown_room_is_empty();
+    party_is_first_room();
+    party_hideout_over_bigger_vs();
+    party_follows_joins_and_leaves();
+    party_after_leaving_hideout();
+    party_needs_max_slot();
+    party_clamps_to_max();
+    party_reenter_moves_to_back();
     if (failures) {
         std::printf("%d failure(s)\n", failures);
         return 1;
