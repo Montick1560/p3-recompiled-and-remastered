@@ -91,7 +91,7 @@ private:
     int fd_ = -1;
     uint16_t port_ = 0;
     std::thread thread_;
-    std::thread::id thread_id_;  // set by start(), read by stop()
+    std::atomic<std::thread::id> thread_id_{};  // the running thread's id, cleared once joined
     std::mutex join_mu_;         // two stop() calls never join at once
     std::atomic<bool> running_{false};
     LinkOptions opt_;

@@ -153,6 +153,7 @@ void Link::stop() {
     if (std::this_thread::get_id() == thread_id_) return;
     std::lock_guard<std::mutex> j(join_mu_);
     if (thread_.joinable()) thread_.join();
+    thread_id_ = std::thread::id();  // a later thread that reuses the id must not skip a join
     std::lock_guard<std::mutex> l(mu_);
     if (fd_ >= 0) psp_sock_close(fd_);
     fd_ = -1;

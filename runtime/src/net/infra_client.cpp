@@ -376,8 +376,10 @@ bool Client::connect(const std::string& online_id, int timeout_ms, const nlohman
     return true;
 }
 
-void Client::disconnect() {
+void Client::disconnect(int wait_ms) {
     std::lock_guard<std::mutex> clock(connect_mu_);
+    if (wait_ms < 0) wait_ms = kLinkStatsWaitMs + kDirectStatsWaitMs;
+    const auto start = Clock::now();
     if (connected_) {
         log_link();
         // The session's numbers go out first; the answer (or a lost connection) ends the wait early.
@@ -396,14 +398,15 @@ void Client::disconnect() {
             kLinkStatsWaitMs);
         if (sent) {
             std::unique_lock<std::mutex> l(w->mu);
-            w->cv.wait_for(l, std::chrono::milliseconds(kLinkStatsWaitMs), [&] { return w->done; });
+            w->cv.wait_for(l, std::chrono::milliseconds(std::min(kLinkStatsWaitMs, wait_ms)), [&] { return w->done; });
         }
         const nlohmann::json pairs = direct_.running() ? direct_.stats_json() : nlohmann::json::array();
         if (!pairs.empty()) {
             auto d = std::make_shared<AnswerWait>();
             request({{"op", "direct_stats"}, {"pairs", pairs}}, [d](const nlohmann::json&) { d->finish(); },
                     kDirectStatsWaitMs);
-            d->wait(kDirectStatsWaitMs);
+            const auto spent = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start).count();
+            d->wait(std::min<int>(kDirectStatsWaitMs, std::max<int>(0, wait_ms - static_cast<int>(spent))));
         }
     }
     lost("disconnect");  // closing the transport also unblocks a writer stuck in a send

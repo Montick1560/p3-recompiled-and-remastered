@@ -116,7 +116,8 @@ public:
     // login_extra's fields are merged into the login request (e.g. "console").
     bool connect(const std::string& online_id, int timeout_ms,
                  const nlohmann::json& login_extra = nlohmann::json::object());
-    void disconnect();
+    // Sends the session's stats, waiting at most wait_ms in all for the answers (-1: the full 1.75 s), then closes.
+    void disconnect(int wait_ms = -1);
     bool connected() const { return connected_; }
 
     // Sends req with a fresh "id". done runs exactly once with the server's

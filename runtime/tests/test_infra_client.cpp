@@ -829,6 +829,23 @@ static void ws_against_real_server() {
     std::printf("ws: vip %08X rtt %d ms\n", c.vip(), c.rtt_ms());
 }
 
+// At quit main() gives disconnect a short budget: a server that never answers holds the quit that long at most,
+// and the stats still go out.
+static void disconnect_budget_bounds_quit() {
+    FakeInfraServer s;
+    s.answer_link_stats = false;
+    s.start();
+    infra::Client::Options o = fast();
+    o.ping_interval_ms = 50;
+    infra::Client c(s.address(), o);
+    CHECK(c.connect("P3A", 2000), "connect");
+    CHECK(wait_until([&] { return c.link_summary().pings >= 3; }, 2000), "pings answered");
+    const auto t = Clock::now();
+    c.disconnect(400);
+    CHECK(ms_since(t) <= 700, "disconnect(400) within 0.7 s with an unanswered link_stats");
+    CHECK(link_frames(s).size() == 1, "the link_stats frame still went out");
+}
+
 int main() {
     parse_address_forms();
     login_sets_vip();
@@ -849,6 +866,7 @@ int main() {
     disconnect_unblocks_writer();
     outbox_reconnect_after_loss();
     link_stats_sent_on_disconnect();
+    disconnect_budget_bounds_quit();
     no_link_stats_after_loss();
     no_link_stats_without_pings();
     link_stats_refreshed_while_connected();

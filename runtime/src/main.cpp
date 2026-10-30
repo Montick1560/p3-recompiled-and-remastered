@@ -610,6 +610,11 @@ int main(int argc, char* argv[]) {
         stage(buf);
     }
     stage("host writes idle");
+    if (infra::client().connected()) {  // the online session's stats reach the server; a short wait keeps quit fast
+        constexpr int kQuitStatsMs = 400;
+        infra::client().disconnect(kQuitStatsMs);
+        stage("online session closed");
+    }
     psp_presence_stop();  // clears the Discord activity
     psp_achievements_stop();  // writes what is still queued
     psp_audio_out_shutdown();
