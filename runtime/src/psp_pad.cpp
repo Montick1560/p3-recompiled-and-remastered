@@ -54,6 +54,23 @@ bool parse_stick_mode(const char* text, StickMode* out) {
     return false;
 }
 
+StickConfig stick_config_from_env(const char* left, const char* right, const char* deadzone_pct,
+                                  std::vector<std::string>* log) {
+    StickConfig c;
+    const auto mode = [&](const char* v, StickMode* m, const char* what) {
+        if (v && !parse_stick_mode(v, m)) log->push_back(std::string("[CONTROLS] ") + what + ": unknown mode \"" + v + "\"");
+    };
+    mode(left, &c.left, "left stick");
+    mode(right, &c.right, "right stick");
+    if (deadzone_pct) {
+        char* end = nullptr;
+        const long pct = std::strtol(deadzone_pct, &end, 10);
+        if (end != deadzone_pct && *end == 0 && pct >= 10 && pct <= 60) c.deadzone = static_cast<int>(pct * 32767 / 100);
+        else log->push_back(std::string("[CONTROLS] stick dead zone: \"") + deadzone_pct + "\" is not 10..60");
+    }
+    return c;
+}
+
 void PadSet::configure(const StickConfig& c) {
     cfg_ = c;
     if (cfg_.left == StickMode::Analog && cfg_.right == StickMode::Analog) cfg_.left = StickMode::Off;

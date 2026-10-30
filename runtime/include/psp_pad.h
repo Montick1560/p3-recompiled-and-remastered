@@ -4,6 +4,8 @@
 // psp_event_loop.cpp; this file has no SDL linkage (SDL enums are ints here).
 #include <cstdint>
 #include <map>
+#include <string>
+#include <vector>
 
 uint32_t pad_button_to_psp(int sdl_button);
 uint8_t pad_axis_to_psp(int axis_value, int deadzone);
@@ -18,6 +20,10 @@ struct StickConfig {
     StickMode left = StickMode::Off, right = StickMode::Analog;
     int deadzone = 8191;  // raw axis units (25 %)
 };
+// PSPRECOMP_PAD_LEFT_STICK / _RIGHT_STICK (a mode name) and PSPRECOMP_PAD_DEADZONE (10..60 %); unset keeps the
+// default, an invalid value keeps it too and adds one "[CONTROLS] ..." line.
+StickConfig stick_config_from_env(const char* left, const char* right, const char* deadzone_pct,
+                                  std::vector<std::string>* log);
 
 // Per-controller state, combined into one PSP pad. Not thread-safe: the
 // event loop owns it and publishes the combined values through atomics.

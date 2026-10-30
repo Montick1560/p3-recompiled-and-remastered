@@ -71,6 +71,9 @@ start_keys = Space
 start_pad = start
 select_keys = V, Tab
 select_pad = back
+left_stick = off            ; PSPRECOMP_PAD_LEFT_STICK: analog | dpad | face | off
+right_stick = analog        ; PSPRECOMP_PAD_RIGHT_STICK: analog | dpad | face | off
+stick_deadzone = 25         ; PSPRECOMP_PAD_DEADZONE: 10..60 (% of the stick's travel)
 ```
 
 `[launcher]` (e.g. `version = dxd-1.1.5b`, the last played release) belongs to the launcher; the
@@ -91,7 +94,12 @@ this section meant anything.
   ...), case-insensitive. **Pad names** are SDL's GameController button names (`a b x y back start
   leftshoulder rightshoulder leftstick rightstick dpup dpdown dpleft dpright misc1 paddle1..4
   touchpad`).
-- **Fixed, never remapped:** the left stick is the analog stick; LT / RT also press L / R; the
+- **Sticks:** `left_stick` / `right_stick` say what each gamepad stick does: `analog` (the PSP analog stick),
+  `dpad` (the D-pad), `face` (up triangle, right circle, down cross, left square: one button at a time, the
+  dominant direction), or `off`. Only one stick can be `analog`; when both are, the left one is off. A stick
+  presses beyond `stick_deadzone` % and releases below 3/4 of it. An invalid value keeps the default and logs
+  `[CONTROLS] ...`; the game logs `[CONTROLS] sticks: left <mode>, right <mode>, dead zone <n>%` at start.
+- **Fixed, never remapped:** LT / RT also press L / R; the
   mouse wheel presses D-pad up / down; F1, F11, Alt+Return and the pad `guide` button are reserved
   (refused as bindings). The back-to-menu combo holds the buttons bound to `select` and `start`.
 - **Validation (game and launcher):** unknown action keys are ignored; an unknown name, a reserved

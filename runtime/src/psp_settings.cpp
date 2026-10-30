@@ -48,6 +48,9 @@ const CoreKey kCore[] = {
     {"online", "mac_file", "PSPRECOMP_ADHOC_MAC_FILE", Kind::Path, "adhoc_mac.txt", 0, 0, nullptr},
     // Inverted: the direct path is on unless false sets PSPRECOMP_INFRA_DIRECT=0 (emitted below).
     {"online", "direct", nullptr, Kind::Bool, "true", 0, 0, nullptr},
+    {"controls", "left_stick", "PSPRECOMP_PAD_LEFT_STICK", Kind::Enum, "off", 0, 0, "analog,dpad,face,off"},
+    {"controls", "right_stick", "PSPRECOMP_PAD_RIGHT_STICK", Kind::Enum, "analog", 0, 0, "analog,dpad,face,off"},
+    {"controls", "stick_deadzone", "PSPRECOMP_PAD_DEADZONE", Kind::Int, "25", 10, 60, nullptr},
 };
 
 std::string lower(std::string s) {

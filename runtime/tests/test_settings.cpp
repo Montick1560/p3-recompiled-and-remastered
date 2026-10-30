@@ -224,6 +224,21 @@ static void direct_key() {
     CHECK(!logged(r, "unknown key"), "direct is a known key");
 }
 
+static void stick_keys() {
+    SettingsResolution r = psp_settings_resolve(
+        "[controls]\nleft_stick = dpad\nright_stick = face\nstick_deadzone = 30\n", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_PAD_LEFT_STICK") == "dpad", "left_stick -> env");
+    CHECK(val(r, "PSPRECOMP_PAD_RIGHT_STICK") == "face", "right_stick -> env");
+    CHECK(val(r, "PSPRECOMP_PAD_DEADZONE") == "30", "stick_deadzone -> env");
+    CHECK(!logged(r, "unknown key"), "stick keys are known");
+    r = psp_settings_resolve("[controls]\nstick_deadzone = 7\n", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_PAD_DEADZONE") == "25", "out of range -> default 25");
+    CHECK(logged(r, "controls.stick_deadzone"), "bad dead zone logged");
+    r = psp_settings_resolve("", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_PAD_LEFT_STICK") == "off" && val(r, "PSPRECOMP_PAD_RIGHT_STICK") == "analog",
+          "old ini without the keys: left off, right analog");
+}
+
 static void discord_key() {
     SettingsResolution r = psp_settings_resolve("[general]\ndiscord = false\n", "", "C:/P", kNoEnv);
     CHECK(val(r, "PSPRECOMP_DISCORD") == "0", "discord false -> 0");
@@ -248,6 +263,7 @@ int main() {
     args_rules();
     launcher_section_is_silent();
     controls_and_skin();
+    stick_keys();
     achievements_keys();
     button_icons_key();
     if (failures == 0) std::printf("test_settings: all passed\n");

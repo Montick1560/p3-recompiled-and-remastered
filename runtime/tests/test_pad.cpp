@@ -3,6 +3,8 @@
 
 #include <SDL_gamecontroller.h>
 #include <cstdio>
+#include <string>
+#include <vector>
 
 static int failures = 0;
 #define CHECK(cond, msg) \
@@ -115,12 +117,24 @@ static void sticks() {
           "parse");
 }
 
+static void config_from_env() {
+    std::vector<std::string> log;
+    StickConfig c = stick_config_from_env(nullptr, nullptr, nullptr, &log);
+    CHECK(c.left == StickMode::Off && c.right == StickMode::Analog && c.deadzone == 8191 && log.empty(),
+          "unset: defaults, no log");
+    c = stick_config_from_env("dpad", "face", "40", &log);
+    CHECK(c.left == StickMode::Dpad && c.right == StickMode::Face && c.deadzone == 13106 && log.empty(), "values");
+    c = stick_config_from_env("bogus", nullptr, "99", &log);
+    CHECK(c.left == StickMode::Off && c.deadzone == 8191 && log.size() == 2, "invalid: defaults + two lines");
+}
+
 int main() {
     buttons();
     deadzone_centres();
     combine_sources();
     unplug_releases();
     sticks();
+    config_from_env();
     if (failures == 0) std::printf("test_pad: all passed\n");
     return failures == 0 ? 0 : 1;
 }

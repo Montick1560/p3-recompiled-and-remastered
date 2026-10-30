@@ -47,6 +47,8 @@ static ControlMap g_controls;
 
 const ControlMap& psp_control_map() { return g_controls; }
 
+static void load_sticks();  // below, next to the pad state
+
 static void load_controls() {
     const char* spec = std::getenv("PSPRECOMP_CONTROLS");
     std::vector<std::string> log;
@@ -56,6 +58,7 @@ static void load_controls() {
         &log);
     for (const std::string& l : log) std::fprintf(stderr, "%s\n", l.c_str());
     std::fprintf(stderr, "[CONTROLS] %s%s\n", spec ? "" : "defaults: ", g_controls.describe().c_str());
+    load_sticks();
 }
 
 // --- Static state (SDL window + GL context, module-private) ---
@@ -111,7 +114,19 @@ static void toggle_fullscreen() {
 // Keyed by joystick instance id (what button/axis/removed events carry).
 static PadSet g_pads;
 static std::map<SDL_JoystickID, SDL_GameController*> g_controllers;
-static constexpr int kStickDeadzone = 8000;
+static constexpr int kStickDeadzone = 8000;  // "the pad was used" (input device), not the sticks' dead zone
+
+static void load_sticks() {
+    static const char* const kName[] = {"analog", "dpad", "face", "off"};
+    std::vector<std::string> log;
+    const StickConfig c = stick_config_from_env(std::getenv("PSPRECOMP_PAD_LEFT_STICK"),
+                                                std::getenv("PSPRECOMP_PAD_RIGHT_STICK"),
+                                                std::getenv("PSPRECOMP_PAD_DEADZONE"), &log);
+    for (const std::string& l : log) std::fprintf(stderr, "%s\n", l.c_str());
+    g_pads.configure(c);
+    std::fprintf(stderr, "[CONTROLS] sticks: left %s, right %s, dead zone %d%%\n", kName[static_cast<int>(c.left)],
+                 kName[static_cast<int>(c.right)], (c.deadzone * 100 + 32766) / 32767);
+}
 
 static void publish_pads() {
     // While the back-to-menu prompt is open the game sees no pad buttons.
