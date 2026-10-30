@@ -167,6 +167,7 @@ set(RUNTIME_SOURCES
     src/psp_achievements.cpp
     src/psp_ach_store.cpp
     src/psp_toast.cpp
+    src/psp_discord.cpp
     src/psp_vblank_hook.cpp
     src/psp_achievements_run.cpp
     src/psp_present.cpp
@@ -780,6 +781,13 @@ add_executable(test_toast tests/test_toast.cpp src/psp_toast.cpp)
 target_include_directories(test_toast PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_toast PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME toast_tests COMMAND test_toast)
+
+# Discord IPC client: pure framing (the pipe itself is checked live).
+add_executable(test_discord_frame tests/test_discord_frame.cpp src/psp_discord.cpp)
+target_include_directories(test_discord_frame PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                           ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann)
+target_compile_options(test_discord_frame PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME discord_frame_tests COMMAND test_discord_frame)
 
 # Achievements in a running game: hook, worker, unlocked.json, toasts (fake source, no GL).
 add_executable(test_achievements_run tests/test_achievements_run.cpp src/psp_achievements_run.cpp
