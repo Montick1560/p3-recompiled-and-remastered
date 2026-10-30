@@ -47,12 +47,38 @@ struct Sent {
 };
 
 // Packets travel `delay` ms; `deliver(to)` false loses them. Every packet ever sent is kept in `log`.
+// The relay leg (kind 4) is off with relay_delay < 0; it carries a node's relay output to the other node.
 struct Sim {
     int64_t now = 0;
     int delay = 20;
+    int relay_delay = -1;
+    bool relay_on = true;  // false: a u7 peer, which drops kind 4
     std::function<bool(const Addr&)> deliver = [](const Addr&) { return true; };
-    std::vector<Sent> flight, log;
+    std::vector<Sent> flight, log, relay_flight, relay_log;
     std::vector<Node*> nodes;
+    std::vector<std::vector<uint8_t>> rel;
+
+    std::vector<std::vector<uint8_t>>* relay_out() { return relay_delay >= 0 ? &rel : nullptr; }
+    void relay(Node& n) {
+        Node* to = nodes[0] == &n ? nodes[1] : nodes[0];
+        for (auto& b : rel) {
+            relay_log.push_back({now, n.from, to->from, b});
+            if (relay_on) relay_flight.push_back({now + relay_delay, n.from, to->from, std::move(b)});
+        }
+        rel.clear();
+    }
+    static std::vector<Sent> take_due(std::vector<Sent>& q, int64_t now) {
+        std::vector<Sent> due;
+        for (auto it = q.begin(); it != q.end();) {
+            if (it->at <= now) {
+                due.push_back(std::move(*it));
+                it = q.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        return due;
+    }
 
     void send(Node& n, std::vector<Out>& outs) {
         for (auto& o : outs) {
@@ -65,19 +91,19 @@ struct Sim {
         now += ms;
         std::vector<Out> outs;
         for (Node* n : nodes) {
-            n->path->tick(now, &outs);
+            n->path->tick(now, &outs, relay_out());
             send(*n, outs);
+            relay(*n);
         }
-        std::vector<Sent> due;
-        for (auto it = flight.begin(); it != flight.end();) {
-            if (it->at <= now) {
-                due.push_back(std::move(*it));
-                it = flight.erase(it);
-            } else {
-                ++it;
+        for (auto& s : take_due(relay_flight, now)) {
+            for (Node* n : nodes) {
+                if (!(n->from == s.to)) continue;
+                Opened app;
+                if (n->path->on_relayed(s.bytes.data(), s.bytes.size(), now, &app, relay_out())) n->got.push_back(app);
+                relay(*n);
             }
         }
-        for (auto& s : due) {
+        for (auto& s : take_due(flight, now)) {
             for (Node* n : nodes) {
                 if (std::find(n->receives.begin(), n->receives.end(), s.to) == n->receives.end()) continue;
                 Opened app;
@@ -221,9 +247,9 @@ int main() {
         make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
         sim.nodes = {&a, &b};
         sim.run_until(300);
-        sim.run_until(10300);
+        while (sim.now < 10300) send_dgram(sim, a, 1), sim.run_until(sim.now + 100);
         const int ka = sim.count(b.keys, kB, Type::Keepalive, 300, 10300);
-        CHECK(ka >= 4 && ka <= 6, "keepalive: about every 2 s while silent");
+        CHECK(ka >= 4 && ka <= 6, "keepalive: about every 2 s, also with traffic (it is the direct sample)");
         CHECK(a.path->state() == PathState::Up, "keepalive: still Up");
         const PathStats ks = a.path->stats();
         CHECK(ks.keepalives >= 4 && ks.keepalive_acks + 1 >= ks.keepalives, "keepalive: counted, and answered");
@@ -341,6 +367,131 @@ int main() {
         std::vector<Out> outs;
         CHECK(!b.path->on_packet(kA, relayed[4].data(), relayed[4].size(), sim.now, &outs, &app),
               "relay: a relayed packet replayed on the direct path is dropped");
+    }
+    {   // faster_relay_wins
+        Sim sim;
+        sim.delay = 150, sim.relay_delay = 20;
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
+        sim.nodes = {&a, &b};
+        sim.run_until(15000);
+        CHECK(a.path->state() == PathState::Up, "faster relay: direct still Up");
+        CHECK(a.path->relay_preferred() && !a.path->use_direct(), "faster relay: relay preferred in 15 s");
+        CHECK(!send_dgram(sim, a, 1), "faster relay: send false, so the datagram goes by relay");
+        CHECK(a.path->stats().relay_p50 >= 40 && a.path->stats().relay_p50 <= 60, "faster relay: relay rtt ~ 2 x 20");
+        sim.delay = 10;
+        while (sim.now < 55000 && !a.path->use_direct()) sim.step(10);
+        CHECK(a.path->use_direct(), "faster relay: back to direct within 40 s once it is faster");
+        CHECK(a.path->stats().relay_ms >= 10000, "faster relay: relay time counted");
+    }
+    {   // close_routes_stay_direct
+        Sim sim;
+        sim.delay = 30, sim.relay_delay = 40;
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
+        sim.nodes = {&a, &b};
+        sim.run_until(500);
+        bool always = true;
+        while (sim.now < 60000) sim.step(10), always = always && a.path->use_direct();
+        CHECK(always, "close routes: direct at every step");
+        CHECK(a.path->relay_score() > 0 && a.path->direct_score() > 0, "close routes: both measured");
+    }
+    {   // hold_between_switches
+        Sim sim;
+        sim.relay_delay = 100;
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
+        sim.nodes = {&a, &b};
+        std::vector<int64_t> changes;
+        bool pref = false;
+        std::mt19937 rng(7);
+        while (sim.now < 120000) {
+            // Each 2 s challenge sees 20 or 300 ms at random: the direct p50 keeps crossing the relay's score.
+            if (sim.now % 2000 == 1000) sim.delay = rng() % 2 ? 10 : 150;
+            sim.step(10);
+            if (a.path->relay_preferred() != pref) pref = !pref, changes.push_back(sim.now);
+        }
+        bool apart = true;
+        for (size_t i = 1; i < changes.size(); i++) apart = apart && changes[i] - changes[i - 1] >= 10000;
+        CHECK(apart, "hold: switches at least 10 s apart");
+        CHECK(changes.size() >= 2, "hold: the scores did cross, so the hold was exercised");
+    }
+    {   // lossy_direct_goes_relay
+        Sim sim;
+        sim.delay = 10, sim.relay_delay = 60;
+        std::mt19937 rng(3);
+        sim.deliver = [&](const Addr& to) { return !(to == kB) || rng() % 10 >= 4; };
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
+        sim.nodes = {&a, &b};
+        sim.run_until(30000);
+        CHECK(a.path->state() == PathState::Up, "lossy: direct Up");
+        CHECK(a.path->relay_preferred(), "lossy: lost challenges count, the relay wins");
+    }
+    {   // old_peer_never_answers
+        Sim sim;
+        sim.relay_delay = 20, sim.relay_on = false;
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
+        sim.nodes = {&a, &b};
+        sim.run_until(60000);
+        CHECK(a.path->use_direct(), "old peer: stays direct");
+        int from_a = 0;
+        for (auto& s : sim.relay_log) from_a += s.from == kA;
+        CHECK(from_a == PathConfig{}.relay_silent_probes, "old peer: relay probing stops after 5 challenges");
+        CHECK(a.path->stats().relay_p50 == -1, "old peer: no relay numbers");
+    }
+    {   // stall_is_not_loss
+        Sim sim;
+        sim.delay = 15, sim.relay_delay = 20;
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
+        sim.nodes = {&a, &b};
+        sim.run_until(20000);
+        const uint64_t k0 = a.path->stats().keepalives;
+        while (a.path->stats().keepalives == k0) sim.step(10);  // both challenges of A are in flight now
+        sim.step(3000);
+        sim.run_until(sim.now + 5000);
+        CHECK(!a.path->relay_preferred(), "stall: no switch");
+        CHECK(a.path->stats().relay_p95 < 1000, "stall: no fake relay loss");
+        CHECK(a.path->direct_score() < 1000 && a.path->relay_score() < 1000, "stall: no fake loss in the scores");
+    }
+    {   // one_lost_challenge_no_switch
+        Sim sim;
+        sim.delay = 15, sim.relay_delay = 40;
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
+        sim.nodes = {&a, &b};
+        sim.run_until(30000);
+        const uint64_t k0 = a.path->stats().keepalives;
+        bool armed = true;
+        int dropped = 0;
+        sim.deliver = [&](const Addr& to) {  // the first A->B packet after A's next keepalive is that keepalive
+            if (!armed || !(to == kB) || a.path->stats().keepalives == k0) return true;
+            armed = false, dropped++;
+            return false;
+        };
+        bool always = true;
+        while (sim.now < 70000) sim.step(10), always = always && a.path->use_direct();
+        CHECK(dropped == 1, "one lost: exactly one keepalive dropped");
+        CHECK(always, "one lost: one lost challenge alone never switches");
+    }
+    {   // relay_answers_capped
+        Sim sim;
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
+        sim.nodes = {&a, &b};
+        sim.run_until(300);
+        std::vector<std::vector<uint8_t>> rel;
+        Opened app;
+        const uint8_t body[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+        for (int i = 0; i < 50; i++) {
+            auto p = seal(b.keys.tx, kPair, (1u << 20) + i, Type::Keepalive, body, sizeof body);
+            CHECK(!a.path->on_relayed(p.data(), p.size(), sim.now + i * 20, &app, &rel), "capped: not app data");
+        }
+        int acks = 0;
+        for (auto& r : rel) acks += open(b.keys.rx, r.data(), r.size(), &app) && app.type == Type::ProbeAck;
+        CHECK(acks == 10 && rel.size() == 10, "capped: 10 relay answers per second");
     }
     {   // close_wipes
         Sim sim;
