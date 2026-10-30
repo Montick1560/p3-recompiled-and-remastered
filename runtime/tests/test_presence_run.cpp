@@ -34,6 +34,26 @@ static void stays_off() {
     psp_presence_stop();  // safe when never started
 }
 
+static const np2::Party kParty{0x1000000773ULL, 2, 4};
+
+static void with_party_adds_size_and_id() {
+    const nlohmann::json a = psp_presence_with_party(
+        {{"details", "Taterazay \xC2\xB7 Nivel 22"}, {"state", "En el escondite"}}, kParty, "es");
+    CHECK(a["party"]["id"] == "room-68719478643", "party id is the room id");
+    CHECK(a["party"]["size"] == nlohmann::json::array({2, 4}), "party size [size, max]");
+    CHECK(a["state"] == "En el escondite", "an existing state is kept");
+}
+
+static void with_party_adds_generic_state() {
+    const nlohmann::json d = {{"details", "En enfrentamiento"}};
+    CHECK(psp_presence_with_party(d, kParty, "es")["state"] == "En l\xC3\xADnea", "generic state, es");
+    CHECK(psp_presence_with_party(d, kParty, "en")["state"] == "Online", "generic state, en");
+}
+
+static void with_party_null_activity() {
+    CHECK(psp_presence_with_party(nullptr, kParty, "es").is_null(), "nothing to show stays null");
+}
+
 static void stop_is_bounded() {
     const auto t0 = std::chrono::steady_clock::now();
     psp_presence_stop();  // never started: nothing to wait for
@@ -44,6 +64,9 @@ static void stop_is_bounded() {
 int main() {
     should_send();
     stays_off();
+    with_party_adds_size_and_id();
+    with_party_adds_generic_state();
+    with_party_null_activity();
     stop_is_bounded();
     if (failures) return 1;
     std::puts("presence_run: OK");

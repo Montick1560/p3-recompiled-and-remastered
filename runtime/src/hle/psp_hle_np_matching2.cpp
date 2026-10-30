@@ -724,6 +724,11 @@ void psp_infra_connect_async() {
 
 bool psp_infra_connecting() { return g_connecting; }
 
+bool psp_np2_party(np2::Party* out) {
+    std::lock_guard<std::mutex> lock(st().mu);
+    return st().started && st().rooms.party(out);
+}
+
 void psp_hle_register_np_matching2() {
     struct { uint32_t nid; const char* name; HleFunc fn; } const t[] = {
         {0x2E61F6E1, "sceNpMatching2Init", hle_sceNpMatching2Init},

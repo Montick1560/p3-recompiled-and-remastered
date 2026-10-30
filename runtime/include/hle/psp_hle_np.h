@@ -3,6 +3,8 @@
 // (infrastructure mode, over tools/infra_server.py).
 #include <string>
 
+#include "net/np2_rooms.h"
+
 void psp_hle_register_np();
 void psp_hle_register_np_matching2();
 
@@ -13,3 +15,5 @@ std::string psp_np_online_id();
 // dialog waits on it); psp_infra_connecting() is true until that attempt ends.
 void psp_infra_connect_async();
 bool psp_infra_connecting();
+// The online party (sceNpMatching2 rooms) under the HLE's lock; false outside a started context.
+bool psp_np2_party(np2::Party* out);

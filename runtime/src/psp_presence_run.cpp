@@ -57,11 +57,17 @@ void run_main(Run* r) {
                 last_try = t;
             }
             if (ipc.connected()) {
-                const nlohmann::json now = g_source.activity(r->rdram, r->lang.c_str(), r->start_unix);
+                nlohmann::json now = g_source.activity(r->rdram, r->lang.c_str(), r->start_unix);
+                np2::Party party;
+                const bool has_party = g_source.party && g_source.party(&party);
+                if (has_party) now = psp_presence_with_party(now, party, r->lang.c_str());
                 if (!now.is_null() && psp_presence_should_send(last, now, t - last_send)) {
                     last_send = t;
                     last = now;  // also after a failure: the same activity is not resent until it changes
-                    if (!ipc.set_activity(now)) {
+                    if (ipc.set_activity(now)) {
+                        if (has_party) std::fprintf(stderr, "[DISCORD] sent (party %d/%d)\n", party.size, party.max);
+                        else std::fprintf(stderr, "[DISCORD] sent (no party)\n");
+                    } else {
                         std::fprintf(stderr, "[DISCORD] lost, retrying in 30 s\n");
                         last_try = t;
                     }
@@ -88,6 +94,13 @@ void run_main(Run* r) {
 }  // namespace
 
 void psp_presence_register(const PspPresenceSource& s) { g_source = s; }
+
+nlohmann::json psp_presence_with_party(nlohmann::json activity, const np2::Party& party, const char* lang) {
+    if (activity.is_null()) return activity;
+    activity["party"] = {{"id", "room-" + std::to_string(party.room)}, {"size", {party.size, party.max}}};
+    if (!activity.contains("state")) activity["state"] = std::string(lang) == "en" ? "Online" : "En l\xC3\xADnea";
+    return activity;
+}
 
 bool psp_presence_should_send(const nlohmann::json& last, const nlohmann::json& now, int64_t ms_since_last) {
     return now != last && ms_since_last >= kPresenceMinSendGapMs;

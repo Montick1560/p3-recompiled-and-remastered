@@ -173,10 +173,10 @@ Read by the runtime binary at start-up or during execution.
   sets `0` itself when `settings.ini` `[general] discord = false` (`runtime/src/psp_settings.cpp`); the launcher only
   writes the ini.
 - **Effect:** Discord Rich Presence over the local IPC pipe (`discord-ipc-0..9`), no SDK: place (title, hideout,
-  mission, versus), hero class and level, and the mission name; never the hero name. One update at most every
+  mission, versus), hero class and level, and the mission name; never the hero name. In an online room it also shows the party size (members of the room / its slots). One update at most every
   15 s and only when it changed. Discord not running is retried every 30 s, silently. `0` logs one
   `[DISCORD] off (PSPRECOMP_DISCORD=0)` line and starts nothing. Other log lines: `[DISCORD] connected`,
-  `[DISCORD] lost, retrying in 30 s`. Windows only (a stub elsewhere).
+  `[DISCORD] sent (party 2/4)` or `[DISCORD] sent (no party)` per update, `[DISCORD] lost, retrying in 30 s`. Windows only (a stub elsewhere).
 - **Set it when:** `0` to keep the game out of the Discord profile.
 
 ### `PSPRECOMP_DISC0`

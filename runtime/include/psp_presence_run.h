@@ -8,12 +8,18 @@
 #include <string>
 
 #include "json.hpp"
+#include "net/np2_rooms.h"
 
 struct PspPresenceSource {
     const char* client_id;  // Discord application id; null or empty keeps the module off
     // Activity object for the current guest state, or null when there is nothing to show yet.
     nlohmann::json (*activity)(const uint8_t* rdram, const char* lang, int64_t start_unix);
+    bool (*party)(np2::Party* out) = nullptr;  // online party, or null when the game has none
 };
+
+// The activity with "party" {id "room-<id>", size [size, max]} and, when it has no "state", the generic one.
+// Unchanged when `activity` is null.
+nlohmann::json psp_presence_with_party(nlohmann::json activity, const np2::Party& party, const char* lang);
 
 void psp_presence_register(const PspPresenceSource&);
 // lang: "en" or "es". Returns false (one [DISCORD] line) when presence stays off.

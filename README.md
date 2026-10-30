@@ -187,7 +187,7 @@ How it got here:
 **Launcher (in progress).** A community launcher for the Patapon 3 port (main menu, options, launch and "back to the menu") is being built in a separate project. The game side reads a versioned `settings.ini` (`--settings`, `--log`; contract in [docs/contracts/settings-v1.md](docs/contracts/settings-v1.md)), and F1 or Select+Start held 1 s asks "Back to the menu?" and quits with exit code 10. Design: [docs/superpowers/specs/2026-10-17-launcher-part1-design.md](docs/superpowers/specs/2026-10-17-launcher-part1-design.md).
 
 Discord Rich Presence (Windows): the Patapon 3 build shows the place (hideout, mission, versus), the hero's class and level
-in the player's Discord profile over the local IPC pipe, never the hero name. `settings.ini` `[general] discord = false`
+in the player's Discord profile over the local IPC pipe, never the hero name; in an online room it also shows the party size. `settings.ini` `[general] discord = false`
 (or `PSPRECOMP_DISCORD=0`) turns it off; see [docs/ENV_FLAGS.md](docs/ENV_FLAGS.md).
 
 **PC button prompts.** The Patapon 3 help bars, the mission command list and the drum-hit words
