@@ -65,8 +65,8 @@ LinkOptions loopback_opts() {
 struct Pair {
     Link a, b;
     Got ga, gb;
-    bool start(uint8_t key_a_seed = 1, uint8_t key_b_seed = 1) {
-        if (!a.start(loopback_opts(), into(ga), nullptr) || !b.start(loopback_opts(), into(gb), nullptr))
+    bool start(uint8_t key_a_seed = 1, uint8_t key_b_seed = 1, RelayFn ra = nullptr, RelayFn rb = nullptr) {
+        if (!a.start(loopback_opts(), into(ga), std::move(ra)) || !b.start(loopback_opts(), into(gb), std::move(rb)))
             return false;
         uint8_t ka[32], kb[32];
         for (int i = 0; i < 32; i++) ka[i] = static_cast<uint8_t>(key_a_seed + i), kb[i] = static_cast<uint8_t>(key_b_seed + i);
@@ -171,6 +171,30 @@ int main() {
         CHECK(wait_until([&] { return p.a.is_up(kVipB); }, 1000), "impair: Up");
         p.a.set_impair("loss=100");
         CHECK(wait_until([&] { return !p.a.is_up(kVipB); }, 5000), "impair: loss 100 -> not Up within 5 s");
+        p.a.stop();
+        p.b.stop();
+    }
+    {   // relay_route: each Link's kind 4 output goes straight to the other's on_relayed
+        Pair p;
+        auto to = [](Link& l, uint32_t from) {
+            return [&l, from](uint32_t, std::vector<uint8_t> sealed) { l.on_relayed(from, sealed.data(), sealed.size()); };
+        };
+        CHECK(p.start(1, 1, to(p.b, kVipA), to(p.a, kVipB)), "relay route: start");
+        CHECK(wait_until([&] { return p.a.is_up(kVipB) && p.b.is_up(kVipA); }, 1000), "relay route: Up");
+        p.a.set_impair("delay=200");
+        const uint8_t x[3] = {1, 2, 3};
+        CHECK(wait_until([&] { return !p.a.send_dgram(kVipB, 1, 2, x, 3) && p.a.is_up(kVipB); }, 20000),
+              "relay route: a slower direct path sends by relay within 20 s, still Up");
+        CHECK(wait_until([&] { return p.a.stats_json()[0].value("relay_s", 0) >= 1; }, 3000), "relay route: relay_s");
+        const auto e = p.a.stats_json()[0];
+        bool keys = e.size() == 9;
+        for (const char* k : {"path", "rtt_p50", "rtt_p95", "loss_x10", "direct_s", "fallbacks", "relay_p50",
+                              "relay_p95", "relay_s"})
+            keys = keys && e.contains(k);
+        CHECK(keys, "relay route: the path kind and the 8 numbers");
+        p.a.set_impair("");
+        CHECK(wait_until([&] { return p.a.send_dgram(kVipB, 1, 2, x, 3); }, 40000),
+              "relay route: direct again within 40 s once it is faster");
         p.a.stop();
         p.b.stop();
     }

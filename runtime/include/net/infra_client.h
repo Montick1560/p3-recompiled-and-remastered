@@ -153,7 +153,7 @@ private:
     };
     struct Outgoing {
         std::vector<uint8_t> bytes;
-        uint8_t kind = 0;  // kKindDatagram / kKindStream (stats rows), 0 for JSON
+        uint8_t kind = 0;  // kKindDatagram / kKindStream (stats rows) / kKindChannel, 0 for JSON
         uint32_t vip = 0;
         uint16_t src = 0, dst = 0;
     };

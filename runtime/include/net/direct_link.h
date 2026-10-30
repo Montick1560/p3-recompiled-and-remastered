@@ -63,6 +63,7 @@ private:
     struct Peer {
         std::unique_ptr<Path> path;
         PathState logged = PathState::Probing;
+        bool logged_relay = false;  // the route choice last logged
     };
     struct Delivery {
         uint32_t vip;
@@ -83,6 +84,8 @@ private:
     void receive(int64_t now, std::vector<Delivery>* got);  // under mu_
     void log_state(uint32_t vip, Peer& p);
     void deliver_all(std::vector<Delivery>& got);
+    using Relayed = std::vector<std::pair<uint32_t, std::vector<uint8_t>>>;  // (peer vip, sealed) for relay_
+    void relay_all(Relayed& rel);
     nlohmann::json entry(const PathStats& s) const;
 
     int fd_ = -1;

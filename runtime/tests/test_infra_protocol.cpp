@@ -95,6 +95,21 @@ static void stream_roundtrip() {
     CHECK(r.bad_frames() == 0, "kind 3 is not a bad frame");
 }
 
+static void channel_roundtrip() {
+    std::vector<uint8_t> sealed(40);
+    for (size_t i = 0; i < sealed.size(); i++) sealed[i] = static_cast<uint8_t>(i * 7);
+    const auto wire = infra::encode_channel(0x0A500002, sealed.data(), sealed.size());
+    CHECK(wire.size() == 5 + 4 + 40 && wire[4] == infra::kKindChannel, "channel = kind 4, u32 vip | sealed");
+    infra::FrameReader r;
+    r.feed(wire.data(), wire.size());
+    infra::Frame f;
+    CHECK(r.next(&f) && f.kind == infra::kKindChannel && f.vip == 0x0A500002 && f.payload == sealed,
+          "channel frame back");
+    const uint8_t short4[8] = {4, 0, 0, 0, infra::kKindChannel, 1, 2, 3};  // 3 body bytes
+    r.feed(short4, sizeof short4);
+    CHECK(!r.next(&f) && r.bad_frames() == 1, "a kind 4 frame under 4 body bytes is bad");
+}
+
 static void hex_roundtrip() {
     const uint8_t b[3] = {0x00, 0xff, 0x10};
     CHECK(infra::to_hex(b, 3) == "00ff10", "to_hex");
@@ -108,6 +123,7 @@ int main() {
     datagram_roundtrip();
     two_frames_one_feed();
     bad_json_skipped();
+    channel_roundtrip();
     oversized_frame_poisons();
     stream_roundtrip();
     hex_roundtrip();

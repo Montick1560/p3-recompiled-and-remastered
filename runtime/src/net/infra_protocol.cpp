@@ -45,6 +45,16 @@ std::vector<uint8_t> encode_datagram(uint32_t vip, uint16_t dst_port, uint16_t s
     return encode_segment(kKindDatagram, vip, dst_port, src_port, data, len);
 }
 
+std::vector<uint8_t> encode_channel(uint32_t vip, const uint8_t* sealed, size_t len) {
+    std::vector<uint8_t> v;
+    v.reserve(9 + len);
+    put_u32(v, static_cast<uint32_t>(1 + 4 + len));
+    v.push_back(kKindChannel);
+    put_u32(v, vip);
+    if (len) v.insert(v.end(), sealed, sealed + len);
+    return v;
+}
+
 void FrameReader::feed(const uint8_t* data, size_t len) {
     if (broken_ || !len) return;
     if (pos_ && pos_ == buf_.size()) {
@@ -81,6 +91,9 @@ bool FrameReader::next(Frame* out) {
             f.dst_port = get_u16(body + 4);
             f.src_port = get_u16(body + 6);
             f.payload.assign(body + 8, body + blen);
+        } else if (kind == kKindChannel && blen >= 4) {
+            f.vip = get_u32(body);
+            f.payload.assign(body + 4, body + blen);
         } else {
             bad_++;
             continue;

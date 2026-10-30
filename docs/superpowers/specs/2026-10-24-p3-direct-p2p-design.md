@@ -247,11 +247,23 @@ happens when one side leaves the room or disconnects, when the game is closing t
 3. While direct:
    - `send_datagram` / stream sends to that vip go direct;
    - the relay connection stays open for requests and as the fallback;
-   - there is a KEEPALIVE when the pair has been silent for 2 s;
+   - there is a KEEPALIVE every 2 s (since u8; before, only when the pair had been silent for 2 s);
    - RTT is measured from PROBE/ACK timing.
 4. Path dead (nothing authenticated for 4 s): back to relay, with the stream channel continuing over kind 4.
    Retry punching after 30 s, at most 3 attempts per pairing.
 5. On `direct_drop`, or at the end of the session: send CLOSE, wipe keys and addresses, send `direct_stats`.
+
+**Route choice (30 Oct 2026, u8).** Up is not enough: the datagrams go direct only while the direct path is not
+slower than the relay (Parlop↔Sani measured direct p50 225–298 / p95 1299 ms against a relay of ~210 ms). While Up,
+every 2 s each side sends the same 8-byte challenge on both routes: the KEEPALIVE on the direct path (now always, not
+only when silent) and a sealed KEEPALIVE as kind 4, answered by a kind 4 PROBE_ACK; the relay sample is a real round
+trip on the game's own TCP/WSS link. A challenge unanswered for 1 s counts as 1000 ms. The score of a route is
+p50 + p95 of its last 20 samples (rank rounded down, so one lost challenge alone never decides). With fewer than 5
+samples on either route the route is direct; the relay is chosen when its score plus 40 ms is at most the direct
+score, a tie stays direct, and a switch holds 10 s. A u7 peer never answers kind 4: after 5 unanswered relay
+challenges the pairing stops asking and stays direct, as before. Relay answers are capped at 10 per second per
+pairing. `direct_stats` entries add `relay_p50`, `relay_p95` and `relay_s` (seconds Up with the relay preferred);
+the server accepts both the 5- and 8-number forms, so it must be deployed before the u8 client.
 
 ## Phases
 

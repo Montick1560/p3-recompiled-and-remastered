@@ -679,6 +679,10 @@ void Client::reader() {
                 on_json(f.json);
                 continue;
             }
+            if (f.kind == kKindChannel) {
+                direct_.on_relayed(f.vip, f.payload.data(), f.payload.size());
+                continue;
+            }
             const int64_t rx_us = stats::now_us();
             stats::record(stats::Ev::Rx, f.kind, f.vip, f.src_port, f.dst_port, f.payload.data(), f.payload.size());
             if (f.kind != kKindStream) {
@@ -758,7 +762,9 @@ void Client::start_direct(const nlohmann::json& answer) {
                          stats::record(stats::Ev::Rx, kKindDatagram, vip, src, dst, p.data(), p.size());
                          enqueue_datagram(Datagram{vip, src, dst, std::move(p), stats::now_us()});
                      },
-                     nullptr)) {
+                     [this](uint32_t vip, std::vector<uint8_t> sealed) {  // kind 4: queued like a stream, never dropped
+                         send(Outgoing{encode_channel(vip, sealed.data(), sealed.size()), kKindChannel, vip, 0, 0});
+                     })) {
         direct_reason_ = "no randomness";
         return;
     }

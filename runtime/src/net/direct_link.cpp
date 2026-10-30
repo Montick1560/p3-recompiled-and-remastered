@@ -238,14 +238,18 @@ bool Link::send_dgram(uint32_t peer_vip, uint16_t dst, uint16_t src, const uint8
 
 void Link::on_relayed(uint32_t peer_vip, const uint8_t* bytes, size_t len) {
     std::vector<Delivery> got;
+    Relayed rel;
     {
         std::lock_guard<std::mutex> l(mu_);
         auto it = peers_.find(peer_vip);
         Opened o;
-        if (it != peers_.end() && it->second.path->on_relayed(bytes, len, now_ms(), &o))
+        std::vector<std::vector<uint8_t>> answers;
+        if (it != peers_.end() && it->second.path->on_relayed(bytes, len, now_ms(), &o, relay_ ? &answers : nullptr))
             got.push_back({peer_vip, std::move(o)});
+        for (auto& a : answers) rel.push_back({peer_vip, std::move(a)});
     }
     deliver_all(got);
+    relay_all(rel);
 }
 
 void Link::set_impair(const std::string& text) {
@@ -262,7 +266,10 @@ nlohmann::json Link::entry(const PathStats& s) const {
             {"rtt_p95", std::max(0, s.rtt_p95)},
             {"loss_x10", s.keepalives ? static_cast<int>(lost * 1000 / s.keepalives) : 0},
             {"direct_s", static_cast<int>(std::min<int64_t>(s.up_ms / 1000, 600000))},
-            {"fallbacks", s.fallbacks}};
+            {"fallbacks", s.fallbacks},
+            {"relay_p50", std::max(0, s.relay_p50)},
+            {"relay_p95", std::max(0, s.relay_p95)},
+            {"relay_s", static_cast<int>(std::min<int64_t>(s.relay_ms / 1000, 600000))}};
 }
 
 nlohmann::json Link::stats_json() const {
@@ -301,6 +308,13 @@ void Link::transmit(std::vector<Out>& outs, int64_t now) {
 
 void Link::log_state(uint32_t vip, Peer& p) {
     const PathState s = p.path->state();
+    if (p.path->relay_preferred() != p.logged_relay) {
+        p.logged_relay = !p.logged_relay;
+        if (s == PathState::Up)  // leaving Up also ends the preference: "back to relay" below says it
+            std::fprintf(stderr, "[INFRA] direct: vip %08x %s (direct %d, relay %d)\n", static_cast<unsigned>(vip),
+                         p.logged_relay ? "relay is faster" : "direct is faster again", p.path->direct_score(),
+                         p.path->relay_score());
+    }
     if (s == p.logged) return;
     if (s == PathState::Up) {
         std::fprintf(stderr, "[INFRA] direct: vip %08x up (%s, rtt %d ms)\n", static_cast<unsigned>(vip),
@@ -367,8 +381,15 @@ void Link::deliver_all(std::vector<Delivery>& got) {
     got.clear();
 }
 
+void Link::relay_all(Relayed& rel) {
+    for (auto& [vip, sealed] : rel) relay_(vip, std::move(sealed));
+    rel.clear();
+}
+
 void Link::run() {
     std::vector<Delivery> got;
+    Relayed rel;
+    std::vector<std::vector<uint8_t>> challenges;
     while (running_) {
         fd_set rd;
         FD_ZERO(&rd);
@@ -382,9 +403,11 @@ void Link::run() {
             receive(now, &got);
             for (auto& [vip, p] : peers_) {
                 std::vector<Out> outs;
-                p.path->tick(now, &outs);
+                p.path->tick(now, &outs, relay_ ? &challenges : nullptr);
                 transmit(outs, now);
                 log_state(vip, p);
+                for (auto& c : challenges) rel.push_back({vip, std::move(c)});
+                challenges.clear();
             }
             while (!held_.empty() && held_.front().due <= now) {
                 sendto_now(held_.front().out);
@@ -392,6 +415,7 @@ void Link::run() {
             }
         }
         deliver_all(got);  // outside mu_: the client takes its own lock
+        relay_all(rel);
     }
 }
 
