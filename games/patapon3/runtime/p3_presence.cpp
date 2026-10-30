@@ -32,7 +32,7 @@ P3Place placeOf(const uint8_t* ram) {
     return P3Place::Unknown;
 }
 
-// Mission name chain; empty when a link leaves user RAM. Stops at the first 0 or 64 units.
+// Mission name chain; empty when a link leaves user RAM or the name is not 0-terminated within 64 units.
 std::u16string missionName(const uint8_t* ram) {
     const uint32_t obj = rd32(ram, kGlobal);
     if (!inUserRam(obj)) return u"";
@@ -42,10 +42,10 @@ std::u16string missionName(const uint8_t* ram) {
     for (int i = 0; i < kMissionMaxUnits; i++) {
         const uint32_t a = holder + kMissionName + 2 * i;
         const char16_t u = static_cast<char16_t>(ram[a & kMask] | (ram[(a + 1) & kMask] << 8));
-        if (!u) break;
+        if (!u) return s;
         s += u;
     }
-    return s;
+    return u"";  // no terminator within the cap: not a name
 }
 
 // Companion's is_pvp_mission keywords, matched on the lower-cased name (ASCII + Latin-1 letters).
@@ -55,7 +55,7 @@ bool looksVersus(const std::u16string& name) {
         if (c >= u'A' && c <= u'Z') c += 32;
         else if (c >= 0xC0 && c <= 0xDE && c != 0xD7) c += 32;
     }
-    for (const char16_t* k : {u"vs", u"contra", u"enfrentamiento", u"duelo", u"batalla", u"pvp", u"enf. m\u00faltiple", u"["})
+    for (const char16_t* k : {u"vs", u"pvp", u"enf. m\u00faltiple", u"enfrentamiento", u"["})
         if (l.find(k) != std::u16string::npos) return true;
     return false;
 }

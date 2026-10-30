@@ -73,12 +73,37 @@ static void versus_hides_nothing_but_flags() {
 }
 
 static void bad_pointers_are_empty() {
+    const P3Presence empty{P3Place::Mission, 0, 0, false, u""};
     Ram r;
     r.overlay("OL_Mission.bin");
     r.hero(99, 22);
     r.mission(u"x");
-    r.w32(kGlobalObj + 0x78, 0x12345678u);
-    CHECK(p3_presence_read(r.m.data()) == (P3Presence{P3Place::Mission, 0, 0, false, u""}), "bad pointers");
+    r.w32(kGlobalObj + 0x78, 0x12345678u);  // masks to 0x02345678: a name placed there must not be read
+    r.u16((0x12345678u & 0x07FFFFFFu) + 0x9FC + 0x100, u"stray");
+    CHECK(p3_presence_read(r.m.data()) == empty, "holder pointer outside user RAM");
+
+    Ram o;  // the game object pointer itself outside user RAM, with a complete chain behind it
+    o.overlay("OL_Mission.bin");
+    o.w32(kGlobal, 0x12345678u);
+    o.w32(0x12345678u + 0x78, kHolder);
+    o.u16(kHolder + 0x9FC + 0x100, u"stray");
+    CHECK(p3_presence_read(o.m.data()) == empty, "object pointer outside user RAM");
+}
+
+static void unterminated_name_is_empty() {
+    Ram r;
+    r.overlay("OL_Mission.bin");
+    r.mission(std::u16string(70, u'a').c_str());
+    CHECK(p3_presence_read(r.m.data()).mission.empty(), "70 units without terminator");
+    r.mission(std::u16string(63, u'a').c_str());
+    CHECK(p3_presence_read(r.m.data()).mission.size() == 63, "63 units fit");
+}
+
+static void ordinary_battle_is_not_versus() {
+    Ram r;
+    r.overlay("OL_Azito.bin");
+    r.mission(u"Batalla contra el dragón");
+    CHECK(!p3_presence_read(r.m.data()).versus, "Batalla contra ... is a normal mission");
 }
 
 int main() {
@@ -87,6 +112,8 @@ int main() {
     mission_name();
     versus_hides_nothing_but_flags();
     bad_pointers_are_empty();
+    unterminated_name_is_empty();
+    ordinary_battle_is_not_versus();
     if (failures) return 1;
     std::puts("p3_presence: OK");
     return 0;
