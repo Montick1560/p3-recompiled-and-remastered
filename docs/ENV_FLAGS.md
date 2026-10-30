@@ -166,6 +166,18 @@ Read by the runtime binary at start-up or during execution.
 - **Default:** on (when `PSPRECOMP_ACHIEVEMENTS_FILE` is set).
 - **Effect:** kill switch: no catalogue, no worker, no vblank hook.
 
+### `PSPRECOMP_DISCORD`
+- **Read in:** `runtime/src/psp_presence_run.cpp` (`psp_presence_start`), once at startup.
+- **Type:** env, `0` = off.
+- **Default:** unset: on (when the game module registers a Discord application id; Patapon 3 does). The launcher
+  sets `0` when `settings.ini` `[general] discord = false`.
+- **Effect:** Discord Rich Presence over the local IPC pipe (`discord-ipc-0..9`), no SDK: place (title, hideout,
+  mission, versus), hero class and level, and the mission name; never the hero name. One update at most every
+  15 s and only when it changed. Discord not running is retried every 30 s, silently. `0` logs one
+  `[DISCORD] off (PSPRECOMP_DISCORD=0)` line and starts nothing. Other log lines: `[DISCORD] connected`,
+  `[DISCORD] lost, retrying in 30 s`. Windows only (a stub elsewhere).
+- **Set it when:** `0` to keep the game out of the Discord profile.
+
 ### `PSPRECOMP_DISC0`
 - **Read in:** `runtime/src/main.cpp`
 - **Type:** env (path string).

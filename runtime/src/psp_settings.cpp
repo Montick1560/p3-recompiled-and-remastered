@@ -28,6 +28,8 @@ struct CoreKey {
 // display.hd_textures.
 const CoreKey kCore[] = {
     {"general", "language", "PSPRECOMP_UI_LANG", Kind::Enum, "es", 0, 0, "es,en"},
+    // Inverted: Discord presence is on unless false sets PSPRECOMP_DISCORD=0 (emitted below).
+    {"general", "discord", nullptr, Kind::Bool, "true", 0, 0, nullptr},
     {"paths", "disc0", "PSPRECOMP_DISC0", Kind::Path, "disc0", 0, 0, nullptr},
     {"paths", "savedata", "PSPRECOMP_SAVEDATA", Kind::Path, "savedata", 0, 0, nullptr},
     {"display", "fullscreen", "PSPRECOMP_FULLSCREEN", Kind::Bool, "true", 0, 0, nullptr},
@@ -150,6 +152,7 @@ SettingsResolution psp_settings_resolve(const std::string& ini_text, const std::
                                        k.values ? k.values : "", &r.log);
         if (std::string(k.key) == "hd_textures") { hd = v; continue; }
         if (std::string(k.key) == "texture_pack") { pack = v; continue; }
+        if (std::string(k.key) == "discord") { emit("PSPRECOMP_DISCORD", "0", v == "true"); continue; }
         if (std::string(k.key) == "direct") { emit("PSPRECOMP_INFRA_DIRECT", "0", v == "true"); continue; }
         if (v.empty() && k.def[0] == '\0') continue;  // window_mode: absent or invalid sets nothing
         if (k.kind == Kind::Bool) emit(k.env, "1", v != "true");

@@ -69,6 +69,7 @@ static void defaults_fixture() {
     CHECK(val(r, "PSPRECOMP_ADHOC_NICK") == "Patapon", "nick");
     CHECK(val(r, "PSPRECOMP_ADHOC_RELAY") == "<unset>", "relay off -> unset");
     CHECK(val(r, "PSPRECOMP_INFRA_DIRECT") == "<unset>", "direct on (default) -> unset");
+    CHECK(val(r, "PSPRECOMP_DISCORD") == "<unset>", "discord on (default) -> unset");
     CHECK(val(r, "PSPRECOMP_ADHOC_PORT_OFFSET") == "10000", "port offset");
     CHECK(val(r, "PSPRECOMP_ADHOC_MAC_FILE") == "C:/Juegos/Patapon 3/adhoc_mac.txt", "mac file");
 }
@@ -223,9 +224,21 @@ static void direct_key() {
     CHECK(!logged(r, "unknown key"), "direct is a known key");
 }
 
+static void discord_key() {
+    SettingsResolution r = psp_settings_resolve("[general]\ndiscord = false\n", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_DISCORD") == "0", "discord false -> 0");
+    r = psp_settings_resolve("[general]\ndiscord = true\n", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_DISCORD") == "<unset>", "discord true -> unset");
+    r = psp_settings_resolve("[general]\ndiscord = maybe\n", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_DISCORD") == "<unset>", "invalid -> default (on)");
+    CHECK(logged(r, "general.discord"), "invalid discord logged");
+    CHECK(!logged(r, "unknown key"), "discord is a known key");
+}
+
 int main() {
     window_mode_key();
     direct_key();
+    discord_key();
     parser_rules();
     defaults_fixture();
     custom_fixture();

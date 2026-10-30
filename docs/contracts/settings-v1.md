@@ -15,6 +15,7 @@ version = 1
 
 [general]
 language = es               ; launcher (and in-game dialog) language: es | en
+discord = true             ; PSPRECOMP_DISCORD=0 when false (Discord Rich Presence)
 
 [paths]
 disc0 = disc0               ; PSPRECOMP_DISC0
@@ -149,6 +150,7 @@ invalid values, future version) that both the C++ and the Rust readers are teste
 | key | env | type | rule |
 |---|---|---|---|
 | general.language | PSPRECOMP_UI_LANG | enum es,en | copied |
+| general.discord | PSPRECOMP_DISCORD | bool | false -> `0`, true -> unset (the runtime default is on) |
 | paths.disc0 | PSPRECOMP_DISC0 | path | resolved against the ini folder |
 | paths.savedata | PSPRECOMP_SAVEDATA | path | resolved |
 | display.fullscreen | PSPRECOMP_FULLSCREEN | bool | true -> `1`, false -> unset (legacy switch, see window_mode) |
