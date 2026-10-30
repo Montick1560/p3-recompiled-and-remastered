@@ -823,8 +823,9 @@ class Server:
         except (OSError, ValueError, KeyError, TypeError) as e:
             self.log("beta config not read (%s: %s): keeping the previous one" % (type(e).__name__, e))
 
-    def beta_login(self, conn, msg):
-        """Raises the refusal for a login the beta config does not allow; fills the session's code fields."""
+    def beta_login(self, conn, msg, stale):
+        """Raises the refusal for a login the beta config does not allow; fills the session's code fields. The stale
+        session this login replaces does not count against the limits."""
         label = "?"
         try:
             proto = msg.get("proto")
@@ -841,7 +842,7 @@ class Server:
             if not e["staff"]:
                 if not self.beta_open():
                     raise Err(BETA_CLOSED)
-                live = [c for c in self.conns.values() if c.session and not c.closed]
+                live = [c for c in self.conns.values() if c.session and not c.closed and c is not stale]
                 if sha is not None and sum(1 for c in live if c.code_sha == sha) >= self.beta["max_per_code"]:
                     raise Err(INVITE_IN_USE)
                 if sum(1 for c in live if not c.staff and c.addr_key == conn.addr_key) >= self.max_per_addr:
@@ -1130,12 +1131,12 @@ class Server:
         console = msg.get("console")
         if console is not None and (not isinstance(console, str) or not CONSOLE_ID.fullmatch(console)):
             raise Err(BAD_REQUEST)
-        if self.beta is not None:
-            self.beta_login(conn, msg)
         # A game that froze or crashed is back within seconds, but its old session lives until the idle timeout and
         # keeps its console id in the room (DUPLICATE_CONSOLE): the same player from the same address replaces it.
         stale = next((c for c in self.conns.values() if c.session and not c.closed and c.online_id == oid
                       and console and c.console == console and conn.addr_key and c.addr_key == conn.addr_key), None)
+        if self.beta is not None:
+            self.beta_login(conn, msg, stale)
         if stale is not None:
             self.drop(stale, "replaced")
         proto = msg.get("proto")
@@ -2534,11 +2535,15 @@ def beta_selftest(run, quiet, lines):
     c1.close()
     deadline = time.monotonic() + 3
     while True:
-        a = c3.req("login", online_id="P3B3", proto=2, invite="P3-AAAA-BBBB")
+        a = c3.req("login", online_id="P3B3", proto=2, invite="P3-AAAA-BBBB", console="02000000004a")
         if a["ok"]:
             break
         assert time.monotonic() < deadline, "the code is free again after one session closes: %r" % a
         time.sleep(0.05)
+    # The code is at its limit and P3B3's game froze: its re-login does not count the stale session and replaces it.
+    c4 = TestClient(srv.port)
+    c4.ok("login", online_id="P3B3", proto=2, invite="P3-AAAA-BBBB", console="02000000004a")
+    assert c3.is_closed(), "stale session of a code at its limit replaced"
     # disable_live: the open session stays, the next login is refused.
     k2 = TestClient(srv.port)
     k2.ok("login", online_id="P3K2", proto=2, invite="P3-K7QF-2MXD")
@@ -2567,7 +2572,7 @@ def beta_selftest(run, quiet, lines):
     refused(v, INVITE_DISABLED, online_id="P3K4", proto=2, invite="P3-K7QF-2MXD")
     assert any("beta config" in l and "keeping" in l for l in lines), "broken config logged"
     write_cfg(bump=6)
-    for cl in (k2, k3, v, c3):
+    for cl in (k2, k3, v, c3, c4):
         cl.close()
     time.sleep(0.3)
     # two_codes_one_address: 4 sessions of two codes from 127.0.0.1 (c2 + three more), the 5th is refused.
