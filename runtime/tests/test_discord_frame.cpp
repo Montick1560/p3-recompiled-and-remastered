@@ -32,14 +32,14 @@ static void unframe_needs_whole_frame() {
 }
 
 static void unframe_rejects_huge_length() {
-    std::string f(8, '\0');
-    f[0] = 1;
-    f[4] = 0x01; f[6] = 0x01;  // length 0x00010001 = 64 KiB + 1
-    f += std::string(70000, ' ');
     uint32_t op;
     nlohmann::json out;
     size_t used;
-    CHECK(!discord_unframe(f, &op, &out, &used), "length over 64 KiB");
+    // Valid JSON in both, so only the 64 KiB cap can reject the first one (body = string + 2 quotes).
+    const std::string over = discord_frame(1, std::string(65535, 'a'));   // body 65537 bytes
+    const std::string exact = discord_frame(1, std::string(65534, 'a'));  // body 65536 bytes
+    CHECK(!discord_unframe(over, &op, &out, &used), "length over 64 KiB");
+    CHECK(discord_unframe(exact, &op, &out, &used) && used == 8 + 65536, "length exactly 64 KiB is accepted");
 }
 
 int main() {

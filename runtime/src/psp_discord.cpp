@@ -53,23 +53,25 @@ bool DiscordIpc::write_frame(uint32_t op, const nlohmann::json& body) {
     return pipe_ && WriteFile(pipe_, f.data(), static_cast<DWORD>(f.size()), &n, nullptr) && n == f.size();
 }
 
-// Polls the pipe (PeekNamedPipe) so a silent Discord costs at most timeout_ms. Answers PING itself.
+// Polls the pipe (PeekNamedPipe) with one overall deadline, so neither silence nor a flood of data
+// can hold the caller past timeout_ms. Answers PING itself.
 bool DiscordIpc::read_frame(uint32_t* op, nlohmann::json* body, int timeout_ms) {
     std::string buf;
-    for (int waited = 0;;) {
+    const ULONGLONG deadline = GetTickCount64() + static_cast<ULONGLONG>(timeout_ms);
+    for (;;) {
         size_t used = 0;
         if (discord_unframe(buf, op, body, &used)) {
             buf.erase(0, used);
             if (*op == kPing) { write_frame(kPong, *body); continue; }
             return *op != kClose;
         }
-        if (buf.size() >= 8 && get32(buf, 4) > kMaxBody) return false;  // never going to complete
+        // Over the cap, or complete but not JSON: it will never become a frame.
+        if (buf.size() >= 8 && (get32(buf, 4) > kMaxBody || buf.size() - 8 >= get32(buf, 4))) return false;
+        if (GetTickCount64() >= deadline) return false;
         DWORD avail = 0;
         if (!PeekNamedPipe(pipe_, nullptr, 0, nullptr, &avail, nullptr)) return false;  // broken pipe
         if (avail == 0) {
-            if (waited >= timeout_ms) return false;
             Sleep(10);
-            waited += 10;
             continue;
         }
         char tmp[4096];
