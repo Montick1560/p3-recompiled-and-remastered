@@ -451,11 +451,11 @@ int main() {
         Node a, b;
         make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
         sim.nodes = {&a, &b};
-        sim.run_until(60000);
+        sim.run_until(180000);
         CHECK(a.path->use_direct(), "old peer: stays direct");
         int from_a = 0;
         for (auto& s : sim.relay_log) from_a += s.from == kA;
-        CHECK(from_a == PathConfig{}.relay_silent_probes, "old peer: relay probing stops after 5 challenges");
+        CHECK(from_a == 7, "old peer: 5 relay challenges, then one retry a minute (about 70 s and 130 s)");
         CHECK(a.path->stats().relay_p50 == -1, "old peer: no relay numbers");
     }
     {   // stall_is_not_loss
@@ -565,6 +565,64 @@ int main() {
         bool apart = true;
         for (size_t i = 1; i < n.size(); i++) apart = apart && n[i] - n[i - 1] >= PathConfig{}.route_hold_ms;
         CHECK(apart, "flaps: switches to the relay at least route_hold_ms apart");
+    }
+    {   // relay_stats_match_score: the reported relay numbers are the ones the route choice used
+        Sim sim;
+        sim.delay = 15, sim.relay_delay = 20;
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
+        sim.nodes = {&a, &b};
+        auto challenge = [&](const Sent& s) {  // A's relay challenges, not its answers to B's
+            Opened o;
+            return s.from == kA && open(b.keys.rx, s.bytes.data(), s.bytes.size(), &o) && o.type == Type::Keepalive;
+        };
+        auto challenges = [&] { return std::count_if(sim.relay_log.begin(), sim.relay_log.end(), challenge); };
+        while (challenges() < 3) sim.step(10);
+        sim.relay_flight.erase(std::remove_if(sim.relay_flight.begin(), sim.relay_flight.end(), challenge),
+                               sim.relay_flight.end());  // A's 3rd relay challenge is lost
+        while (challenges() < 6) sim.step(10);
+        sim.run_until(sim.now + 100);
+        const PathStats st = a.path->stats();  // 6 samples: 5 at 40 ms, 1 lost
+        CHECK(st.relay_p95 == 40, "relay stats: p95 rounded down like the score, not the lost 1000");
+        CHECK(a.path->relay_score() == st.relay_p50 + st.relay_p95, "relay stats: score = reported p50 + p95");
+    }
+    {   // relay_probing_retries: a relay that was silent at first is measured once it answers
+        Sim sim;
+        sim.relay_delay = 20, sim.relay_on = false;
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
+        sim.nodes = {&a, &b};
+        sim.run_until(15000);
+        sim.relay_on = true;
+        while (sim.now < 15000 + PathConfig{}.relay_retry_ms + 5000 && a.path->stats().relay_p50 < 0) sim.step(10);
+        CHECK(a.path->stats().relay_p50 >= 0, "relay retry: measured again within relay_retry_ms");
+        const size_t before = sim.relay_log.size();
+        sim.run_until(sim.now + 10000);
+        int later = 0;
+        for (size_t i = before; i < sim.relay_log.size(); i++) later += sim.relay_log[i].from == kA;
+        CHECK(later >= 4, "relay retry: then a relay challenge every 2 s again");
+    }
+    {   // relay_answers_capped_sliding: no 20 answers across a second boundary
+        Sim sim;
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
+        sim.nodes = {&a, &b};
+        sim.run_until(300);
+        std::vector<std::vector<uint8_t>> rel;
+        Opened app;
+        const uint8_t body[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+        uint64_t ctr = 1u << 21;
+        size_t late = 0;
+        auto challenge = [&](int64_t at) {
+            const size_t n = rel.size();
+            auto p = seal(b.keys.tx, kPair, ctr++, Type::Keepalive, body, sizeof body);
+            a.path->on_relayed(p.data(), p.size(), at, &app, &rel);
+            if (at >= sim.now + 990) late += rel.size() - n;
+        };
+        challenge(sim.now);
+        for (int i = 0; i < 9; i++) challenge(sim.now + 990 + i);
+        for (int i = 0; i < 10; i++) challenge(sim.now + 1000 + i);
+        CHECK(late <= 10 && late >= 9, "capped: at most 10 answers in any second");
     }
     {   // close_wipes
         Sim sim;

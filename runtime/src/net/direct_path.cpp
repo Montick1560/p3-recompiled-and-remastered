@@ -17,8 +17,18 @@ uint64_t le64(const uint8_t* p) {
     return v;
 }
 
-// Nearest rank of a sorted, non-empty sample set (rounded up), as stats() reports it.
+// Nearest rank of a sorted, non-empty sample set (rounded up): rtt_p50/p95, as u7 reported them.
 int nearest_rank(const std::vector<int>& v, size_t pct) { return v[(v.size() * pct + 99) / 100 - 1]; }
+
+// Rank rounded down, for the route samples: the slowest sample alone never sets the p95 (with 20 samples both
+// roundings give the 19th).
+int rank_down(const std::vector<int>& v, size_t pct) { return v[std::max<size_t>(v.size() * pct / 100, 1) - 1]; }
+
+std::vector<int> sorted(const std::deque<int>& win) {
+    std::vector<int> v(win.begin(), win.end());
+    std::sort(v.begin(), v.end());
+    return v;
+}
 
 }  // namespace
 
@@ -94,18 +104,15 @@ void Path::sample(std::deque<int>* win, int ms) {
 
 int Path::score(const std::deque<int>& win) const {
     if (static_cast<int>(win.size()) < cfg_.route_min_samples) return -1;
-    std::vector<int> v(win.begin(), win.end());
-    std::sort(v.begin(), v.end());
-    // Rank rounded down: the slowest sample alone never sets the p95 (with 20 samples both roundings give the 19th).
-    auto at = [&](size_t pct) { return v[std::max<size_t>(v.size() * pct / 100, 1) - 1]; };
-    return at(50) + at(95);
+    const std::vector<int> v = sorted(win);
+    return rank_down(v, 50) + rank_down(v, 95);
 }
 
 void Path::catch_up(int64_t now_ms) {
     const int64_t gap = now_ms - last_tick_;
     if (gap > kStallMs) {  // resume as if no time passed: no burst, and the peer is not declared dead for our stall
         for (int64_t* t : {&attempt_start_, &next_probe_, &last_rx_, &last_tx_, &up_since_, &last_ka_, &last_switch_,
-                          &last_return_})
+                          &last_return_, &last_relay_probe_})
             *t += gap;
         if (retry_at_ >= 0) retry_at_ += gap;
         for (Challenge& c : challenges_) c.sent_ms += gap;
@@ -135,8 +142,11 @@ void Path::tick(int64_t now_ms, std::vector<Out>* out, std::vector<std::vector<u
     if (state_ == PathState::Up && now_ms - last_ka_ >= cfg_.keepalive_ms) {  // the same challenge on both routes
         last_ka_ = now_ms;
         send_challenge(path_, Type::Keepalive, now_ms, out);
-        if (relay && (relay_answered_ || relay_sent_ < cfg_.relay_silent_probes))
+        if (relay && (relay_answered_ || relay_sent_ < cfg_.relay_silent_probes ||
+                      now_ms - last_relay_probe_ >= cfg_.relay_retry_ms)) {
+            last_relay_probe_ = now_ms;
             send_challenge(Addr{}, Type::Keepalive, now_ms, out, relay);
+        }
     }
     if (state_ == PathState::Up) {
         const int d = direct_score(), r = relay_score();
@@ -303,9 +313,9 @@ bool Path::on_relayed(const uint8_t* pkt, size_t len, int64_t now_ms, Opened* ap
         return false;
     }
     if (o.type == Type::Keepalive && o.body.size() == 8 && relay) {  // the peer measures the relay route
-        if (now_ms - relay_ack_window_ >= 1000) relay_ack_window_ = now_ms, relay_acks_ = 0;
-        if (relay_acks_ >= cfg_.max_relay_answers_per_s) return false;
-        relay_acks_++;
+        while (!relay_answers_.empty() && now_ms - relay_answers_.front() >= 1000) relay_answers_.pop_front();
+        if (static_cast<int>(relay_answers_.size()) >= cfg_.max_relay_answers_per_s) return false;
+        relay_answers_.push_back(now_ms);
         std::vector<uint8_t> p = seal_next(Type::ProbeAck, o.body.data(), 8);
         if (!p.empty()) relay->push_back(std::move(p));
         return false;
@@ -360,11 +370,10 @@ PathStats Path::stats() const {
         s.rtt_p50 = nearest_rank(v, 50);
         s.rtt_p95 = nearest_rank(v, 95);
     }
-    if (!relay_win_.empty()) {
-        std::vector<int> v(relay_win_.begin(), relay_win_.end());
-        std::sort(v.begin(), v.end());
-        s.relay_p50 = nearest_rank(v, 50);
-        s.relay_p95 = nearest_rank(v, 95);
+    if (!relay_win_.empty()) {  // as the route choice ranks them
+        const std::vector<int> v = sorted(relay_win_);
+        s.relay_p50 = rank_down(v, 50);
+        s.relay_p95 = rank_down(v, 95);
     }
     return s;
 }

@@ -65,7 +65,9 @@ OFFERS_PER_MIN = 4           # direct_offer per connection
 MAX_CHANNEL = 1500           # kind 4 opaque bytes
 MAX_DIRECT_PAIRS = 8         # direct_stats entries
 DIRECT_COLUMNS = ("rtt_p50", "rtt_p95", "loss_x10", "direct_s", "fallbacks")
-# Relay-route numbers a u8 client adds to each direct_stats entry (NULL from u7 clients).
+# Relay-route numbers a u8 client adds to each direct_stats entry (NULL from u7 clients): p50/p95 (rank rounded
+# down, as the route choice uses them) of the last 20 relay samples of the last direct Up span, and the seconds the
+# direct path was Up with the relay preferred.
 RELAY_COLUMNS = ("relay_p50", "relay_p95", "relay_s")
 
 # SCE_NP_MATCHING2_ROOM_FLAG_ATTR_* (RPCS3 sceNp2.h)

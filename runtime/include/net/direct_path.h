@@ -40,6 +40,7 @@ struct PathConfig {
     // route_flap_ms doubles the next hold on the relay, up to route_max_hold_ms (direct slow only under our load).
     int route_flap_ms = 60000, route_max_hold_ms = 300000;
     int relay_silent_probes = 5;  // a u7 peer never answers kind 4: stop relay challenges after these many
+    int relay_retry_ms = 60000;   // ... and then send one every relay_retry_ms, in case the relay was only down
     int max_relay_answers_per_s = 10;
 };
 enum class PathState { Probing, Up, Down, Closed };
@@ -137,9 +138,9 @@ private:
     std::deque<int> direct_win_, relay_win_;  // route samples of this Up span
     bool relay_preferred_ = false, relay_answered_ = false;
     int relay_sent_ = 0;
-    int64_t last_ka_ = 0, last_switch_ = INT64_MIN / 2, last_return_ = INT64_MIN / 2, relay_ack_window_ = INT64_MIN / 2;
+    int64_t last_ka_ = 0, last_switch_ = INT64_MIN / 2, last_return_ = INT64_MIN / 2, last_relay_probe_ = INT64_MIN / 2;
     int flaps_ = 0;  // returns to direct undone within route_flap_ms, in a row
-    int relay_acks_ = 0;
+    std::deque<int64_t> relay_answers_;  // our relay answers in the last second
     PathStats stats_;
 };
 
