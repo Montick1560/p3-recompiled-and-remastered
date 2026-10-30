@@ -276,7 +276,9 @@ hot-pluggable; keyboard and pads can be used together). The mapping is configura
 
 Each stick can be the analog stick, the D-pad, the four face buttons (one at a time, the dominant direction) or
 nothing, and the dead zone is 10-60 %: `[controls] left_stick`, `right_stick`, `stick_deadzone`
-(`docs/contracts/settings-v1.md`).
+(`docs/contracts/settings-v1.md`). Keys or pad buttons can also be the analog stick: the actions `analog_up`,
+`analog_down`, `analog_left`, `analog_right` (unbound by default) push it to the edge, per axis over the pad's
+stick.
 
 Text entry: when the game opens the PSP on-screen keyboard (`sceUtilityOsk`), a Steam Deck style
 keyboard is drawn over the game. Type with the PC keyboard (accents and IME work) or with a gamepad
