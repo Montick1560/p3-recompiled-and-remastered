@@ -116,8 +116,9 @@ public:
     // login_extra's fields are merged into the login request (e.g. "console").
     bool connect(const std::string& online_id, int timeout_ms,
                  const nlohmann::json& login_extra = nlohmann::json::object());
-    // Sends the session's stats, waiting at most wait_ms in all for the answers (-1: the full 1.75 s), then closes.
-    void disconnect(int wait_ms = -1);
+    void disconnect();  // sends the session's stats (waits 1 s at most for the answers), then closes
+    // At quit: the same with a wait of wait_ms, but false at once when a connect or disconnect is running.
+    bool disconnect_if_idle(int wait_ms);
     bool connected() const { return connected_; }
 
     // Sends req with a fresh "id". done runs exactly once with the server's
@@ -165,6 +166,7 @@ private:
     void send(Outgoing o);
     void on_json(const nlohmann::json& j);
     void lost(const char* why);
+    void close_session(int wait_ms);  // under connect_mu_
     // Sends this session's link numbers as link_stats; false (done not run) when there is
     // nothing to report or the server refused the op before (an old server).
     bool report_link(Done done, int timeout_ms);

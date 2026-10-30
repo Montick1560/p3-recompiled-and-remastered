@@ -26,8 +26,7 @@ namespace {
 using Clock = std::chrono::steady_clock;
 
 constexpr uint32_t kErrBadRequest = 0x80550D01;  // tools/infra_server.py BAD_REQUEST (unknown op on old servers)
-constexpr int kLinkStatsWaitMs = 750;  // disconnect waits this long at most for the link_stats answer
-constexpr int kDirectStatsWaitMs = 1000;
+constexpr int kStatsWaitMs = 1000;  // disconnect waits this long at most for the stats answers
 constexpr int kGatherMs = 2000;  // STUN gathering before direct_offer
 
 std::atomic<bool> g_lab_hooks{false};
@@ -58,9 +57,10 @@ struct AnswerWait {
         done = true;
         cv.notify_all();
     }
-    void wait(int ms) {
+    void wait(int ms) { wait_until(Clock::now() + std::chrono::milliseconds(ms)); }
+    void wait_until(Clock::time_point t) {
         std::unique_lock<std::mutex> l(mu);
-        cv.wait_for(l, std::chrono::milliseconds(ms), [&] { return done; });
+        cv.wait_until(l, t, [&] { return done; });
     }
 };
 
@@ -376,38 +376,32 @@ bool Client::connect(const std::string& online_id, int timeout_ms, const nlohman
     return true;
 }
 
-void Client::disconnect(int wait_ms) {
+void Client::disconnect() {
     std::lock_guard<std::mutex> clock(connect_mu_);
-    if (wait_ms < 0) wait_ms = kLinkStatsWaitMs + kDirectStatsWaitMs;
-    const auto start = Clock::now();
+    close_session(kStatsWaitMs);
+}
+
+bool Client::disconnect_if_idle(int wait_ms) {
+    std::unique_lock<std::mutex> clock(connect_mu_, std::try_to_lock);
+    if (!clock) return false;  // a connect or disconnect is running (the NP worker): not waited for
+    close_session(wait_ms);
+    return true;
+}
+
+void Client::close_session(int wait_ms) {
     if (connected_) {
         log_link();
-        // The session's numbers go out first; the answer (or a lost connection) ends the wait early.
-        struct Wait {
-            std::mutex mu;
-            std::condition_variable cv;
-            bool done = false;
-        };
-        auto w = std::make_shared<Wait>();
-        const bool sent = report_link(
-            [w](const nlohmann::json&) {
-                std::lock_guard<std::mutex> l(w->mu);
-                w->done = true;
-                w->cv.notify_all();
-            },
-            kLinkStatsWaitMs);
-        if (sent) {
-            std::unique_lock<std::mutex> l(w->mu);
-            w->cv.wait_for(l, std::chrono::milliseconds(std::min(kLinkStatsWaitMs, wait_ms)), [&] { return w->done; });
-        }
+        // Both of the session's numbers go out first, then one wait for both answers (or a lost connection), so a
+        // slow server costs one round trip, not two.
+        const auto until = Clock::now() + std::chrono::milliseconds(wait_ms);
+        auto link = std::make_shared<AnswerWait>(), direct = std::make_shared<AnswerWait>();
+        const bool link_sent = report_link([link](const nlohmann::json&) { link->finish(); }, wait_ms);
         const nlohmann::json pairs = direct_.running() ? direct_.stats_json() : nlohmann::json::array();
-        if (!pairs.empty()) {
-            auto d = std::make_shared<AnswerWait>();
-            request({{"op", "direct_stats"}, {"pairs", pairs}}, [d](const nlohmann::json&) { d->finish(); },
-                    kDirectStatsWaitMs);
-            const auto spent = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start).count();
-            d->wait(std::min<int>(kDirectStatsWaitMs, std::max<int>(0, wait_ms - static_cast<int>(spent))));
-        }
+        if (!pairs.empty())
+            request({{"op", "direct_stats"}, {"pairs", pairs}}, [direct](const nlohmann::json&) { direct->finish(); },
+                    wait_ms);
+        if (link_sent) link->wait_until(until);
+        if (!pairs.empty()) direct->wait_until(until);
     }
     lost("disconnect");  // closing the transport also unblocks a writer stuck in a send
     if (reader_.joinable()) reader_.join();

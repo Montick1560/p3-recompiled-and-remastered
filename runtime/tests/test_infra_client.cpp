@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -841,9 +842,64 @@ static void disconnect_budget_bounds_quit() {
     CHECK(c.connect("P3A", 2000), "connect");
     CHECK(wait_until([&] { return c.link_summary().pings >= 3; }, 2000), "pings answered");
     const auto t = Clock::now();
-    c.disconnect(400);
-    CHECK(ms_since(t) <= 700, "disconnect(400) within 0.7 s with an unanswered link_stats");
+    CHECK(c.disconnect_if_idle(400), "an idle session is closed");
+    CHECK(ms_since(t) <= 700, "disconnect_if_idle(400) within 0.7 s with an unanswered link_stats");
     CHECK(link_frames(s).size() == 1, "the link_stats frame still went out");
+}
+
+// A connect or disconnect already running (the NP worker) is not waited for at quit.
+static void quit_skips_a_busy_session() {
+    FakeInfraServer s;
+    s.answer_link_stats = false;
+    s.start();
+    infra::Client::Options o = fast();
+    o.ping_interval_ms = 50;
+    infra::Client c(s.address(), o);
+    CHECK(c.connect("P3A", 2000), "connect");
+    CHECK(wait_until([&] { return c.link_summary().pings >= 3; }, 2000), "pings answered");
+    std::thread worker([&] { c.disconnect(); });  // waits for the unanswered link_stats
+    sleep_ms(100);
+    const auto t = Clock::now();
+    CHECK(!c.disconnect_if_idle(400), "busy: not closed at quit");
+    CHECK(ms_since(t) <= 100, "busy: quit does not wait for the running disconnect");
+    worker.join();
+}
+
+// Both of the session's numbers go out before any wait: a slow server still gets direct_stats within the budget.
+static void quit_sends_both_stats_at_once() {
+    set_env("PSPRECOMP_INFRA_DIRECT_TEST_HOSTS", "127.0.0.1");
+    FakeInfraServer s;
+    s.answer_link_stats = false;  // never answered: the wait for it must not hold back direct_stats
+    s.login_extra = {{"direct", {{"on", true}, {"stun", nlohmann::json::array()}}}};
+    std::mutex mu;
+    bool offered = false;
+    std::map<std::string, Clock::time_point> at;
+    s.on_frame = [&](FakeInfraServer& srv, const infra::Frame& f) {
+        if (f.kind != infra::kKindJson) return;
+        const std::string op = f.json.value("op", "");
+        std::lock_guard<std::mutex> l(mu);
+        at.emplace(op, Clock::now());
+        if (op == "direct_offer") offered = true, srv.send_json({{"id", f.json["id"]}, {"ok", true}});
+    };
+    s.start();
+    infra::Client::Options o = fast();
+    o.lab_hooks = true;
+    o.ping_interval_ms = 50;
+    infra::Client c(s.address(), o);
+    CHECK(c.connect("P3A", 2000, infra::login_fields("02000000000a", nullptr)), "connect");
+    CHECK(wait_until([&] { std::lock_guard<std::mutex> l(mu); return offered; }, 3000), "offer sent");
+    CHECK(wait_until([&] { return c.link_summary().pings >= 3; }, 2000), "pings answered");
+    s.send_json({{"ev", "direct_peer"}, {"vip", 0x0A500009}, {"pair", 77}, {"key", std::string(64, 'a')},
+                 {"cands", nlohmann::json::array()}});
+    sleep_ms(200);
+    CHECK(c.disconnect_if_idle(400), "closed");
+    sleep_ms(100);
+    std::lock_guard<std::mutex> l(mu);
+    CHECK(at.count("link_stats") && at.count("direct_stats"), "both stats frames reached the server");
+    if (at.count("link_stats") && at.count("direct_stats"))
+        CHECK(at["direct_stats"] - at["link_stats"] < std::chrono::milliseconds(150),
+              "direct_stats did not wait for the link_stats answer");
+    set_env("PSPRECOMP_INFRA_DIRECT_TEST_HOSTS", nullptr);
 }
 
 int main() {
@@ -867,6 +923,8 @@ int main() {
     outbox_reconnect_after_loss();
     link_stats_sent_on_disconnect();
     disconnect_budget_bounds_quit();
+    quit_skips_a_busy_session();
+    quit_sends_both_stats_at_once();
     no_link_stats_after_loss();
     no_link_stats_without_pings();
     link_stats_refreshed_while_connected();

@@ -612,8 +612,8 @@ int main(int argc, char* argv[]) {
     stage("host writes idle");
     if (infra::client().connected()) {  // the online session's stats reach the server; a short wait keeps quit fast
         constexpr int kQuitStatsMs = 400;
-        infra::client().disconnect(kQuitStatsMs);
-        stage("online session closed");
+        stage(infra::client().disconnect_if_idle(kQuitStatsMs) ? "online session closed"
+                                                               : "online session busy (not waited for)");
     }
     psp_presence_stop();  // clears the Discord activity
     psp_achievements_stop();  // writes what is still queued
