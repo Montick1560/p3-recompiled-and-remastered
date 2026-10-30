@@ -524,6 +524,48 @@ int main() {
         for (auto& r : rel) acks += open(b.keys.rx, r.data(), r.size(), &app) && app.type == Type::ProbeAck;
         CHECK(acks == 10 && rel.size() == 10, "capped: 10 relay answers per second");
     }
+    {   // band_keeps_relay: direct a little slower than the relay does not take the datagrams back
+        Sim sim;  // 5 ms steps: RTTs in 10 ms units, so a score can sit inside the 40 ms band
+        sim.delay = 150, sim.relay_delay = 40;
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
+        sim.nodes = {&a, &b};
+        while (sim.now < 15000 && !a.path->relay_preferred()) sim.step(5);
+        CHECK(a.path->relay_preferred(), "band: relay preferred within 15 s");
+        sim.delay = 45;  // direct score 180, relay 160
+        bool kept = true;
+        for (const int64_t t = sim.now + 100000; sim.now < t;) sim.step(5), kept = kept && a.path->relay_preferred();
+        CHECK(kept, "band: a direct path 20 ms slower never takes the datagrams back");
+        sim.delay = 30;  // direct score 120
+        for (const int64_t t = sim.now + 50000; sim.now < t && !a.path->use_direct();) sim.step(5);
+        CHECK(a.path->use_direct(), "band: direct is back once it is not slower");
+    }
+    {   // load_flaps_back_off: direct is slow only while it carries A's datagrams (bufferbloat)
+        auto to_relay = [](const PathConfig& cfg) {
+            Sim sim;
+            sim.relay_delay = 40;
+            Node a, b;
+            make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}}, cfg);
+            sim.nodes = {&a, &b};
+            std::vector<int64_t> at;
+            int64_t last_direct = INT64_MIN / 2;
+            bool pref = false;
+            while (sim.now < 600000) {
+                sim.delay = sim.now - last_direct < 2000 ? 150 : 10;
+                if (sim.now % 50 == 0 && send_dgram(sim, a, 1)) last_direct = sim.now;
+                sim.step(10);
+                if (a.path->relay_preferred() != pref && (pref = !pref)) at.push_back(sim.now);
+            }
+            return at;
+        };
+        PathConfig no_backoff;
+        no_backoff.route_flap_ms = 0;
+        const std::vector<int64_t> n = to_relay(PathConfig{}), n0 = to_relay(no_backoff);
+        CHECK(n.size() >= 2 && n.size() * 2 <= n0.size(), "flaps: repeated flips back off");
+        bool apart = true;
+        for (size_t i = 1; i < n.size(); i++) apart = apart && n[i] - n[i - 1] >= PathConfig{}.route_hold_ms;
+        CHECK(apart, "flaps: switches to the relay at least route_hold_ms apart");
+    }
     {   // close_wipes
         Sim sim;
         Node a, b;

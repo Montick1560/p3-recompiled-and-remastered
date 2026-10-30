@@ -36,6 +36,9 @@ struct PathConfig {
     // Route choice: both routes get a challenge every keepalive_ms while Up; score = p50 + p95 of the last
     // route_window samples, an unanswered challenge counts lost_ms. The relay wins by route_margin_ms or more.
     int route_window = 20, route_min_samples = 5, route_margin_ms = 40, route_hold_ms = 10000, lost_ms = 1000;
+    // Back to direct only when it is not slower (a band of route_margin_ms). A return to direct undone within
+    // route_flap_ms doubles the next hold on the relay, up to route_max_hold_ms (direct slow only under our load).
+    int route_flap_ms = 60000, route_max_hold_ms = 300000;
     int relay_silent_probes = 5;  // a u7 peer never answers kind 4: stop relay challenges after these many
     int max_relay_answers_per_s = 10;
 };
@@ -134,7 +137,8 @@ private:
     std::deque<int> direct_win_, relay_win_;  // route samples of this Up span
     bool relay_preferred_ = false, relay_answered_ = false;
     int relay_sent_ = 0;
-    int64_t last_ka_ = 0, last_switch_ = INT64_MIN / 2, relay_ack_window_ = INT64_MIN / 2;
+    int64_t last_ka_ = 0, last_switch_ = INT64_MIN / 2, last_return_ = INT64_MIN / 2, relay_ack_window_ = INT64_MIN / 2;
+    int flaps_ = 0;  // returns to direct undone within route_flap_ms, in a row
     int relay_acks_ = 0;
     PathStats stats_;
 };

@@ -260,7 +260,9 @@ only when silent) and a sealed KEEPALIVE as kind 4, answered by a kind 4 PROBE_A
 trip on the game's own TCP/WSS link. A challenge unanswered for 1 s counts as 1000 ms. The score of a route is
 p50 + p95 of its last 20 samples (rank rounded down, so one lost challenge alone never decides). With fewer than 5
 samples on either route the route is direct; the relay is chosen when its score plus 40 ms is at most the direct
-score, a tie stays direct, and a switch holds 10 s. A u7 peer never answers kind 4: after 5 unanswered relay
+score, and direct comes back when its score is at most the relay's (a tie stays or returns to direct). A switch holds
+10 s; each return to direct undone within 60 s doubles the next hold on the relay, up to 5 min (a direct path that is
+slow only while it carries the game's traffic). A u7 peer never answers kind 4: after 5 unanswered relay
 challenges the pairing stops asking and stays direct, as before. Relay answers are capped at 10 per second per
 pairing. `direct_stats` entries add `relay_p50`, `relay_p95` and `relay_s` (seconds Up with the relay preferred);
 the server accepts both the 5- and 8-number forms, so it must be deployed before the u8 client.

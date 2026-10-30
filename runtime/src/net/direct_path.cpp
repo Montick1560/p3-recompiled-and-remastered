@@ -104,7 +104,8 @@ int Path::score(const std::deque<int>& win) const {
 void Path::catch_up(int64_t now_ms) {
     const int64_t gap = now_ms - last_tick_;
     if (gap > kStallMs) {  // resume as if no time passed: no burst, and the peer is not declared dead for our stall
-        for (int64_t* t : {&attempt_start_, &next_probe_, &last_rx_, &last_tx_, &up_since_, &last_ka_, &last_switch_})
+        for (int64_t* t : {&attempt_start_, &next_probe_, &last_rx_, &last_tx_, &up_since_, &last_ka_, &last_switch_,
+                          &last_return_})
             *t += gap;
         if (retry_at_ >= 0) retry_at_ += gap;
         for (Challenge& c : challenges_) c.sent_ms += gap;
@@ -139,10 +140,19 @@ void Path::tick(int64_t now_ms, std::vector<Out>* out, std::vector<std::vector<u
     }
     if (state_ == PathState::Up) {
         const int d = direct_score(), r = relay_score();
-        const bool want = d >= 0 && r >= 0 && r + cfg_.route_margin_ms <= d;  // a tie goes to direct
-        if (want != relay_preferred_ && now_ms - last_switch_ >= cfg_.route_hold_ms) {
-            if (relay_preferred_) stats_.relay_ms += now_ms - last_switch_;
-            relay_preferred_ = want;
+        // To the relay when it wins by the margin; back when direct is not slower (a tie goes to direct).
+        const bool flip = d >= 0 && r >= 0 && (relay_preferred_ ? d <= r : r + cfg_.route_margin_ms <= d);
+        const int64_t hold =
+            relay_preferred_ ? std::min<int64_t>(int64_t{cfg_.route_hold_ms} << std::min(flaps_, 20), cfg_.route_max_hold_ms)
+                             : cfg_.route_hold_ms;
+        if (flip && now_ms - last_switch_ >= hold) {
+            if (relay_preferred_) {
+                stats_.relay_ms += now_ms - last_switch_;
+                last_return_ = now_ms;
+            } else {
+                flaps_ = now_ms - last_return_ < cfg_.route_flap_ms ? flaps_ + 1 : 0;
+            }
+            relay_preferred_ = !relay_preferred_;
             last_switch_ = now_ms;
         }
     }
