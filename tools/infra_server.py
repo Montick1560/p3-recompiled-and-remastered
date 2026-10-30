@@ -1059,6 +1059,10 @@ class Server:
         self.log("direct: pair %s <-> %s" % (a.online_id, b.online_id))
 
     def unpair(self, key):
+        # A send that fails below drops a connection, and that drop's own prune can end a pairing a caller is
+        # still iterating over.
+        if key not in self.pairs:
+            return
         pair_id, _ = self.pairs.pop(key)
         a, b = tuple(key)
         for to, about in ((a, b), (b, a)):
@@ -2270,6 +2274,9 @@ def direct_selftest(run, quiet, lines):
     # --no-direct: caps answered with on false and the --stun list; offers accepted, nobody paired
     srv = Server("127.0.0.1", 0, None, logger=quiet, no_direct=True, stun=["stun.example.org:3478"])
     th = run(srv)
+    # a send failure inside unpair drops a connection, whose own prune may end the next pairing first: the outer
+    # unpair must then be a no-op (KeyError here took the beta server down, 30 Oct)
+    srv.unpair(frozenset((object(), object())))
     a, b = TestClient(srv.port), TestClient(srv.port)
     ans = a.ok("login", online_id="ND_A", proto=3, caps=caps)
     assert ans["direct"] == {"on": False, "stun": ["stun.example.org:3478"]}, ans
