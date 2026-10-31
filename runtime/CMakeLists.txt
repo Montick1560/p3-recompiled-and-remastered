@@ -1065,6 +1065,11 @@ target_include_directories(test_once_per_count PRIVATE ${CMAKE_CURRENT_SOURCE_DI
 target_compile_options(test_once_per_count PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME once_per_count_tests COMMAND test_once_per_count)
 
+add_executable(test_freeze_watch tests/test_freeze_watch.cpp)
+target_include_directories(test_freeze_watch PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_freeze_watch PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME freeze_watch_tests COMMAND test_freeze_watch)
+
 add_executable(test_particle_nudge tests/test_particle_nudge.cpp)
 target_include_directories(test_particle_nudge PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_particle_nudge PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
