@@ -1,5 +1,6 @@
 #include "psp_osk_overlay.h"
 #include "psp_exit.h"
+#include "psp_freeze_watch.h"
 #include "psp_ge_draw.h"
 #include "psp_ge_batch.h"
 #include "psp_ge_texpatch.h"
@@ -1301,6 +1302,7 @@ void ge_present_frame(
     uint32_t fb_stride,
     uint32_t fb_format
 ) {
+    psp_freeze_note_flip();
     (void)rdram;
     (void)fb_stride;
     (void)fb_format;

@@ -89,8 +89,9 @@ game ignores the section without logging.
 
 Launcher keys: `version` (last played release), `save_<release>` (the chosen save), `ppsspp_savedata` (the PPSSPP
 folder), `theme` (the applied launcher theme id, default `default`; a missing or locked one shows `default` and the
-key is left alone) and `music_volume` (`0`, `10`, …, `100`, default `70`; the only `[launcher]` key in
-`core_options.json`, so Options › General shows it) and `render_scale_chosen` (`true` once the player saves a changed resolution in Opciones; while it is absent the launcher writes the detected `[display] render_scale` at each start: `4` when a DXGI hardware adapter has >= 2 GiB of dedicated video memory, else `3` when the primary monitor is under 1024 physical pixels tall, else `2`; the defaults fixture keeps `4`). Themes and achievements: `docs/contracts/achievements-v1.md`.
+key is left alone) and `music_volume` (`0`, `10`, …, `100`, default `70`; in `core_options.json`, so Options › General shows it),
+`auto_report` (`true`/`false`, default `true`, also in Options › General: after a crash or exit 13 the launcher posts
+the same report as "Reportar problema" in the background, `what` starting with `[auto]`) and `render_scale_chosen` (`true` once the player saves a changed resolution in Opciones; while it is absent the launcher writes the detected `[display] render_scale` at each start: `4` when a DXGI hardware adapter has >= 2 GiB of dedicated video memory, else `3` when the primary monitor is under 1024 physical pixels tall, else `2`; the defaults fixture keeps `4`). Themes and achievements: `docs/contracts/achievements-v1.md`.
 
 `[controls]` remaps the PSP buttons. Each action has up to two keyboard keys, `<action>_keys`
 (comma separated SDL key names), and one gamepad button, `<action>_pad` (an SDL GameController
@@ -227,4 +228,6 @@ Both are optional and independent.
 | 0 | the player quit |
 | 10 | the player chose "back to the menu" (the launcher shows its main menu again) |
 | 11 | the game files in disc0 do not match this exe (the launcher asks to add the ISO again) |
+| 12 | the beta ended (beta builds only; the launcher shows its "beta ended" screen) |
+| 13 | the player quit or went back to the menu while the game was frozen (no frame for 15 s, `PSPRECOMP_FREEZE_SECONDS`); the launcher treats it as a crash |
 | anything else | crash / failure (the launcher shows the crash notice and the log) |

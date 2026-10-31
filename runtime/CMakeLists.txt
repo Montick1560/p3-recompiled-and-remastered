@@ -138,6 +138,7 @@ set(RUNTIME_SOURCES
     src/psp_time.cpp
     src/psp_rtc.cpp
     src/psp_beta.cpp
+    src/psp_freeze_watch.cpp
     src/psp_hw_info.cpp
     src/psp_subintr.cpp
     src/psp_backtrace.cpp

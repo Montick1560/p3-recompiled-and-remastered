@@ -707,6 +707,15 @@ launcher's Saves screen sets this variable. Unset or missing save: the newest, a
 - **Default:** 9999.
 - **Effect:** Port of the debug socket (DEBUGGING.md §6). A second instance needs another port.
 
+### `PSPRECOMP_FREEZE_SECONDS`
+- **Read in:** `runtime/src/psp_freeze_watch.cpp` (`psp_freeze_watch_start`).
+- **Type:** env (int seconds, 2..600; anything else is the default).
+- **Default:** 15.
+- **Effect:** Seconds without a guest frame flip (counted from the first flip) before the log says
+  `[FREEZE] no new frame for N s` plus one line per guest thread; `[FREEZE] frames again after N s` when
+  frames resume. A quit or back-to-menu taken while frozen exits with code 13 (settings-v1.md, Exit codes).
+- **Set it when:** testing the freeze path with a short threshold.
+
 ---
 
 ## Scheduler (#66)

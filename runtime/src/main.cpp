@@ -27,6 +27,7 @@
 #include "psp_osk_overlay.h"
 #include "psp_eboot_loader.h"
 #include "psp_exit.h"
+#include "psp_freeze_watch.h"
 #include "psp_input_device.h"
 
 // Build fingerprint of the output/ this binary was generated from (issue #36).
@@ -577,6 +578,7 @@ int main(int argc, char* argv[]) {
         entry(rdram, &ctx);
     }
     std::fprintf(stderr, "[RT] module_start returned\n");
+    psp_freeze_watch_start();
 
     // 11. RUNTIME-08: Enter event loop — blocks until shutdown
     psp_event_loop(rdram);
@@ -593,6 +595,7 @@ int main(int argc, char* argv[]) {
         std::fprintf(stderr, "[RT] shutdown +%lldms %s\n", ms, what);
     };
     stage("quit requested");
+    const bool frozen = psp_freeze_watch_stop();  // a slow shutdown is never a freeze
     psp_debug_socket_stop();
     psp_cpu_close();
     psp_scheduler_wake_all();
@@ -621,7 +624,10 @@ int main(int argc, char* argv[]) {
     ge_draw_shutdown();  // also writes frame.tga for the Patapon 1 scripts
     psp_runtime_shutdown();
     stage("host torn down");
-    const int exit_code = psp_requested_exit_code().load();
+    const int requested = psp_requested_exit_code().load();
+    const int exit_code = freeze_exit_code(frozen, requested);
+    if (exit_code != requested)
+        std::fprintf(stderr, "[FREEZE] closed while frozen: exit %d (requested %d)\n", exit_code, requested);
     std::fprintf(stderr, "[RT] Exit %d\n", exit_code);
     std::fflush(nullptr);
     std::quick_exit(exit_code);  // runs the psp_on_exit diagnostics (psp_exit.h), then _Exit
