@@ -311,7 +311,7 @@ font:600 1rem system-ui,sans-serif;cursor:pointer}button:disabled{opacity:.6}
 """
 
 # The public beta (no invite codes): what to download and how to start. Bump the zip name with every package.
-DOWNLOAD_URL = "https://descargas.montick.app/patapon3-beta1-u8.zip"
+DOWNLOAD_URL = "https://descargas.montick.app/patapon3-beta1-u9.zip"
 DISCORD_URL = "https://discord.gg/MQTTfEBa"
 
 SIGNUP_PAGE = """<!doctype html><html lang="es"><head><meta charset="utf-8">
