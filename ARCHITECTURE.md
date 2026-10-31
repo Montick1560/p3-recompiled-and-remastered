@@ -335,6 +335,12 @@ These are load-bearing; violating them causes real bugs.
 
 1. `rdram` is **not** a `recomp_context` field — it is a separate function parameter
    (thread-safety: each game thread has its own context but shares memory).
+   Generated functions take `ctx` as `__restrict`: a `recomp_context` is never inside `rdram`,
+   so clang keeps guest registers in host registers across guest stores (`uint8_t*` memcpy would
+   otherwise force a reload after each one). Runtime code reached by a call without `ctx`
+   (`RECOMP_LOOKUP`, `psp_trace_checkpoint`, `psp_store_watch_hit`) must not read or write the
+   running thread's registers except for diagnostics (the `[LOOKUP_MISS] ra=` log, the debug
+   socket's register dump), which may see a stale value.
 2. All guest memory accesses mask addresses with `0x07FFFFFFU` (128 MB space).
 3. GL calls only ever happen on the main thread via the render queue.
 4. Cross-function branches use `RECOMP_LOOKUP`, never `goto` (C++ goto cannot cross function

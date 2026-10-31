@@ -377,9 +377,10 @@ impl Default for CppGenerator {
 
 impl Generator for CppGenerator {
     fn emit_function_start(&mut self, cpp_name: &str, vaddr: u32) {
+        // ctx is never inside rdram: guest stores (uint8_t* memcpy) cannot alias it.
         let _ = writeln!(
             self.buf,
-            "RECOMP_FUNC void {cpp_name}(uint8_t* rdram, recomp_context* ctx) \
+            "RECOMP_FUNC void {cpp_name}(uint8_t* rdram, recomp_context* __restrict ctx) \
              {{ /* 0x{vaddr:08X} */\n    psp_trace_checkpoint(0x{vaddr:08X}U);"
         );
         self.indent = 1;
@@ -669,6 +670,20 @@ mod tests {
             out.contains("psp_trace_checkpoint(0x08804000U)"),
             "function preamble must call psp_trace_checkpoint with address"
         );
+    }
+
+    #[test]
+    fn function_start_marks_ctx_restrict() {
+        let mut gen = CppGenerator::new();
+        gen.emit_function_start("FUN_08804000", 0x08804000);
+        let out = gen.take_output();
+        assert!(
+            out.contains(
+                "void FUN_08804000(uint8_t* rdram, recomp_context* __restrict ctx) { /* 0x08804000 */"
+            ),
+            "definition must mark ctx __restrict: {out}"
+        );
+        assert!(out.contains("psp_trace_checkpoint(0x08804000U);"));
     }
 
     #[test]
