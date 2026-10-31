@@ -90,9 +90,21 @@ static void apply_window_mode(PspWindowMode m) {
         const int d = SDL_GetWindowDisplayIndex(g_window);
         SDL_Rect b;
         if (SDL_GetDisplayBounds(d < 0 ? 0 : d, &b) == 0) {
-            const PspRect r = psp_borderless_rect({b.x, b.y, b.w, b.h});
+            // The other displays decide which edge the window may grow past (psp_borderless_rect: the
+            // driver would otherwise take an exactly-covering window for exclusive fullscreen).
+            PspRect others[8];
+            int n = 0;
+            for (int i = 0, all = SDL_GetNumVideoDisplays(); i < all && n < 8; ++i) {
+                SDL_Rect o;
+                if (SDL_GetDisplayBounds(i, &o) == 0) others[n++] = {o.x, o.y, o.w, o.h};
+            }
+            const PspRect r = psp_borderless_rect({b.x, b.y, b.w, b.h}, others, n);
             SDL_SetWindowPosition(g_window, r.x, r.y);
             SDL_SetWindowSize(g_window, r.w, r.h);
+            int x, y, w, h;  // what SDL actually applied, so a clamp shows up in player logs
+            SDL_GetWindowPosition(g_window, &x, &y);
+            SDL_GetWindowSize(g_window, &w, &h);
+            std::fprintf(stderr, "[RT] borderless rect %dx%d at %d,%d\n", w, h, x, y);
         }
         break;
     }
