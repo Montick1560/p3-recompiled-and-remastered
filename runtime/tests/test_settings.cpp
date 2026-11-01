@@ -61,6 +61,7 @@ static void defaults_fixture() {
     CHECK(val(r, "PSPRECOMP_RENDER_SCALE") == "4", "render scale");
     CHECK(val(r, "PSPRECOMP_PRESENT_FILTER") == "linear", "present filter");
     CHECK(val(r, "PSPRECOMP_TEX_FILTER") == "auto", "texture filter");
+    CHECK(val(r, "PSPRECOMP_GL_API") == "auto" && !logged(r, "display.renderer"), "renderer auto, valid in the fixture");
     CHECK(val(r, "PSPRECOMP_TEXTURES") == "C:/Juegos/Patapon 3/textures/INFN00001", "pack on");
     CHECK(val(r, "PSPRECOMP_PATCHES") == "<unset>", "fps 30 -> no patch");
     CHECK(val(r, "PSPRECOMP_P3_ANIM_SMOOTH") == "1", "smooth on");
@@ -213,6 +214,20 @@ static void window_mode_key() {
     CHECK(!logged(r, "unknown key"), "window_mode is a known key");
 }
 
+// display.renderer -> PSPRECOMP_GL_API (auto | desktop | es, psp_gl_api.h); absent or invalid is auto.
+static void renderer_key() {
+    SettingsResolution r = psp_settings_resolve("", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_GL_API") == "auto", "renderer absent -> auto");
+    r = psp_settings_resolve("[display]\nrenderer = es\n", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_GL_API") == "es", "renderer es");
+    r = psp_settings_resolve("[display]\nrenderer = desktop\n", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_GL_API") == "desktop", "renderer desktop");
+    r = psp_settings_resolve("[display]\nrenderer = directx\n", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_GL_API") == "auto", "invalid renderer -> auto");
+    CHECK(logged(r, "display.renderer"), "invalid renderer logged");
+    CHECK(!logged(r, "unknown key"), "renderer is a known key");
+}
+
 static void direct_key() {
     SettingsResolution r = psp_settings_resolve("[online]\ndirect = false\n", "", "C:/P", kNoEnv);
     CHECK(val(r, "PSPRECOMP_INFRA_DIRECT") == "0", "direct false -> 0");
@@ -255,6 +270,7 @@ static void discord_key() {
 
 int main() {
     window_mode_key();
+    renderer_key();
     direct_key();
     discord_key();
     parser_rules();
