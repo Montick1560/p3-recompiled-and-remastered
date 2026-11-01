@@ -492,6 +492,18 @@ if(TARGET psp_ffmpeg)
     endif()
 endif()
 
+# ANGLE (OpenGL ES 3.0 on Direct3D 11) for the GL fallback (psp_gl_api.h): <dir>/bin/*.dll (libEGL, libGLESv2 and
+# its z.dll) go next to the exe, <dir>/LICENSE (BSD-3, must ship with the binaries) as ANGLE_LICENSE.txt.
+set(PSPRECOMP_ANGLE_DIR "" CACHE PATH "ANGLE package root (bin/*.dll + LICENSE). Empty: no ES fallback.")
+if(WIN32 AND PSPRECOMP_ANGLE_DIR)
+    file(GLOB _angle_dlls "${PSPRECOMP_ANGLE_DIR}/bin/*.dll")
+    add_custom_command(TARGET psprecomp_runtime POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_angle_dlls} "$<TARGET_FILE_DIR:psprecomp_runtime>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PSPRECOMP_ANGLE_DIR}/LICENSE"
+                "$<TARGET_FILE_DIR:psprecomp_runtime>/ANGLE_LICENSE.txt")
+    message(STATUS "ANGLE: ${PSPRECOMP_ANGLE_DIR}")
+endif()
+
 # tools/gles_probe.cpp: does SDL's EGL path (ANGLE) give an ES 3.0 context with dual-source blending? Built on demand.
 if(WIN32)
     add_executable(gles_probe EXCLUDE_FROM_ALL tools/gles_probe.cpp src/glad.c)
