@@ -266,8 +266,36 @@ struct ScriptNode {
     int64_t rec_vb = -1;  // vblank of the last record
     int64_t prev_vb = -1;
     HalfAhead pos;
+    int trace_gaps[3] = {};    // mission trace: runs one, two, more vblanks after the last
+    float trace_step[3] = {};  // mission trace: largest |step| per axis
 };
 ScriptNode g_script_nodes[32];
+
+// Outside the hideout the scripts run every vblank (not paced): a 30 fps script that moves a prop
+// and waits one frame (wait_frame_30hz makes it two) moves it every second vblank, e.g. the spike
+// door of the multiplayer dungeons. PSPRECOMP_P3_MISSION_TRACE=1 records the nodes the mission
+// scripts position and prints, every ~2 s, each moved node with its gaps between runs and its
+// largest step per axis.
+bool g_hideout_paced = false;   // scripts paced to 30 Hz in the hideout (PSPRECOMP_P3_HIDEOUT_30HZ)
+bool g_mission_trace = false;
+bool g_mission_record = false;  // record script-moved nodes outside the paced hideout
+int64_t g_mission_trace_from = -1;
+
+bool scripts_paced(uint8_t* rdram) { return g_hideout_paced && in_hideout(rdram); }
+
+void mission_trace_tick(int64_t vb) {
+    if (g_mission_trace_from < 0) g_mission_trace_from = vb;
+    if (vb - g_mission_trace_from < 120) return;
+    g_mission_trace_from = vb;
+    for (ScriptNode& s : g_script_nodes) {
+        if (s.trace_step[0] + s.trace_step[1] + s.trace_step[2] > 0.0f)
+            std::fprintf(stderr, "[MISSION] node 0x%08X gaps 1:%d 2:%d >2:%d step x %.3f y %.3f z %.3f\n", s.node,
+                         s.trace_gaps[0], s.trace_gaps[1], s.trace_gaps[2], s.trace_step[0], s.trace_step[1],
+                         s.trace_step[2]);
+        s.trace_gaps[0] = s.trace_gaps[1] = s.trace_gaps[2] = 0;
+        s.trace_step[0] = s.trace_step[1] = s.trace_step[2] = 0.0f;
+    }
+}
 
 // PSPRECOMP_P3_HIDEOUT_TRACE=1: the first 60 events (script run / skip, matrix builds of
 // recorded nodes) with their vblank, then every ~2 s the scene-path matrix builds per second of
@@ -311,12 +339,14 @@ ScriptNode* script_node_find(uint32_t node, bool add) {
 }
 
 void node_matrix_smooth(uint8_t* rdram, recomp_context* ctx) {
-    if (!in_hideout(rdram)) {  // scripts are paced only there
+    const bool hideout = scripts_paced(rdram);
+    if (!(hideout ? g_script_smooth : g_mission_record)) {
         g_node_matrix(rdram, ctx);
         return;
     }
     const uint32_t node = static_cast<uint32_t>(ctx->r[4]);
     const int64_t vb = psp_vblank_index(psp_display_elapsed_us());
+    if (!hideout && g_mission_trace) mission_trace_tick(vb);
     if (g_running_script) {  // the script moved it: record (once per run; the last build wins)
         ScriptNode* s = script_node_find(node, true);
         if (s->run != g_script_run_seq) {
@@ -324,12 +354,21 @@ void node_matrix_smooth(uint8_t* rdram, recomp_context* ctx) {
             s->rec_vb = vb;
             s->run = g_script_run_seq;
             psp_half_ahead_record(&s->pos, rdram, node, kNodePos, 3);
+            const int64_t gap = s->rec_vb - s->prev_vb;
+            if (g_mission_trace && !hideout && s->prev_vb >= 0) s->trace_gaps[gap == 1 ? 0 : gap == 2 ? 1 : 2]++;
         } else {
             s->pos.records--;  // same run: replace cur, keep prev
             for (int i = 0; i < 3; i++) s->pos.cur[i] = s->pos.prev[i];
             psp_half_ahead_record(&s->pos, rdram, node, kNodePos, 3);
         }
-        if (g_hideout_trace) {
+        for (int i = 0; g_mission_trace && !hideout && i < 3 && s->pos.records >= 2; i++) {
+            float a, b;
+            std::memcpy(&a, &s->pos.prev[i], 4);
+            std::memcpy(&b, &s->pos.cur[i], 4);
+            if (std::isfinite(a) && std::isfinite(b) && std::fabs(b - a) > s->trace_step[i])
+                s->trace_step[i] = std::fabs(b - a);
+        }
+        if (g_hideout_trace && hideout) {
             hideout_event("record", node, vb);
             for (int i = 0; i < 3 && s->pos.records >= 2; i++) {
                 float a, b;
@@ -339,6 +378,10 @@ void node_matrix_smooth(uint8_t* rdram, recomp_context* ctx) {
                     g_node_max_step = std::fabs(b - a);
             }
         }
+        g_node_matrix(rdram, ctx);
+        return;
+    }
+    if (!hideout) {  // missions: recorded only (trace)
         g_node_matrix(rdram, ctx);
         return;
     }
@@ -362,12 +405,19 @@ void node_matrix_smooth(uint8_t* rdram, recomp_context* ctx) {
 }
 
 void script_update_30hz(uint8_t* rdram, recomp_context* ctx) {
-    if (!in_hideout(rdram)) {
+    const uint32_t obj = static_cast<uint32_t>(ctx->r[4]);
+    if (!scripts_paced(rdram)) {
+        if (!g_mission_record) {
+            g_script_update(rdram, ctx);
+            return;
+        }
+        g_script_run_seq++;
+        g_running_script = obj;
         g_script_update(rdram, ctx);
+        g_running_script = 0;
         return;
     }
     uint32_t dt = static_cast<uint32_t>(ctx->r[5]);
-    const uint32_t obj = static_cast<uint32_t>(ctx->r[4]);
     const int64_t vb = psp_vblank_index(psp_display_elapsed_us());
     if (!g_script_paced.step_on(obj, g_input_updates, vb, &dt)) {
         hideout_event("script-skip", obj, vb);
@@ -383,7 +433,7 @@ void script_update_30hz(uint8_t* rdram, recomp_context* ctx) {
 }
 
 void window_update_30hz(uint8_t* rdram, recomp_context* ctx) {
-    if (!in_hideout(rdram)) {
+    if (!scripts_paced(rdram)) {
         g_window_update(rdram, ctx);
         return;
     }
@@ -418,7 +468,7 @@ void wait_frame_30hz(uint8_t* rdram, recomp_context* ctx) {
     const bool started = rd32(rdram, b + 0x118) != 0;
     g_wait_frame(rdram, ctx);
     if (started || rd32(rdram, b + 0x120) == 0) return;
-    if (g_script_update && in_hideout(rdram)) return;
+    if (scripts_paced(rdram)) return;
     const bool on_pad_frame = g_input_pacer.started &&
                               g_input_pacer.last == psp_vblank_index(psp_display_elapsed_us());
     const int32_t left = psp_frame_wait_left(static_cast<int32_t>(rd32(rdram, b + 0x124)), 2, on_pad_frame);
@@ -1491,9 +1541,16 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
             }
         }
         const char* scripts = std::getenv("PSPRECOMP_P3_HIDEOUT_30HZ");
-        if (!(scripts && scripts[0] == '0')) {
+        g_hideout_paced = !(scripts && scripts[0] == '0');
+        const char* mission_trace = std::getenv("PSPRECOMP_P3_MISSION_TRACE");
+        g_mission_trace = mission_trace && mission_trace[0] == '1';
+        g_mission_record = g_mission_trace;
+        if (g_hideout_paced || g_mission_record) {
             g_script_update = RECOMP_LOOKUP(kScriptUpdate);
             psp_dispatch_register(kScriptUpdate, script_update_30hz);
+        }
+        if (g_mission_trace) std::fprintf(stderr, "[MISSION] tracing script-moved nodes outside the hideout\n");
+        if (g_hideout_paced) {
             std::fprintf(stderr, "[P3] 60fps: script objects paced to 30 Hz in the hideout only\n");
             const char* windows = std::getenv("PSPRECOMP_P3_HIDEOUT_WINDOWS_30HZ");
             if (!(windows && windows[0] == '0')) {
@@ -1505,11 +1562,12 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
             g_hideout_trace = trace && trace[0] == '1';
             const char* smooth_scripts = std::getenv("PSPRECOMP_P3_HIDEOUT_SMOOTH");
             g_script_smooth = !(smooth_scripts && smooth_scripts[0] == '0');
-            if (g_script_smooth) {
-                g_node_matrix = RECOMP_LOOKUP(kNodeMatrix);
-                psp_dispatch_register(kNodeMatrix, node_matrix_smooth);
+            if (g_script_smooth)
                 std::fprintf(stderr, "[P3] 60fps: smooth hideout animations (scripted props drawn every frame)\n");
-            }
+        }
+        if (g_script_smooth || g_mission_record) {
+            g_node_matrix = RECOMP_LOOKUP(kNodeMatrix);
+            psp_dispatch_register(kNodeMatrix, node_matrix_smooth);
         }
         const char* waits = std::getenv("PSPRECOMP_P3_SCRIPT_WAIT_30HZ");
         if (!(waits && waits[0] == '0')) {
