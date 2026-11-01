@@ -2,6 +2,7 @@
 #include "psp_ge.h"
 #include "psp_ge_constants.h"
 #include "psp_ge_fog.h"
+#include "psp_gl_api.h"
 #include "psp_gl_state.h"
 
 #include <glad/glad.h>
@@ -10,7 +11,6 @@
 // ---- Shader source ----
 
 static const char* const k_vertex_shader_src = R"GLSL(
-#version 330 core
 
 layout(location = 0) in vec4 a_position;
 layout(location = 1) in vec2 a_texcoord;
@@ -21,6 +21,8 @@ out vec2 v_texcoord;
 out vec4 v_color;
 out float v_fog;
 
+uniform float u_point_size;  // GE points are one PSP pixel: the render scale
+
 void main() {
     // CPU sends clip-space (x,y,z,w) in transform mode (GL's own
     // perspective divide gives near-plane clipping and perspective-
@@ -30,11 +32,11 @@ void main() {
     v_texcoord = a_texcoord;
     v_color = a_color;
     v_fog = a_fog;
+    gl_PointSize = u_point_size;
 }
 )GLSL";
 
 static const char* const k_fragment_shader_src = R"GLSL(
-#version 330 core
 
 in vec2 v_texcoord;
 in vec4 v_color;
@@ -152,7 +154,9 @@ static GLuint compile_shader(
     GLenum type, const char* src
 ) {
     GLuint shader = glCreateShader(type);
-    glShaderSource(shader, 1, &src, nullptr);
+    // Each source starts after the API's GLSL header (#version, ES precision and extension).
+    const char* srcs[2] = {psp_glsl_header(psp_gl_api(), type == GL_FRAGMENT_SHADER), src};
+    glShaderSource(shader, 2, srcs, nullptr);
     glCompileShader(shader);
 
     GLint success = 0;
@@ -173,7 +177,7 @@ static GLuint compile_shader(
 
 // ---- Public API ----
 
-void ge_shader_init() {
+void ge_shader_init(float point_size) {
     GLuint vert = compile_shader(
         GL_VERTEX_SHADER, k_vertex_shader_src);
     GLuint frag = compile_shader(
@@ -238,6 +242,9 @@ void ge_shader_init() {
             glGetUniformLocation(g_program, "u_fix_a");
         g_uniforms.u_fog_enable = glGetUniformLocation(g_program, "u_fog_enable");
         g_uniforms.u_fog_color = glGetUniformLocation(g_program, "u_fog_color");
+        g_uniforms.u_point_size = glGetUniformLocation(g_program, "u_point_size");
+        gl_state_use_program(g_program);
+        gl_state_uniform1f(g_uniforms.u_point_size, point_size);
 
         std::fprintf(stderr,
             "[SHADER] Uber-shader compiled and linked "

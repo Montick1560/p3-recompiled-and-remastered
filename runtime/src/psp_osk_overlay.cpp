@@ -6,6 +6,7 @@
 // font file. Code points the main font lacks (the hint's Ⓐ Ⓑ Ⓧ Ⓨ, ⌫, ⇧) are
 // drawn with a symbol fallback font when one exists on the host.
 #include "psp_osk_overlay.h"
+#include "psp_gl_api.h"
 #include "psp_osk_session.h"
 #include "psp_osk_skin.h"
 
@@ -212,7 +213,8 @@ struct Gl {
 
 GLuint compile(GLenum type, const char* src) {
     GLuint s = glCreateShader(type);
-    glShaderSource(s, 1, &src, nullptr);
+    const char* srcs[2] = {psp_glsl_header(psp_gl_api(), type == GL_FRAGMENT_SHADER), src};
+    glShaderSource(s, 2, srcs, nullptr);
     glCompileShader(s);
     GLint ok = 0;
     glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
@@ -228,11 +230,9 @@ Gl& gl() {
     static Gl g;
     if (g.ready) return g;
     const char* vs =
-        "#version 330 core\n"
         "layout(location=0) in vec2 a_pos; layout(location=1) in vec2 a_uv;\n"
         "out vec2 v_uv; void main(){ gl_Position = vec4(a_pos, 0.0, 1.0); v_uv = a_uv; }\n";
     const char* fs =
-        "#version 330 core\n"
         "uniform sampler2D u_tex; uniform vec4 u_color; uniform int u_textured;\n"
         "uniform vec2 u_size; uniform float u_radius;\n"
         "in vec2 v_uv; out vec4 o;\n"

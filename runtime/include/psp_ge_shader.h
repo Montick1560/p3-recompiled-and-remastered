@@ -18,10 +18,12 @@ struct ShaderUniforms {
     GLint u_fix_a;
     GLint u_fog_enable;
     GLint u_fog_color;
+    GLint u_point_size;
 };
 
-/// Compile and link the uber-shader pair. Call after GL init.
-void ge_shader_init();
+/// Compile and link the uber-shader pair. Call after GL init. point_size: GE points in framebuffer pixels
+/// (the render scale; one PSP pixel).
+void ge_shader_init(float point_size);
 
 /// Delete shader program.
 void ge_shader_shutdown();

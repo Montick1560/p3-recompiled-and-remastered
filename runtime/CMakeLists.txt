@@ -143,6 +143,7 @@ set(RUNTIME_SOURCES
     src/psp_freeze_watch.cpp
     src/psp_hw_info.cpp
     src/psp_gpu_adapters.cpp
+    src/psp_gl_api.cpp
     src/psp_subintr.cpp
     src/psp_backtrace.cpp
     src/psp_cpu.cpp
@@ -1081,6 +1082,11 @@ add_executable(test_freeze_watch tests/test_freeze_watch.cpp)
 target_include_directories(test_freeze_watch PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_freeze_watch PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME freeze_watch_tests COMMAND test_freeze_watch)
+
+add_executable(test_gl_api tests/test_gl_api.cpp)
+target_include_directories(test_gl_api PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_gl_api PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME gl_api_tests COMMAND test_gl_api)
 
 add_executable(test_particle_nudge tests/test_particle_nudge.cpp)
 target_include_directories(test_particle_nudge PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

@@ -2,6 +2,7 @@
 #include "psp_exit.h"
 #include "psp_freeze_watch.h"
 #include "psp_ge_draw.h"
+#include "psp_gl_api.h"
 #include "psp_ge_batch.h"
 #include "psp_ge_texpatch.h"
 #include "psp_perf.h"
@@ -375,6 +376,8 @@ void ge_draw_init() {
     ge_texpatch_set_scale(g_render_scale);
     std::fprintf(stderr, "[DRAW] render scale %d (%dx%d)\n",
                  g_render_scale, fb_w(), fb_h());
+    // Points take gl_PointSize from the shader (u_point_size, ge_shader_init), as ES always does.
+    if (psp_gl_api() == PspGlApi::Desktop) glEnable(GL_PROGRAM_POINT_SIZE);
     if (g_render_scale > 1) {
         // GE points and lines are one PSP pixel wide: keep that apparent size
         // (no draw path changes these GL states afterwards). Wide lines are
@@ -384,7 +387,6 @@ void ge_draw_init() {
         glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, range);
         while (glGetError() != GL_NO_ERROR) {}
         glLineWidth(static_cast<GLfloat>(g_render_scale));
-        glPointSize(static_cast<GLfloat>(g_render_scale));
         const GLenum err = glGetError();
         std::fprintf(stderr, "[DRAW] line/point width %d (driver line range %.0f..%.0f)%s\n",
                      g_render_scale, range[0], range[1],
@@ -452,7 +454,7 @@ void ge_draw_init() {
 
     // Init shader
     gl_state_reset();
-    ge_shader_init();
+    ge_shader_init(static_cast<float>(g_render_scale));
 
     g_frame_counter = 0;
     g_draw_ready.store(true, std::memory_order_release);
@@ -946,10 +948,10 @@ void ge_draw_prim(
         // clear keeps the range's far value.
         if (clear_bits & GL_DEPTH_BUFFER_BIT) {
             if (ge_vtype_through(state.vertex_type) && !clear_verts.empty()) {
-                glClearDepth(static_cast<GLclampd>(ge_clear_depth(clear_verts[0].pos[2])));
+                psp_gl_clear_depth(ge_clear_depth(clear_verts[0].pos[2]));
             } else {
                 const GeViewportDepth vp = compute_state_viewport_depth(state);
-                glClearDepth(static_cast<GLclampd>(vp.far_z));
+                psp_gl_clear_depth(vp.far_z);
             }
         }
 
@@ -1125,10 +1127,10 @@ void ge_draw_flush() {
     if (!ge_vtype_through(state.vertex_type)) {
         const GeViewportDepth vp = compute_state_viewport_depth(state);
         glViewport(vp.x, vp.y, vp.w, vp.h);
-        glDepthRange(vp.near_z, vp.far_z);
+        psp_gl_depth_range(vp.near_z, vp.far_z);
     } else {
         glViewport(0, 0, fb_w(), fb_h());
-        glDepthRange(0.0, 1.0);
+        psp_gl_depth_range(0.0, 1.0);
     }
 
     // Upload to VBO
