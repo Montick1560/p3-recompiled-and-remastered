@@ -48,11 +48,38 @@ static void windows_name_from_build() {
     CHECK(psp_hw_windows_name(6, 1, 7601) == "Windows 6.1 (build 7601)", "older: version numbers");
 }
 
+static void gpu_two_adapters() {
+    const std::string s = psp_gpu_format({{"NVIDIA GeForce RTX 3050 Laptop GPU", "32.0.15.6094", 4096, "11_1", false},
+                                          {"Intel(R) UHD Graphics", "31.0.101.4502", 128, "11_1", false}});
+    CHECK(s == "[RT] gpu adapters: NVIDIA GeForce RTX 3050 Laptop GPU (driver 32.0.15.6094, 4096 MB, D3D 11_1); "
+               "Intel(R) UHD Graphics (driver 31.0.101.4502, 128 MB, D3D 11_1)",
+          s.c_str());
+}
+
+static void gpu_unknowns_and_software() {
+    const std::string s = psp_gpu_format({{"Microsoft Basic Render Driver", "", 0, "", true}});
+    CHECK(s == "[RT] gpu adapters: Microsoft Basic Render Driver (software, driver ?, ? MB, D3D ?)", s.c_str());
+}
+
+static void gpu_none() {
+    const std::string s = psp_gpu_format({});
+    CHECK(s == "[RT] gpu adapters: ?", s.c_str());
+}
+
+static void gpu_one_line() {
+    const std::string s = psp_gpu_format({{"Radeon\n(TM)\r Graphics", "1.2.3.4", 512, "10_0", false}});
+    CHECK(s == "[RT] gpu adapters: Radeon (TM) Graphics (driver 1.2.3.4, 512 MB, D3D 10_0)", s.c_str());
+}
+
 int main() {
     formats_every_field();
     unknown_fields_say_so();
     one_line_always();
     windows_name_from_build();
+    gpu_two_adapters();
+    gpu_unknowns_and_software();
+    gpu_none();
+    gpu_one_line();
     if (failures) {
         std::printf("%d failure(s)\n", failures);
         return 1;

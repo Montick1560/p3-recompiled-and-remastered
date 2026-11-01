@@ -35,6 +35,17 @@ std::string psp_hw_format(const PspHwInfo& h) {
            " MB, OS " + clean(h.os) + ", GPU " + gpu + ", GL " + clean(h.gl_version) + ", display " + display;
 }
 
+std::string psp_gpu_format(const std::vector<PspGpuAdapter>& adapters) {
+    std::string out = "[RT] gpu adapters: ";
+    for (size_t i = 0; i < adapters.size(); i++) {
+        const PspGpuAdapter& a = adapters[i];
+        if (i) out += "; ";
+        out += clean(a.name) + " (" + (a.software ? "software, " : "") + "driver " + clean(a.driver) + ", " +
+               num(a.vram_mb) + " MB, D3D " + clean(a.d3d) + ")";
+    }
+    return adapters.empty() ? out + "?" : out;
+}
+
 std::string psp_hw_windows_name(unsigned major, unsigned minor, unsigned build) {
     char buf[64];
     if (major == 10 && minor == 0)

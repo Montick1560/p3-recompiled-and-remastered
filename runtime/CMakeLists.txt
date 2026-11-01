@@ -22,6 +22,7 @@ if(WIN32)
     set(PSP_SOCKET_LIBS ws2_32 advapi32)  # advapi32: MachineGuid for the ad hoc MAC file
     set(PSP_RANDOM_LIBS bcrypt)  # BCryptGenRandom (net/secure_random)
     set(PSP_WINHTTP_LIBS winhttp)  # infrastructure-mode WebSocket transport
+    set(PSP_GPU_LIBS dxgi d3d11)  # "[RT] gpu adapters" before the GL context (psp_gpu_adapters.cpp)
 else()
     # Find SDL2 via pkg-config (Homebrew installs pkg-config file)
     find_package(PkgConfig REQUIRED)
@@ -32,6 +33,7 @@ else()
     find_package(ZLIB REQUIRED)
     set(PSP_SOCKET_LIBS)
     set(PSP_WINHTTP_LIBS)
+    set(PSP_GPU_LIBS)
 endif()
 
 # Find OpenGL
@@ -140,6 +142,7 @@ set(RUNTIME_SOURCES
     src/psp_beta.cpp
     src/psp_freeze_watch.cpp
     src/psp_hw_info.cpp
+    src/psp_gpu_adapters.cpp
     src/psp_subintr.cpp
     src/psp_backtrace.cpp
     src/psp_cpu.cpp
@@ -479,6 +482,7 @@ target_link_libraries(psprecomp_runtime PRIVATE
     ${PSP_SOCKET_LIBS}
     ${PSP_RANDOM_LIBS}
     ${PSP_WINHTTP_LIBS}
+    ${PSP_GPU_LIBS}
 )
 if(TARGET psp_ffmpeg)
     target_link_libraries(psprecomp_runtime PRIVATE psp_ffmpeg)

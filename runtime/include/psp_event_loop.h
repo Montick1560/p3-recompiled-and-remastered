@@ -3,7 +3,8 @@
 
 /// SDL2+GL initialization: creates window, GL context, loads GLAD.
 /// Must be called from main thread before any GL calls.
-/// Returns 0 on success, non-zero on failure.
+/// Returns 0 on success, 1 when SDL_Init fails, 14 when the window, the GL context or GLAD fails
+/// (exit code 14: the graphics could not start, docs/contracts/settings-v1.md).
 int psp_runtime_init_sdl();
 
 /// Main event loop: processes SDL events, drains render queue, checks alive

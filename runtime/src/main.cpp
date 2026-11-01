@@ -342,10 +342,10 @@ int main(int argc, char* argv[]) {
     }
 
     // 5. Initialize SDL2 window + OpenGL 3.3 context (main thread)
-    if (psp_runtime_init_sdl() != 0) {
-        std::fprintf(stderr, "[RT] SDL/GL init failed\n");
-        psp_memory_cleanup(rdram);
-        return 1;
+    if (const int rc = psp_runtime_init_sdl(); rc != 0) {
+        std::fprintf(stderr, "[RT] SDL/GL init failed (exit %d)\n", rc);
+        std::fflush(nullptr);
+        std::quick_exit(rc);  // like the normal exit: the debug socket / Discord threads are never joined
     }
 
     // 5b. Initialize GE subsystem (command decoder + state + draw)

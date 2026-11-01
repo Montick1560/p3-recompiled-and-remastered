@@ -471,6 +471,9 @@ int psp_runtime_init_sdl() {
             "[RT] SDL_Init failed: %s\n", SDL_GetError());
         return 1;
     }
+    // GPUs before any GL call: a PC whose context fails still says what it has (exit 14 below).
+    std::fprintf(stderr, "%s\n", psp_gpu_format(psp_gpu_adapters()).c_str());
+    std::fflush(stderr);
     // 1b. Game controllers are optional: keyboard-only when unavailable.
     //     Already-connected pads arrive as SDL_CONTROLLERDEVICEADDED events.
     if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) {
@@ -501,7 +504,7 @@ int psp_runtime_init_sdl() {
         std::fprintf(stderr,
             "[RT] SDL_CreateWindow failed: %s\n", SDL_GetError());
         SDL_Quit();
-        return 1;
+        return 14;
     }
 
     // 4. Create GL context (must precede gladLoadGL — Pitfall 6)
@@ -512,7 +515,7 @@ int psp_runtime_init_sdl() {
             SDL_GetError());
         SDL_DestroyWindow(g_window);
         SDL_Quit();
-        return 1;
+        return 14;
     }
 
     // 5. Load GL function pointers via GLAD2 (MUST be after context creation)
@@ -522,7 +525,7 @@ int psp_runtime_init_sdl() {
         SDL_GL_DeleteContext(g_gl_context);
         SDL_DestroyWindow(g_window);
         SDL_Quit();
-        return 1;
+        return 14;
     }
 
     SDL_SetWindowMinimumSize(g_window, 480, 272);

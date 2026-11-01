@@ -230,4 +230,5 @@ Both are optional and independent.
 | 11 | the game files in disc0 do not match this exe (the launcher asks to add the ISO again) |
 | 12 | the beta ended (beta builds only; the launcher shows its "beta ended" screen) |
 | 13 | the player quit or went back to the menu while the game was frozen (no frame for 15 s, `PSPRECOMP_FREEZE_SECONDS`); the launcher treats it as a crash |
+| 14 | the graphics could not start (no window or OpenGL context; the launcher shows how to update the GPU driver) |
 | anything else | crash / failure (the launcher shows the crash notice and the log) |
