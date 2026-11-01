@@ -1110,6 +1110,11 @@ target_include_directories(test_half_ahead PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/i
 target_compile_options(test_half_ahead PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME half_ahead_tests COMMAND test_half_ahead)
 
+add_executable(test_half_step_tail tests/test_half_step_tail.cpp)
+target_include_directories(test_half_step_tail PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_half_step_tail PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME half_step_tail_tests COMMAND test_half_step_tail)
+
 add_executable(test_code_match tests/test_code_match.cpp)
 target_include_directories(test_code_match PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_code_match PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)

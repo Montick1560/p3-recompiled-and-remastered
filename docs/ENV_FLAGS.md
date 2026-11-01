@@ -1046,6 +1046,27 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   ribbon steps per second.
 - **Set it when:** `0` to compare against the plain 30 Hz weather.
 
+### `PSPRECOMP_P3_MARCH_60`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`0` off; anything else or unset = on).
+- **Default:** on when `PSPRECOMP_PATCHES` enables `60fps`; never installed otherwise.
+- **Effect:** The army march step `0x088FA9D0` runs per vblank at 60 fps. Madwig's patch halves
+  the advance step but not the retreat: the retreat speed getter `0x08991CEC` (used only by the
+  three retreat steps) now returns half, so CHAKA PATA CHAKA PATA goes as far as at 30 fps (-50.8,
+  was -98.8). A 107-vblank march is 54 steps at 30 fps but 53.5 at 60: each move gets its missing
+  half step on the vblank after it ends (`runtime/include/psp_half_step_tail.h`); PATA PATA PATA
+  PON 100.7 -> 101.7, as at 30 fps. Install prints `[P3] 60fps: army retreat halved, ...`.
+- **Set it when:** `0` to compare against the march of Madwig's patch alone.
+
+### `PSPRECOMP_P3_MARCH_TRACE`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`=1`; first character `'1'`).
+- **Default:** off.
+- **Effect:** Diagnostics only. Logs every call of the march step `0x088FA9D0` that changes a
+  slot's x or state as `[MARCH] vb=... obj=... dir=... k=... lim=... s0=state:x_before>x_after:t_target ...`
+  (200000 lines). `build/tools/march_moves.py LOG` splits them into moves (distance, steps per vblank).
+- **Set it when:** measuring how far a command moves the army at 30 vs 60 fps (solo or online).
+
 ### `PSPRECOMP_P3_HIDEOUT_30HZ`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
 - **Type:** env (`0` off; anything else or unset = on).

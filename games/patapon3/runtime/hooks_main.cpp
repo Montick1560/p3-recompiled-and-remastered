@@ -35,6 +35,7 @@
 #include "psp_game_module.h"
 #include "psp_ge_list_blend.h"
 #include "psp_half_ahead.h"
+#include "psp_half_step_tail.h"
 #include "psp_once_per_count.h"
 #include "hle/psp_hle.h"
 #include "hle/psp_hle_intr.h"
@@ -1212,6 +1213,90 @@ void weather_trace_register(std::integer_sequence<int, I...>) {
       psp_dispatch_register(kWeatherTraced[I], weather_trace<I>)), ...);
 }
 
+// Army march at 60 fps (on with the 60fps set; PSPRECOMP_P3_MARCH_60=0 turns it off for A/B).
+// FUN_088FA9D0 moves the army once per call (per vblank at 60 fps). Single player: x at a0+32,
+// state a0+244 (0 advance: x += dir * FUN_08991CA8, 1 retreat: x -= dir * FUN_08991CEC down to the
+// target a0+208). Multiplayer (mode 3/4/5, FUN_08987D88): one slot per player, x at a0+32+16*slot,
+// state a0+244+4*slot, target a0+208+4*slot, clamped by a0+484 / a0+492. Speed = FUN_08991DAC (hero
+// passive) * 1.92 * (a0+288)+12 * (a0+288)+16; FUN_08991CEC returns half of it. A command moves the
+// army for 107 vblanks (fewer when it is not perfect) at 30 and 60 fps alike. Madwig's patch halves
+// the advance (0x088FAB68, 0x088FADF8) but not the retreat: CHAKA PATA CHAKA PATA went twice as far
+// at 60 (march trace: -47.5 at 30, -94.3 at 60, online and solo). FUN_08991CEC (called only by the
+// three retreat steps) now returns half at 60 fps. And a 107-vblank move is 54 steps at 30 fps but
+// 53.5 at 60 (100.7 vs 101.7 per PATA PATA PATA PON): each slot's move gets its missing half step on
+// the vblank after it ends (psp_half_step_tail.h), the vblank the last 30 fps step covers too.
+// PSPRECOMP_P3_MARCH_TRACE=1 (diagnostic): one [MARCH] line per call that changes any slot's x or
+// state (x before > after), 200000 lines; build/tools/march_moves.py splits them into moves.
+constexpr uint32_t kMarchStep = 0x088FA9D0u;
+constexpr uint32_t kMarchStepCode[] = {0x27BDFFC0u, 0xAFBF002Cu, 0xAFB50028u};
+constexpr uint32_t kRetreatSpeed = 0x08991CECu;
+constexpr uint32_t kRetreatSpeedHalf = 0x08991D10u;  // lui v0,0x3F00 (the 0.5): code of the retreat getter
+constexpr uint32_t kRetreatSpeedCode[] = {0x3C023F00u};
+FuncPtr g_march_step = nullptr;
+FuncPtr g_retreat_speed = nullptr;
+bool g_march_60 = false, g_march_trace = false;
+std::atomic<int> g_march_lines{0};
+struct MarchTails {
+    uint32_t obj = 0;
+    HalfStepTail slot[4];
+};
+MarchTails g_march_tails[4];  // main thread only
+int g_march_tails_next = 0;
+
+float rdf(uint8_t* rdram, uint32_t addr) {
+    const uint32_t w = rd32(rdram, addr);
+    float f;
+    std::memcpy(&f, &w, sizeof f);
+    return f;
+}
+
+void wrf(uint8_t* rdram, uint32_t addr, float f) { std::memcpy(rdram + (addr & 0x07FFFFFFu), &f, 4); }
+
+MarchTails* march_tails(uint32_t obj) {
+    for (MarchTails& t : g_march_tails) {
+        if (t.obj == obj) return &t;
+    }
+    MarchTails* t = &g_march_tails[g_march_tails_next++ & 3];
+    *t = MarchTails{obj, {}};
+    return t;
+}
+
+void retreat_speed_half(uint8_t* rdram, recomp_context* ctx) {
+    g_retreat_speed(rdram, ctx);
+    if (psp_code_matches(rdram, kRetreatSpeedHalf, kRetreatSpeedCode, 1)) ctx->f[0] *= 0.5f;
+}
+
+void march_step(uint8_t* rdram, recomp_context* ctx) {
+    const uint32_t o = static_cast<uint32_t>(ctx->r[4]);
+    float x0[4];
+    uint32_t st0[4];
+    for (int s = 0; s < 4; s++) x0[s] = rdf(rdram, o + 32 + 16 * s), st0[s] = rd32(rdram, o + 244 + 4 * s);
+    g_march_step(rdram, ctx);
+    if (g_march_60 && psp_code_matches(rdram, kMarchStep, kMarchStepCode, 3)) {
+        MarchTails* t = march_tails(o);
+        for (int s = 0; s < 4; s++) {
+            const uint32_t at = o + 32 + 16 * s;
+            const float x = rdf(rdram, at);
+            const float extra = psp_half_step_tail(&t->slot[s], x - x0[s]);
+            if (extra != 0.0f) wrf(rdram, at, x + extra);
+        }
+    }
+    if (!g_march_trace) return;
+    bool changed = false;
+    for (int s = 0; s < 4; s++) changed |= x0[s] != rdf(rdram, o + 32 + 16 * s) || st0[s] != rd32(rdram, o + 244 + 4 * s);
+    if (!changed || g_march_lines.fetch_add(1, std::memory_order_relaxed) >= 200000) return;
+    char buf[512];
+    int n = std::snprintf(buf, sizeof buf, "[MARCH] vb=%lld obj=%08X dir=%d k=%.4f,%.4f lim=%.2f,%.2f",
+                          static_cast<long long>(psp_vblank_index(psp_display_elapsed_us())), o,
+                          static_cast<int32_t>(rd32(rdram, o + 280)), rdf(rdram, o + 288 + 12),
+                          rdf(rdram, o + 288 + 16), rdf(rdram, o + 484), rdf(rdram, o + 492));
+    for (int s = 0; s < 4; s++) {
+        n += std::snprintf(buf + n, sizeof buf - n, " s%d=%u:%.3f>%.3f:t%.2f", s, rd32(rdram, o + 244 + 4 * s), x0[s],
+                           rdf(rdram, o + 32 + 16 * s), rdf(rdram, o + 208 + 4 * s));
+    }
+    std::fprintf(stderr, "%s\n", buf);
+}
+
 // Fast loading (on by default, PSPRECOMP_P3_FAST_LOAD=0 turns it off): the tip screen's loader
 // takes one file per two or three frames, so a load whose reads are instant on the host still
 // took 2-3 s at 59.94 Hz. FUN_08A18834 draws the "CARGANDO" icon and runs on every frame of
@@ -1364,6 +1449,20 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
         weather_trace_register(std::make_integer_sequence<int, kWeatherTracedCount>{});
         std::fprintf(stderr, "[WEATHER] tracing the weather setters\n");
     }
+    const char* march_trace_env = std::getenv("PSPRECOMP_P3_MARCH_TRACE");
+    g_march_trace = march_trace_env && march_trace_env[0] == '1';
+    const char* march_env = std::getenv("PSPRECOMP_P3_MARCH_60");
+    g_march_60 = psp_patch_set_active("60fps") && !(march_env && march_env[0] == '0');
+    if (g_march_60 || g_march_trace) {
+        g_march_step = RECOMP_LOOKUP(kMarchStep);
+        psp_dispatch_register(kMarchStep, march_step);
+    }
+    if (g_march_60) {
+        g_retreat_speed = RECOMP_LOOKUP(kRetreatSpeed);
+        psp_dispatch_register(kRetreatSpeed, retreat_speed_half);
+        std::fprintf(stderr, "[P3] 60fps: army retreat halved, each march gets its 30 fps last half step\n");
+    }
+    if (g_march_trace) std::fprintf(stderr, "[MARCH] tracing the army position step (FUN_088FA9D0)\n");
     if (psp_patch_set_active("60fps")) {
         g_input_update = RECOMP_LOOKUP(kInputUpdate);
         psp_dispatch_register(kInputUpdate, input_update_30hz);
