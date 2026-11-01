@@ -22,13 +22,14 @@ out vec4 v_color;
 out float v_fog;
 
 uniform float u_point_size;  // GE points are one PSP pixel: the render scale
+uniform float u_z_sign;      // -1 when a reversed PSP depth range is sent ascending (ge_gl_depth_range)
 
 void main() {
     // CPU sends clip-space (x,y,z,w) in transform mode (GL's own
     // perspective divide gives near-plane clipping and perspective-
     // correct UV interpolation) or NDC with w = 1 in through mode /
     // fallback paths. Pass through untouched.
-    gl_Position = a_position;
+    gl_Position = vec4(a_position.xy, a_position.z * u_z_sign, a_position.w);
     v_texcoord = a_texcoord;
     v_color = a_color;
     v_fog = a_fog;
@@ -245,6 +246,8 @@ void ge_shader_init(float point_size) {
         g_uniforms.u_point_size = glGetUniformLocation(g_program, "u_point_size");
         gl_state_use_program(g_program);
         gl_state_uniform1f(g_uniforms.u_point_size, point_size);
+        g_uniforms.u_z_sign = glGetUniformLocation(g_program, "u_z_sign");
+        gl_state_uniform1f(g_uniforms.u_z_sign, 1.0f);
 
         std::fprintf(stderr,
             "[SHADER] Uber-shader compiled and linked "
@@ -311,4 +314,8 @@ void ge_shader_set_blend(int src1_rgb, int src1_a, const float fix_a[3]) {
 
 GLuint ge_shader_get_program() {
     return g_program;
+}
+
+void ge_shader_set_z_sign(float sign) {
+    if (g_program) gl_state_uniform1f(g_uniforms.u_z_sign, sign);
 }

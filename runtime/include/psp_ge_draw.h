@@ -15,6 +15,14 @@ struct GeViewportDepth {
 /// so PSP depth compares map to the same GL compares, unflipped.
 float ge_gl_window_depth(const GeViewportDepth& vp, float ndc_z);
 
+/// The depth range actually sent to GL: always ascending, because Direct3D 11 (ANGLE, psp_gl_api.h) cannot take a
+/// reversed one. A reversed PSP range (near > far) becomes (far, near) with the vertex z negated (z_sign = -1),
+/// which gives the same window depth as ge_gl_window_depth.
+struct GeDepthRangeGl {
+    float lo, hi, z_sign;
+};
+GeDepthRangeGl ge_gl_depth_range(const GeViewportDepth& vp);
+
 /// Depth a clear-mode draw writes: its vertex z (PSP 0..65535) / 65535,
 /// clamped (PSP/PPSSPP clear mode writes the vertex depth).
 float ge_clear_depth(float vertex_z);

@@ -136,6 +136,28 @@ static void test_reversed_z_range() {
     }
 }
 
+// Direct3D 11 (ANGLE) needs an ascending depth range: a reversed PSP range is sent as
+// (far, near) with z negated in the vertex shader, which gives the same window depth.
+static void test_gl_depth_range_always_ascending() {
+    const GeViewportDepth reversed = {0, 0, 480, 272, 1.0f, 0.0f};
+    const GeViewportDepth normal = {0, 0, 480, 272, 0.2f, 0.8f};
+    const GeDepthRangeGl r = ge_gl_depth_range(reversed);
+    ASSERT_NEAR(r.lo, 0.0f, "reversed: lo = far");
+    ASSERT_NEAR(r.hi, 1.0f, "reversed: hi = near");
+    ASSERT_NEAR(r.z_sign, -1.0f, "reversed: z negated");
+    const GeDepthRangeGl n = ge_gl_depth_range(normal);
+    ASSERT_NEAR(n.lo, 0.2f, "normal: lo = near");
+    ASSERT_NEAR(n.hi, 0.8f, "normal: hi = far");
+    ASSERT_NEAR(n.z_sign, 1.0f, "normal: z kept");
+    for (const GeViewportDepth* vp : {&reversed, &normal}) {
+        const GeDepthRangeGl g = ge_gl_depth_range(*vp);
+        for (float z : {-1.0f, -0.3f, 0.0f, 0.5f, 1.0f}) {
+            ASSERT_NEAR(g.lo + (g.z_sign * z + 1.0f) * 0.5f * (g.hi - g.lo), ge_gl_window_depth(*vp, z),
+                        "same window depth as the PSP range");
+        }
+    }
+}
+
 // Render scale (M3b): outputs are FBO pixels = PSP pixels * scale.
 static void test_fullscreen_scale2() {
     GeViewportDepth v = ge_compute_viewport_depth(
@@ -238,6 +260,7 @@ int main() {
     test_offset_subpixel_and_mask();
     test_depth_clamped_subrange();
     test_reversed_z_range();
+    test_gl_depth_range_always_ascending();
     test_reversed_window_depth_is_psp_z();
     test_clear_depth_uses_vertex_z();
     test_fullscreen_scale2();

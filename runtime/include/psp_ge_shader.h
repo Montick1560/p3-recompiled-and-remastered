@@ -19,6 +19,7 @@ struct ShaderUniforms {
     GLint u_fog_enable;
     GLint u_fog_color;
     GLint u_point_size;
+    GLint u_z_sign;
 };
 
 /// Compile and link the uber-shader pair. Call after GL init. point_size: GE points in framebuffer pixels
@@ -38,3 +39,6 @@ void ge_shader_set_blend(int src1_rgb, int src1_a, const float fix_a[3]);
 
 /// Get the shader program ID (for external uniform queries).
 GLuint ge_shader_get_program();
+
+/// Vertex z sign for this draw (ge_gl_depth_range: -1 for a reversed PSP depth range). Program in use.
+void ge_shader_set_z_sign(float sign);

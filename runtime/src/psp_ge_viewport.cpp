@@ -76,3 +76,8 @@ float ge_clear_depth(float vertex_z) {
     const float d = vertex_z / 65535.0f;
     return d < 0.0f ? 0.0f : (d > 1.0f ? 1.0f : d);
 }
+
+GeDepthRangeGl ge_gl_depth_range(const GeViewportDepth& vp) {
+    if (vp.near_z > vp.far_z) return {vp.far_z, vp.near_z, -1.0f};
+    return {vp.near_z, vp.far_z, 1.0f};
+}

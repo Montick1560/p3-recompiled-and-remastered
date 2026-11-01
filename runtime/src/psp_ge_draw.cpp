@@ -1124,14 +1124,15 @@ void ge_draw_flush() {
     // already bakes the full-screen 240/136 mapping into NDC in
     // ge_transform_vertices, so it uses the full buffer and an identity depth
     // range. A through-mode change flushes first, so state matches the batch.
+    GeDepthRangeGl depth = {0.0f, 1.0f, 1.0f};
     if (!ge_vtype_through(state.vertex_type)) {
         const GeViewportDepth vp = compute_state_viewport_depth(state);
         glViewport(vp.x, vp.y, vp.w, vp.h);
-        psp_gl_depth_range(vp.near_z, vp.far_z);
+        depth = ge_gl_depth_range(vp);
     } else {
         glViewport(0, 0, fb_w(), fb_h());
-        psp_gl_depth_range(0.0, 1.0);
     }
+    psp_gl_depth_range(depth.lo, depth.hi);
 
     // Upload to VBO
     glBindVertexArray(g_vao);
@@ -1144,6 +1145,7 @@ void ge_draw_flush() {
     // Bind shader and set uniforms
     ge_shader_use();
     ge_shader_set_uniforms(state);
+    ge_shader_set_z_sign(depth.z_sign);
 
     // Bind texture if enabled
     if (state.texture_enable) {
