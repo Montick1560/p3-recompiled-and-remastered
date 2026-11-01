@@ -491,6 +491,13 @@ if(TARGET psp_ffmpeg)
     endif()
 endif()
 
+# tools/gles_probe.cpp: does SDL's EGL path (ANGLE) give an ES 3.0 context with dual-source blending? Built on demand.
+if(WIN32)
+    add_executable(gles_probe EXCLUDE_FROM_ALL tools/gles_probe.cpp src/glad.c)
+    target_include_directories(gles_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(gles_probe PRIVATE ${PSP_SDL2_LIBS})
+endif()
+
 # Suppress OpenGL deprecation warnings on macOS
 target_compile_definitions(psprecomp_runtime PRIVATE
     GL_SILENCE_DEPRECATION
