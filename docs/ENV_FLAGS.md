@@ -709,7 +709,7 @@ launcher's Saves screen sets this variable. Unset or missing save: the newest, a
 
 ### `PSPRECOMP_GL_API`
 - **Read in:** `runtime/src/psp_event_loop.cpp` (`psp_runtime_init_sdl`, plan from `psp_gl_plan` in `runtime/include/psp_gl_api.h`); settings.ini `[display] renderer` sets it.
-- **Type:** env (`desktop` | `es` | `fail-desktop`; anything else = default).
+- **Type:** env (`auto` | `desktop` | `es` | `fail-desktop`; anything else = default). `auto` (what settings.ini writes by default) is the same as unset.
 - **Default:** unset — desktop OpenGL 3.3 core, then OpenGL ES 3.0 through SDL's EGL path (ANGLE: `libEGL.dll`,
   `libGLESv2.dll` and `z.dll` next to the exe) when desktop cannot start.
 - **Effect:** `desktop` or `es` tries only that API; `fail-desktop` asks the desktop attempt for an impossible
