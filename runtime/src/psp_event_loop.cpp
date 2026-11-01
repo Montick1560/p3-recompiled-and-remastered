@@ -15,6 +15,7 @@
 #include "psp_perf.h"
 #include "psp_toast.h"
 #include "psp_hw_info.h"
+#include "psp_gl_api.h"
 #include "psp_window_mode.h"
 #include "psp_window_title.h"
 
@@ -459,8 +460,46 @@ static void handle_sdl_event(const SDL_Event& ev) {
 
 
 // ---------------------------------------------------------------------------
-// psp_runtime_init_sdl — create SDL window + GL 3.3 core context + GLAD
+// psp_runtime_init_sdl — create SDL window + GL context (3.3 core or ES 3.0) + GLAD
 // ---------------------------------------------------------------------------
+static bool gl_has_extension(const char* want) {
+    GLint n = 0;
+    glGetIntegerv(GL_NUM_EXTENSIONS, &n);
+    for (GLint i = 0; i < n; i++) {
+        const GLubyte* e = glGetStringi(GL_EXTENSIONS, static_cast<GLuint>(i));
+        if (e && std::strcmp(reinterpret_cast<const char*>(e), want) == 0) return true;
+    }
+    return false;
+}
+
+// One API attempt: window, context (must precede gladLoadGL), GLAD. ES counts only with dual-source blending
+// (psp_ge_blend.h). On failure nothing it made is left and `why` says what failed.
+static bool try_gl_api(PspGlApi api, bool fail_desktop, int win_scale, std::string& why) {
+    const bool es = api == PspGlApi::Es;
+    SDL_SetHint(SDL_HINT_OPENGL_ES_DRIVER, es ? "1" : "0");
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, es ? SDL_GL_CONTEXT_PROFILE_ES : SDL_GL_CONTEXT_PROFILE_CORE);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, es ? 3 : fail_desktop ? 9 : 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, es ? 0 : 3);
+    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    g_window = SDL_CreateWindow(psp_window_title(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                                480 * win_scale, 272 * win_scale,
+                                SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+    g_gl_context = g_window ? SDL_GL_CreateContext(g_window) : nullptr;
+    if (!g_gl_context) why = SDL_GetError();
+    else if (!gladLoadGL(reinterpret_cast<GLADloadfunc>(SDL_GL_GetProcAddress))) why = "gladLoadGL failed";
+    else if (es && !gl_has_extension("GL_EXT_blend_func_extended")) why = "no GL_EXT_blend_func_extended";
+    else return true;
+    if (g_gl_context) SDL_GL_DeleteContext(g_gl_context);
+    if (g_window) SDL_DestroyWindow(g_window);
+    g_gl_context = nullptr;
+    g_window = nullptr;
+    // A fresh video subsystem for the next attempt: after a failed WGL attempt, SDL's leftover GL state makes the
+    // EGL window surface fail ("Could not create GLES window surface"); unloading the GL library is not enough.
+    SDL_QuitSubSystem(SDL_INIT_VIDEO);
+    if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) why += std::string("; video re-init failed: ") + SDL_GetError();
+    return false;
+}
+
 int psp_runtime_init_sdl() {
     // Record main thread id for GL_THREAD_CHECK
     g_main_thread_id = std::this_thread::get_id();
@@ -482,48 +521,25 @@ int psp_runtime_init_sdl() {
     load_controls();
     psp_input_device_init();
 
-    // 2. Set GL attributes: OpenGL 3.3 core profile, double-buffered
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-    SDL_GL_SetAttribute(
-        SDL_GL_CONTEXT_PROFILE_MASK,
-        SDL_GL_CONTEXT_PROFILE_CORE);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-
-    // 3. Create a resizable window at an integer multiple of the PSP
-    //    resolution (PSPRECOMP_WINDOW_SCALE, default 2); present_blit()
-    //    letterboxes the rendered image into whatever size it gets.
+    // 2-5. Window + GL context + GLAD: desktop OpenGL 3.3 core first, then OpenGL ES 3.0 through SDL's EGL path
+    //      (ANGLE on Windows) when desktop cannot start (psp_gl_api.h; PSPRECOMP_GL_API forces one). The window is
+    //      a resizable integer multiple of the PSP resolution (PSPRECOMP_WINDOW_SCALE, default 2); present_blit()
+    //      letterboxes the rendered image into whatever size it gets.
     const int win_scale = present_window_scale(std::getenv("PSPRECOMP_WINDOW_SCALE"));
-    g_window = SDL_CreateWindow(
-        psp_window_title(),
-        SDL_WINDOWPOS_CENTERED,
-        SDL_WINDOWPOS_CENTERED,
-        480 * win_scale, 272 * win_scale,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
-    if (!g_window) {
-        std::fprintf(stderr,
-            "[RT] SDL_CreateWindow failed: %s\n", SDL_GetError());
-        SDL_Quit();
-        return 14;
+    const PspGlPlan plan = psp_gl_plan(std::getenv("PSPRECOMP_GL_API"));
+    bool started = false;
+    for (PspGlApi api : plan.order) {
+        const char* name = api == PspGlApi::Es ? "es" : "desktop";
+        std::string why;
+        if (try_gl_api(api, plan.fail_desktop, win_scale, why)) {
+            psp_gl_api_set(api);
+            std::fprintf(stderr, "[RT] GL api: %s\n", name);
+            started = true;
+            break;
+        }
+        std::fprintf(stderr, "[RT] GL api %s: failed (%s)\n", name, why.c_str());
     }
-
-    // 4. Create GL context (must precede gladLoadGL — Pitfall 6)
-    g_gl_context = SDL_GL_CreateContext(g_window);
-    if (!g_gl_context) {
-        std::fprintf(stderr,
-            "[RT] SDL_GL_CreateContext failed: %s\n",
-            SDL_GetError());
-        SDL_DestroyWindow(g_window);
-        SDL_Quit();
-        return 14;
-    }
-
-    // 5. Load GL function pointers via GLAD2 (MUST be after context creation)
-    //    GLAD2 requires a loader function; SDL2 provides SDL_GL_GetProcAddress.
-    if (!gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress)) {
-        std::fprintf(stderr, "[RT] gladLoadGL failed\n");
-        SDL_GL_DeleteContext(g_gl_context);
-        SDL_DestroyWindow(g_window);
+    if (!started) {
         SDL_Quit();
         return 14;
     }
