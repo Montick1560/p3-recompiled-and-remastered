@@ -273,19 +273,28 @@ ScriptNode g_script_nodes[32];
 
 // Outside the hideout the scripts run every vblank (not paced): a 30 fps script that moves a prop
 // and waits one frame (wait_frame_30hz makes it two) moves it every second vblank, e.g. the spike
-// door of the multiplayer dungeons. PSPRECOMP_P3_MISSION_TRACE=1 records the nodes the mission
-// scripts position and prints, every ~2 s, each moved node with its gaps between runs and its
-// largest step per axis.
+// door of the multiplayer dungeons (y += 4 per step, 37 steps up, 37 down). With
+// PSPRECOMP_P3_MISSION_SMOOTH (default on) those nodes get the hideout's half-ahead draw above:
+// same "in between" test, so a node moved every vblank or less often than every second one is
+// left alone. PSPRECOMP_P3_MISSION_TRACE=1 prints, every ~2 s, each moved node with its gaps
+// between runs and its largest step per axis, and the half-ahead draws per second.
+// The door steps 4 units; 4x that, so a teleport is never slid across the screen.
+constexpr float kMissionNodeMaxJump = 16.0f;
 bool g_hideout_paced = false;   // scripts paced to 30 Hz in the hideout (PSPRECOMP_P3_HIDEOUT_30HZ)
+bool g_mission_smooth = false;
 bool g_mission_trace = false;
 bool g_mission_record = false;  // record script-moved nodes outside the paced hideout
 int64_t g_mission_trace_from = -1;
+int g_mission_ahead = 0;
 
 bool scripts_paced(uint8_t* rdram) { return g_hideout_paced && in_hideout(rdram); }
 
 void mission_trace_tick(int64_t vb) {
     if (g_mission_trace_from < 0) g_mission_trace_from = vb;
     if (vb - g_mission_trace_from < 120) return;
+    std::fprintf(stderr, "[MISSION] per s: half a step ahead %.1f\n",
+                 g_mission_ahead * 59.94 / static_cast<double>(vb - g_mission_trace_from));
+    g_mission_ahead = 0;
     g_mission_trace_from = vb;
     for (ScriptNode& s : g_script_nodes) {
         if (s.trace_step[0] + s.trace_step[1] + s.trace_step[2] > 0.0f)
@@ -381,22 +390,19 @@ void node_matrix_smooth(uint8_t* rdram, recomp_context* ctx) {
         g_node_matrix(rdram, ctx);
         return;
     }
-    if (!hideout) {  // missions: recorded only (trace)
-        g_node_matrix(rdram, ctx);
-        return;
-    }
     ScriptNode* s = script_node_find(node, false);
     // In between: one vblank after the run that recorded it, that run two after the one before.
-    if (!s || vb - s->rec_vb != 1 || s->rec_vb - s->prev_vb != 2) {
-        if (s && g_hideout_trace) {
+    if (!s || vb - s->rec_vb != 1 || s->rec_vb - s->prev_vb != 2 || !(hideout || g_mission_smooth)) {
+        if (s && g_hideout_trace && hideout) {
             hideout_event("build", node, vb);
             hideout_count(1, 0, vb);
         }
         g_node_matrix(rdram, ctx);
         return;
     }
-    const int moved = psp_half_ahead_apply(&s->pos, rdram, kScriptNodeMaxJump);
-    if (g_hideout_trace) {
+    const int moved = psp_half_ahead_apply(&s->pos, rdram, hideout ? kScriptNodeMaxJump : kMissionNodeMaxJump);
+    if (!hideout && moved) g_mission_ahead++;
+    if (g_hideout_trace && hideout) {
         hideout_event(moved ? "build-ahead" : "build-still", node, vb);
         hideout_count(1, moved ? 1 : 0, vb);
     }
@@ -1544,11 +1550,15 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
         g_hideout_paced = !(scripts && scripts[0] == '0');
         const char* mission_trace = std::getenv("PSPRECOMP_P3_MISSION_TRACE");
         g_mission_trace = mission_trace && mission_trace[0] == '1';
-        g_mission_record = g_mission_trace;
+        const char* mission_smooth = std::getenv("PSPRECOMP_P3_MISSION_SMOOTH");
+        g_mission_smooth = !(mission_smooth && mission_smooth[0] == '0');
+        g_mission_record = g_mission_trace || g_mission_smooth;
         if (g_hideout_paced || g_mission_record) {
             g_script_update = RECOMP_LOOKUP(kScriptUpdate);
             psp_dispatch_register(kScriptUpdate, script_update_30hz);
         }
+        if (g_mission_smooth)
+            std::fprintf(stderr, "[P3] 60fps: smooth mission props (scripted nodes drawn every frame)\n");
         if (g_mission_trace) std::fprintf(stderr, "[MISSION] tracing script-moved nodes outside the hideout\n");
         if (g_hideout_paced) {
             std::fprintf(stderr, "[P3] 60fps: script objects paced to 30 Hz in the hideout only\n");

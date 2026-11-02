@@ -1158,6 +1158,30 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   `[P3] 60fps: smooth hideout animations (scripted props drawn every frame)`.
 - **Set it when:** `0` to compare against the plain 30 Hz script motion.
 
+### `PSPRECOMP_P3_MISSION_SMOOTH`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`0` off; anything else or unset = on).
+- **Default:** on with the `60fps` patch set.
+- **Effect:** The `PSPRECOMP_P3_HIDEOUT_SMOOTH` half-ahead draw outside the hideout. There the
+  scripts run every vblank and their frame waits last two (`PSPRECOMP_P3_SCRIPT_WAIT_30HZ`), so
+  a script that moves a prop and waits one frame moves it every second vblank: the spike door
+  of the multiplayer dungeons (4 units per step) opened and closed at a 30 Hz look. Nodes moved
+  by a script run exactly two vblanks after its previous move are drawn half a step ahead on
+  the vblank in between (never across a jump of more than 16 units); nodes moved every vblank
+  are left alone. Draw-only: positions go back right after the matrix build. Install prints
+  `[P3] 60fps: smooth mission props (scripted nodes drawn every frame)`.
+- **Set it when:** `0` to compare against the plain 30 Hz motion.
+
+### `PSPRECOMP_P3_MISSION_TRACE`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`=1`).
+- **Default:** off.
+- **Effect:** With the `60fps` patch set: every ~2 s, outside the hideout, the half-ahead
+  draws per second and one `[MISSION]` line per node a script moved (its gaps between runs:
+  one, two, more vblanks, and its largest step per axis).
+- **Set it when:** finding props that move every second vblank at 60 fps, or checking the
+  mission smoothing works.
+
 ### `PSPRECOMP_P3_HIDEOUT_TRACE`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
 - **Type:** env (`=1`).
