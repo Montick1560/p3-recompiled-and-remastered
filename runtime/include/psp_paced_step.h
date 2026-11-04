@@ -15,7 +15,9 @@
 #include <cstdint>
 
 struct PacedStepTable {
-    static constexpr int kSlots = 16;
+    // Patapon 3's hero-mode ghost riders run up to ~28 effect objects through one update at once;
+    // fewer slots would recycle them every vblank and leave them unpaced.
+    static constexpr int kSlots = 64;
     // Cap on banked time (ticks of the caller's unit): a skipped call banks
     // one 60 fps frame, so anything above two 30 fps frames (4800 ticks/s in
     // Patapon 3) means the object stopped being run and the bank is stale.

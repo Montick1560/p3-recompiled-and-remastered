@@ -202,7 +202,8 @@ Read by the runtime binary at start-up or during execution.
   warning with the available sets. A game module can pair a set with host-side
   help (`psp_patch_set_active`); Patapon 3's `60fps` set paces the input update
   to 30 Hz, turns on smooth animation (`PSPRECOMP_P3_ANIM_SMOOTH`) and paces the
-  weather (`PSPRECOMP_P3_WEATHER_30HZ`, `PSPRECOMP_P3_WEATHER_SMOOTH`) and the
+  weather (`PSPRECOMP_P3_WEATHER_30HZ`, `PSPRECOMP_P3_WEATHER_SMOOTH`), the mission
+  effect actors (`PSPRECOMP_P3_EFFECT_30HZ`) and the
   script objects (`PSPRECOMP_P3_HIDEOUT_30HZ`) with the hideout's message windows
   (`PSPRECOMP_P3_HIDEOUT_WINDOWS_30HZ`), the scripts' frame waits
   (`PSPRECOMP_P3_SCRIPT_WAIT_30HZ`) and the item lists' hold repeat
@@ -1020,6 +1021,19 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   the baked list blend then mixes the drawn frame and the next one of the same motion.
   The clocks are only read, so the speed does not change. Install prints `[P3] smooth animation: reward halo blended too`.
 - **Set it when:** `0` to compare against the stepped halo (A/B).
+
+### `PSPRECOMP_P3_EFFECT_30HZ`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`0` off; anything else or unset = on).
+- **Default:** on when `PSPRECOMP_PATCHES` enables `60fps`; never installed otherwise.
+- **Effect:** The update of mission effect actors (`0x088D3AB4`, vtable +60; a0 = actor,
+  a1 = frame time in ticks) moves them by a fixed step per call while their life counts
+  the frame time, so Pyokojinete's hero-mode ghost riders ran twice as far at 60 fps
+  (1197 units in 1.68 s instead of 584 in 1.71 s). In missions (not the hideout) each actor
+  runs once per two vblanks with the skipped call's frame time
+  (`runtime/include/psp_paced_step.h`), as at 30 fps. Install prints
+  `[P3] 60fps: mission effect actors paced to 30 Hz (hero ghost riders)`.
+- **Set it when:** `0` to see the old double-distance ghost riders at 60 fps (A/B).
 
 ### `PSPRECOMP_P3_WEATHER_30HZ`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**

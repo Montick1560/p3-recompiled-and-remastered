@@ -164,7 +164,9 @@ built half a step ahead on the frame in between, `psp_half_ahead.h`; that pacing
 outside it a frame wait that has just started is made twice as long instead, `psp_frame_wait.h`, so
 mission scripts keep running every vblank while their waits keep the 30 fps length; a node such
 a mission script moves every second vblank, e.g. the dungeons' spike door, gets the same
-half-ahead build on the vblank in between). Reasoning: cheats patch guest RAM, but recompiled code never reads instruction
+half-ahead build on the vblank in between; in missions the effect actors' update (Pyokojinete's
+hero-mode ghost riders) is paced the same way, since it moves them by a fixed step per call while
+their life counts the frame time). Reasoning: cheats patch guest RAM, but recompiled code never reads instruction
 words, so the patched words have to become code at recompile time; keeping both bodies
 leaves the default build byte-identical.
 

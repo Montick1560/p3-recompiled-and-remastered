@@ -241,6 +241,31 @@ bool in_hideout(uint8_t* rdram) {
            static_cast<uint32_t>(MEM_W(rdram, kOverlayWindow + 4)) == kHideoutOverlayId;
 }
 
+// 60 fps effect actors in missions (with the 60fps set; PSPRECOMP_P3_EFFECT_30HZ=0 turns it off for
+// A/B). FUN_088D3AB4 is the update method (vtable +60; a0 = the actor, a1 = the frame time in
+// ticks) of mission effect actors, among them Pyokojinete's hero-mode ghost riders. It moves them
+// by a fixed step per call while their life counts the frame time, so at 60 fps the ghosts ran
+// twice as far in the same time: part x 274 -> 1471 in 1.68 s (101 calls, 711 units/s) against
+// 226 -> 810 in 1.71 s (50 calls, 342/s) at 30. Each actor runs once per two vblanks with the
+// skipped call's frame time (psp_paced_step.h), as the game does at 30 fps: 193 -> 778 in 1.675 s
+// (50 calls, 350/s). Callers ignore its return value. Not in the hideout.
+constexpr uint32_t kEffectUpdate = 0x088D3AB4u;
+constexpr uint32_t kEffectUpdateCode[] = {0x27BDFF70u, 0xAFBF002Cu, 0xAFB50028u};
+FuncPtr g_effect_update = nullptr;
+PacedStepTable g_effect_paced;
+
+void effect_update_30hz(uint8_t* rdram, recomp_context* ctx) {
+    if (in_hideout(rdram) || !psp_code_matches(rdram, kEffectUpdate, kEffectUpdateCode, 3)) {
+        g_effect_update(rdram, ctx);
+        return;
+    }
+    uint32_t dt = static_cast<uint32_t>(ctx->r[5]);
+    if (!g_effect_paced.step(static_cast<uint32_t>(ctx->r[4]), psp_vblank_index(psp_display_elapsed_us()), 2, &dt))
+        return;
+    ctx->r[5] = static_cast<int32_t>(dt);
+    g_effect_update(rdram, ctx);
+}
+
 // Smooth scripted props (with PSPRECOMP_P3_HIDEOUT_30HZ; PSPRECOMP_P3_HIDEOUT_SMOOTH=0 keeps the
 // plain 30 Hz pacing). A script sets a prop's position in its 3D node (+192/+196/+200, x y z)
 // and the node matrix builder FUN_0888E7FC (a0 = node) copies it into the matrix translation
@@ -1525,6 +1550,12 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
         g_input_update = RECOMP_LOOKUP(kInputUpdate);
         psp_dispatch_register(kInputUpdate, input_update_30hz);
         std::fprintf(stderr, "[P3] 60fps: input update paced to 30 Hz\n");
+        const char* effect = std::getenv("PSPRECOMP_P3_EFFECT_30HZ");
+        if (!(effect && effect[0] == '0')) {
+            g_effect_update = RECOMP_LOOKUP(kEffectUpdate);
+            psp_dispatch_register(kEffectUpdate, effect_update_30hz);
+            std::fprintf(stderr, "[P3] 60fps: mission effect actors paced to 30 Hz (hero ghost riders)\n");
+        }
         const char* menu = std::getenv("PSPRECOMP_P3_MENU_30HZ");
         if (!(menu && menu[0] == '0')) {
             g_hold_repeat = RECOMP_LOOKUP(kHoldRepeat);
