@@ -270,7 +270,7 @@ struct ScriptNode {
     int trace_gaps[3] = {};    // mission trace: runs one, two, more vblanks after the last
     float trace_step[3] = {};  // mission trace: largest |step| per axis
 };
-ScriptNode g_script_nodes[64];  // a hero mode's ghost riders alone move up to ~28 nodes
+ScriptNode g_script_nodes[32];
 
 // Outside the hideout the scripts run every vblank (not paced): a 30 fps script that moves a prop
 // and waits one frame (wait_frame_30hz makes it two) moves it every second vblank, e.g. the spike
@@ -279,9 +279,8 @@ ScriptNode g_script_nodes[64];  // a hero mode's ghost riders alone move up to ~
 // same "in between" test, so a node moved every vblank or less often than every second one is
 // left alone. PSPRECOMP_P3_MISSION_TRACE=1 prints, every ~2 s, each moved node with its gaps
 // between runs and its largest step per axis, and the half-ahead draws per second.
-// The door steps 4 units, the hero ghost riders up to ~19 per 30 Hz step; about twice that, so a
-// teleport or a respawn (hundreds of units) is never slid across the screen.
-constexpr float kMissionNodeMaxJump = 40.0f;
+// The door steps 4 units; 4x that, so a teleport is never slid across the screen.
+constexpr float kMissionNodeMaxJump = 16.0f;
 bool g_hideout_paced = false;   // scripts paced to 30 Hz in the hideout (PSPRECOMP_P3_HIDEOUT_30HZ)
 bool g_mission_smooth = false;
 bool g_mission_trace = false;
@@ -1091,6 +1090,9 @@ std::unordered_map<uint32_t, PartMatrix> g_part_matrices;  // part (a motion pla
 // between their draw shows them half a step ahead (psp_half_ahead.h), then the matrix goes back:
 // the ghosts move every frame at the 30 fps speed while game logic keeps the 30 Hz state.
 constexpr uint32_t kPartPos[3] = {48, 52, 56};
+// The ghost riders step up to ~19 units per 30 Hz run; about twice that, so a respawn (hundreds of
+// units) is never slid across the screen.
+constexpr float kEffectPartMaxJump = 40.0f;
 struct EffectPart {
     HalfAhead pos;
     int64_t rec_vb = -1, prev_vb = -1;
@@ -1158,7 +1160,7 @@ void motion_draw_part(uint8_t* rdram, recomp_context* ctx) {
     const uint32_t player = static_cast<uint32_t>(ctx->r[4]);
     if (EffectPart* e = effect_part_between(player)) {
         // Relative: the draw re-placed the part on its still-animating owner since the record.
-        if (psp_half_ahead_apply_rel(&e->pos, rdram, kMissionNodeMaxJump)) g_mission_ahead++;
+        if (psp_half_ahead_apply_rel(&e->pos, rdram, kEffectPartMaxJump)) g_mission_ahead++;
         motion_draw_scoped(rdram, ctx);
         psp_half_ahead_restore(e->pos, rdram);
         return;
