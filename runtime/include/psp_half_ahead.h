@@ -7,7 +7,8 @@
 //
 // record() after each run of the step keeps the words' values after the
 // last two runs (prev, cur). apply() writes cur + (cur - prev) / 2 into guest
-// memory for the frame in between; restore() puts cur back. apply() leaves a
+// memory for the frame in between (apply_rel(): the word's current value +
+// (cur - prev) / 2); restore() puts back the value it replaced. apply() leaves a
 // word alone when the step is unknown (one record only, or a new object at
 // `base`), when |cur - prev| > max_jump (a teleport, a loop restart or a new
 // state is never slid across the screen), when either value is not finite,
@@ -26,6 +27,7 @@ struct HalfAhead {
     uint32_t offs[kMaxWords] = {};
     uint32_t prev[kMaxWords] = {}, cur[kMaxWords] = {};  // raw float bits
     uint32_t shown[kMaxWords] = {};                      // what apply() wrote
+    uint32_t orig[kMaxWords] = {};                       // what it replaced (restore() puts it back)
     bool moved[kMaxWords] = {};
 };
 
@@ -62,6 +64,30 @@ inline int psp_half_ahead_apply(HalfAhead* h, uint8_t* rdram, float max_jump) {
         if (!std::isfinite(a) || !std::isfinite(b) || std::fabs(b - a) > max_jump) continue;
         const float ahead = b + (b - a) * 0.5f;
         std::memcpy(&h->shown[i], &ahead, 4);
+        h->orig[i] = now;
+        std::memcpy(p, &ahead, 4);
+        h->moved[i] = true;
+        moved++;
+    }
+    return moved;
+}
+
+// As apply(), for a word that something else keeps rewriting between two runs (a part re-placed
+// every frame on a still-animating bone): writes now + (cur - prev) / 2, whatever now is.
+inline int psp_half_ahead_apply_rel(HalfAhead* h, uint8_t* rdram, float max_jump) {
+    int moved = 0;
+    for (int i = 0; i < h->n; i++) {
+        h->moved[i] = false;
+        if (h->records < 2 || h->prev[i] == h->cur[i]) continue;
+        uint8_t* p = rdram + ((h->base + h->offs[i]) & 0x07FFFFFFu);
+        float a, b, now;
+        std::memcpy(&a, &h->prev[i], 4);
+        std::memcpy(&b, &h->cur[i], 4);
+        std::memcpy(&now, p, 4);
+        if (!std::isfinite(a) || !std::isfinite(b) || !std::isfinite(now) || std::fabs(b - a) > max_jump) continue;
+        const float ahead = now + (b - a) * 0.5f;
+        std::memcpy(&h->orig[i], &now, 4);
+        std::memcpy(&h->shown[i], &ahead, 4);
         std::memcpy(p, &ahead, 4);
         h->moved[i] = true;
         moved++;
@@ -75,6 +101,6 @@ inline void psp_half_ahead_restore(const HalfAhead& h, uint8_t* rdram) {
         uint8_t* p = rdram + ((h.base + h.offs[i]) & 0x07FFFFFFu);
         uint32_t now;
         std::memcpy(&now, p, 4);
-        if (now == h.shown[i]) std::memcpy(p, &h.cur[i], 4);
+        if (now == h.shown[i]) std::memcpy(p, &h.orig[i], 4);
     }
 }

@@ -90,6 +90,30 @@ int main() {
         psp_half_ahead_restore(h, mem.data());
         CHECK(rf(kBase + 192) == 12.0f, "a second restore is harmless");
     }
+    {   // apply_rel: the word moved since the record (an animated bone re-placed it): still ahead
+        HalfAhead h = two_runs(10.0f, 12.0f);
+        wf(kBase + 192, 12.5f);
+        CHECK(psp_half_ahead_apply_rel(&h, mem.data(), 50.0f) == 1, "apply_rel moves the changed word");
+        CHECK(rf(kBase + 192) == 13.5f, "now + half the recorded step (12.5 + 1)");
+        CHECK(rf(kBase + 196) == 7.0f, "a word that did not step stays");
+        psp_half_ahead_restore(h, mem.data());
+        CHECK(rf(kBase + 192) == 12.5f, "restore puts back what was there, not the record");
+    }
+    {   // apply_rel keeps the limits: one record, or a step beyond max_jump, moves nothing
+        HalfAhead one;
+        wf(kBase + 192, 3.0f);
+        psp_half_ahead_record(&one, mem.data(), kBase, kOffs, 3);
+        CHECK(psp_half_ahead_apply_rel(&one, mem.data(), 50.0f) == 0, "one record: nothing moves");
+        HalfAhead far = two_runs(10.0f, 500.0f);
+        CHECK(psp_half_ahead_apply_rel(&far, mem.data(), 50.0f) == 0 && rf(kBase + 192) == 500.0f,
+              "a teleport is not slid");
+    }
+    {   // apply (exact) still restores the recorded value
+        HalfAhead h = two_runs(10.0f, 12.0f);
+        psp_half_ahead_apply(&h, mem.data(), 50.0f);
+        psp_half_ahead_restore(h, mem.data());
+        CHECK(rf(kBase + 192) == 12.0f, "apply + restore leaves cur");
+    }
     if (failures) {
         std::printf("%d failure(s)\n", failures);
         return 1;

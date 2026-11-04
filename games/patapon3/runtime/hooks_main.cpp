@@ -241,31 +241,6 @@ bool in_hideout(uint8_t* rdram) {
            static_cast<uint32_t>(MEM_W(rdram, kOverlayWindow + 4)) == kHideoutOverlayId;
 }
 
-// 60 fps effect actors in missions (with the 60fps set; PSPRECOMP_P3_EFFECT_30HZ=0 turns it off for
-// A/B). FUN_088D3AB4 is the update method (vtable +60; a0 = the actor, a1 = the frame time in
-// ticks) of mission effect actors, among them Pyokojinete's hero-mode ghost riders. It moves them
-// by a fixed step per call while their life counts the frame time, so at 60 fps the ghosts ran
-// twice as far in the same time: part x 274 -> 1471 in 1.68 s (101 calls, 711 units/s) against
-// 226 -> 810 in 1.71 s (50 calls, 342/s) at 30. Each actor runs once per two vblanks with the
-// skipped call's frame time (psp_paced_step.h), as the game does at 30 fps: 193 -> 778 in 1.675 s
-// (50 calls, 350/s). Callers ignore its return value. Not in the hideout.
-constexpr uint32_t kEffectUpdate = 0x088D3AB4u;
-constexpr uint32_t kEffectUpdateCode[] = {0x27BDFF70u, 0xAFBF002Cu, 0xAFB50028u};
-FuncPtr g_effect_update = nullptr;
-PacedStepTable g_effect_paced;
-
-void effect_update_30hz(uint8_t* rdram, recomp_context* ctx) {
-    if (in_hideout(rdram) || !psp_code_matches(rdram, kEffectUpdate, kEffectUpdateCode, 3)) {
-        g_effect_update(rdram, ctx);
-        return;
-    }
-    uint32_t dt = static_cast<uint32_t>(ctx->r[5]);
-    if (!g_effect_paced.step(static_cast<uint32_t>(ctx->r[4]), psp_vblank_index(psp_display_elapsed_us()), 2, &dt))
-        return;
-    ctx->r[5] = static_cast<int32_t>(dt);
-    g_effect_update(rdram, ctx);
-}
-
 // Smooth scripted props (with PSPRECOMP_P3_HIDEOUT_30HZ; PSPRECOMP_P3_HIDEOUT_SMOOTH=0 keeps the
 // plain 30 Hz pacing). A script sets a prop's position in its 3D node (+192/+196/+200, x y z)
 // and the node matrix builder FUN_0888E7FC (a0 = node) copies it into the matrix translation
@@ -295,7 +270,7 @@ struct ScriptNode {
     int trace_gaps[3] = {};    // mission trace: runs one, two, more vblanks after the last
     float trace_step[3] = {};  // mission trace: largest |step| per axis
 };
-ScriptNode g_script_nodes[32];
+ScriptNode g_script_nodes[64];  // a hero mode's ghost riders alone move up to ~28 nodes
 
 // Outside the hideout the scripts run every vblank (not paced): a 30 fps script that moves a prop
 // and waits one frame (wait_frame_30hz makes it two) moves it every second vblank, e.g. the spike
@@ -304,8 +279,9 @@ ScriptNode g_script_nodes[32];
 // same "in between" test, so a node moved every vblank or less often than every second one is
 // left alone. PSPRECOMP_P3_MISSION_TRACE=1 prints, every ~2 s, each moved node with its gaps
 // between runs and its largest step per axis, and the half-ahead draws per second.
-// The door steps 4 units; 4x that, so a teleport is never slid across the screen.
-constexpr float kMissionNodeMaxJump = 16.0f;
+// The door steps 4 units, the hero ghost riders up to ~19 per 30 Hz step; about twice that, so a
+// teleport or a respawn (hundreds of units) is never slid across the screen.
+constexpr float kMissionNodeMaxJump = 40.0f;
 bool g_hideout_paced = false;   // scripts paced to 30 Hz in the hideout (PSPRECOMP_P3_HIDEOUT_30HZ)
 bool g_mission_smooth = false;
 bool g_mission_trace = false;
@@ -434,6 +410,34 @@ void node_matrix_smooth(uint8_t* rdram, recomp_context* ctx) {
     }
     g_node_matrix(rdram, ctx);
     psp_half_ahead_restore(s->pos, rdram);
+}
+
+// 60 fps effect actors in missions (with the 60fps set; PSPRECOMP_P3_EFFECT_30HZ=0 turns it off for
+// A/B). FUN_088D3AB4 is the update method (vtable +60; a0 = the actor, a1 = the frame time in
+// ticks) of mission effect actors, among them Pyokojinete's hero-mode ghost riders. It moves them
+// by a fixed step per call while their life counts the frame time, so at 60 fps the ghosts ran
+// twice as far in the same time: part x 274 -> 1471 in 1.68 s (101 calls, 711 units/s) against
+// 226 -> 810 in 1.71 s (50 calls, 342/s) at 30. Each actor runs once per two vblanks with the
+// skipped call's frame time (psp_paced_step.h), as the game does at 30 fps: 193 -> 778 in 1.675 s
+// (50 calls, 350/s). Callers ignore its return value. Not in the hideout.
+constexpr uint32_t kEffectUpdate = 0x088D3AB4u;
+constexpr uint32_t kEffectUpdateCode[] = {0x27BDFF70u, 0xAFBF002Cu, 0xAFB50028u};
+FuncPtr g_effect_update = nullptr;
+PacedStepTable g_effect_paced;
+uint32_t g_effect_running = 0;  // effect actor whose paced update is running now (0 = none)
+
+void effect_update_30hz(uint8_t* rdram, recomp_context* ctx) {
+    if (in_hideout(rdram) || !psp_code_matches(rdram, kEffectUpdate, kEffectUpdateCode, 3)) {
+        g_effect_update(rdram, ctx);
+        return;
+    }
+    uint32_t dt = static_cast<uint32_t>(ctx->r[5]);
+    if (!g_effect_paced.step(static_cast<uint32_t>(ctx->r[4]), psp_vblank_index(psp_display_elapsed_us()), 2, &dt))
+        return;
+    ctx->r[5] = static_cast<int32_t>(dt);
+    g_effect_running = static_cast<uint32_t>(ctx->r[4]);  // the parts it places are recorded (attach_smooth)
+    g_effect_update(rdram, ctx);
+    g_effect_running = 0;
 }
 
 void script_update_30hz(uint8_t* rdram, recomp_context* ctx) {
@@ -1082,6 +1086,40 @@ struct PartMatrix {
 };
 std::unordered_map<uint32_t, PartMatrix> g_part_matrices;  // part (a motion player) -> its matrices
 
+// Smooth effect actors (the hero ghost riders, paced to 30 Hz by effect_update_30hz): the parts a
+// paced run places get their world translation (part +48/+52/+56) recorded, and on the vblank in
+// between their draw shows them half a step ahead (psp_half_ahead.h), then the matrix goes back:
+// the ghosts move every frame at the 30 fps speed while game logic keeps the 30 Hz state.
+constexpr uint32_t kPartPos[3] = {48, 52, 56};
+struct EffectPart {
+    HalfAhead pos;
+    int64_t rec_vb = -1, prev_vb = -1;
+};
+std::unordered_map<uint32_t, EffectPart> g_effect_parts;
+
+void effect_part_record(uint8_t* rdram, uint32_t part) {
+    const int64_t vb = psp_vblank_index(psp_display_elapsed_us());
+    if (g_effect_parts.size() >= 1024 && g_effect_parts.find(part) == g_effect_parts.end()) g_effect_parts.clear();
+    EffectPart& e = g_effect_parts[part];
+    if (e.rec_vb == vb && e.pos.records > 0) {  // placed again in the same run: replace cur, keep prev
+        e.pos.records--;
+        std::memcpy(e.pos.cur, e.pos.prev, sizeof e.pos.cur);
+    } else {
+        e.prev_vb = e.rec_vb;
+        e.rec_vb = vb;
+    }
+    psp_half_ahead_record(&e.pos, rdram, part, kPartPos, 3);
+}
+
+// The part's recorded step when this vblank is the one between two of its runs, else null.
+EffectPart* effect_part_between(uint32_t part) {
+    auto it = g_effect_parts.find(part);
+    if (it == g_effect_parts.end()) return nullptr;
+    const int64_t vb = psp_vblank_index(psp_display_elapsed_us());
+    EffectPart& e = it->second;
+    return vb - e.rec_vb == 1 && e.rec_vb - e.prev_vb == 2 ? &e : nullptr;
+}
+
 void attach_smooth(uint8_t* rdram, recomp_context* ctx) {
     const uint32_t part = static_cast<uint32_t>(ctx->r[5]);
     const recomp_context args = *ctx;
@@ -1108,6 +1146,7 @@ void attach_smooth(uint8_t* rdram, recomp_context* ctx) {
     std::memcpy(pm.exact, rdram + (part & 0x07FFFFFFu), 64);
     if (g_part_matrices.size() >= 1024 && g_part_matrices.find(part) == g_part_matrices.end()) g_part_matrices.clear();
     g_part_matrices[part] = pm;
+    if (g_effect_running) effect_part_record(rdram, part);
 }
 
 // A part's motion draw shows it where the smooth body puts it (attach_smooth).
@@ -1117,6 +1156,13 @@ void motion_draw_scoped(uint8_t* rdram, recomp_context* ctx) {
 
 void motion_draw_part(uint8_t* rdram, recomp_context* ctx) {
     const uint32_t player = static_cast<uint32_t>(ctx->r[4]);
+    if (EffectPart* e = effect_part_between(player)) {
+        // Relative: the draw re-placed the part on its still-animating owner since the record.
+        if (psp_half_ahead_apply_rel(&e->pos, rdram, kMissionNodeMaxJump)) g_mission_ahead++;
+        motion_draw_scoped(rdram, ctx);
+        psp_half_ahead_restore(e->pos, rdram);
+        return;
+    }
     auto it = g_part_matrices.find(player);
     if (it == g_part_matrices.end()) {
         motion_draw_scoped(rdram, ctx);
