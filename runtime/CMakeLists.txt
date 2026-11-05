@@ -194,6 +194,7 @@ set(RUNTIME_SOURCES
     src/psp_texrep_png.cpp
     src/psp_texrep_queue.cpp
     src/psp_tex_upscale.cpp
+    src/psp_tex_upscale_queue.cpp
     third_party/xbrz/xbrz.cpp
     src/psp_pad.cpp
     src/psp_wheel.cpp
@@ -1120,6 +1121,12 @@ add_executable(test_tex_upscale tests/test_tex_upscale.cpp src/psp_tex_upscale.c
 target_include_directories(test_tex_upscale PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/third_party/xbrz)
 target_compile_options(test_tex_upscale PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME tex_upscale_tests COMMAND test_tex_upscale)
+
+# Background texture upscaling: change tracker (palette animation) and the worker queue's budget.
+add_executable(test_tex_upscale_queue tests/test_tex_upscale_queue.cpp src/psp_tex_upscale_queue.cpp src/psp_texrep_queue.cpp)
+target_include_directories(test_tex_upscale_queue PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_tex_upscale_queue PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME tex_upscale_queue_tests COMMAND test_tex_upscale_queue)
 
 add_executable(test_paced_step tests/test_paced_step.cpp)
 target_include_directories(test_paced_step PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
