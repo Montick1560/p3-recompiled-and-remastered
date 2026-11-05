@@ -24,6 +24,7 @@
 // vblanks; a frame in between keeps the held words and clears the edge words,
 // so each press, release and repeat reaches one frame, at the 30 fps timing.
 #include "p3_achievements.h"
+#include "p3_effects.h"
 #include "p3_ping.h"
 #include "p3_prompts.h"
 #include "psp_achievements_run.h"
@@ -53,6 +54,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -413,28 +415,59 @@ void node_matrix_smooth(uint8_t* rdram, recomp_context* ctx) {
 
 // 60 fps effect actors in missions (with the 60fps set; PSPRECOMP_P3_EFFECT_30HZ=0 turns it off for
 // A/B). FUN_088D3AB4 is the update method (vtable +60; a0 = the actor, a1 = the frame time in
-// ticks) of mission effect actors, among them Pyokojinete's hero-mode ghost riders. It moves them
-// by a fixed step per call while their life counts the frame time, so at 60 fps the ghosts ran
-// twice as far in the same time: part x 274 -> 1471 in 1.68 s (101 calls, 711 units/s) against
-// 226 -> 810 in 1.71 s (50 calls, 342/s) at 30. Each actor runs once per two vblanks with the
-// skipped call's frame time (psp_paced_step.h), as the game does at 30 fps: 193 -> 778 in 1.675 s
-// (50 calls, 350/s). Callers ignore its return value. Not in the hideout.
+// ticks) of mission effect actors. Only the effects named in p3_effects.cpp are paced:
+// - Pyokojinete's hero ghost riders move by a fixed step per call while their life counts the frame
+//   time, so at 60 fps they ran twice as far: part x 274 -> 1471 in 1.68 s (101 calls, 711 units/s)
+//   against 226 -> 810 in 1.71 s (50 calls, 342/s) at 30. Paced: 193 -> 778 in 1.675 s (350/s).
+// - Wooyari's hero wheel was not drawn for one vblank at each restart (every 30 vblanks) unpaced.
+// A paced actor runs once per two vblanks with the skipped call's frame time (psp_paced_step.h), as
+// the game does at 30 fps. Every other effect (arrows, javelins, hits) moves by the frame time and
+// runs every vblank, smooth. The name is the effect resource's (a0+0x344 -> +0x14 -> -0x100), the
+// same in 1.1.4 and 1.1.5b; PSPRECOMP_P3_EFFECT_TRACE=1 logs each new actor's name. Callers ignore
+// the return value. Not in the hideout.
 constexpr uint32_t kEffectUpdate = 0x088D3AB4u;
 constexpr uint32_t kEffectUpdateCode[] = {0x27BDFF70u, 0xAFBF002Cu, 0xAFB50028u};
 FuncPtr g_effect_update = nullptr;
 PacedStepTable g_effect_paced;
 uint32_t g_effect_running = 0;  // effect actor whose paced update is running now (0 = none)
+bool g_effect_trace = false;     // PSPRECOMP_P3_EFFECT_TRACE=1: each new effect actor's name (lab)
+
+// The actor's effect-name field (p3_effects.h); null when its descriptor or resource pointer is not set.
+const char* effect_name(uint8_t* rdram, uint32_t actor) {
+    const uint32_t d = rd32(rdram, actor + 0x344);
+    const uint32_t res = d >= 0x08800000u && d < 0x0A000000u ? rd32(rdram, d + 0x14) : 0;
+    if (res < 0x08800100u || res >= 0x0A000000u) return nullptr;
+    return reinterpret_cast<const char*>(rdram + ((res - 0x100) & 0x07FFFFFFu));
+}
+
+// Trace: each new (actor, name) once, whether it is paced.
+void effect_trace(uint32_t a0, const char* name, bool paced, int64_t vb) {
+    static std::set<std::pair<uint32_t, std::string>> seen;
+    const std::string n = name ? std::string(name, strnlen(name, 16)) : "?";
+    if (seen.insert({a0, n}).second)
+        std::fprintf(stderr, "[P3-EFX] new a0=%08X vb=%lld name=%s paced=%d\n", a0, static_cast<long long>(vb),
+                     n.c_str(), paced);
+}
 
 void effect_update_30hz(uint8_t* rdram, recomp_context* ctx) {
     if (in_hideout(rdram) || !psp_code_matches(rdram, kEffectUpdate, kEffectUpdateCode, 3)) {
         g_effect_update(rdram, ctx);
         return;
     }
+    const uint32_t actor = static_cast<uint32_t>(ctx->r[4]);
+    const char* name = effect_name(rdram, actor);
+    const bool paced = name && p3_effect_paced_name(name);
+    const int64_t vb = psp_vblank_index(psp_display_elapsed_us());
+    if (g_effect_trace) effect_trace(actor, name, paced, vb);
+    if (!paced) {
+        g_effect_update(rdram, ctx);
+        return;
+    }
     uint32_t dt = static_cast<uint32_t>(ctx->r[5]);
-    if (!g_effect_paced.step(static_cast<uint32_t>(ctx->r[4]), psp_vblank_index(psp_display_elapsed_us()), 2, &dt))
+    if (!g_effect_paced.step(actor, vb, 2, &dt))
         return;
     ctx->r[5] = static_cast<int32_t>(dt);
-    g_effect_running = static_cast<uint32_t>(ctx->r[4]);  // the parts it places are recorded (attach_smooth)
+    g_effect_running = actor;  // the parts it places are recorded (attach_smooth)
     g_effect_update(rdram, ctx);
     g_effect_running = 0;
 }
@@ -1602,7 +1635,9 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
         if (!(effect && effect[0] == '0')) {
             g_effect_update = RECOMP_LOOKUP(kEffectUpdate);
             psp_dispatch_register(kEffectUpdate, effect_update_30hz);
-            std::fprintf(stderr, "[P3] 60fps: mission effect actors paced to 30 Hz (hero ghost riders)\n");
+            std::fprintf(stderr, "[P3] 60fps: hero ghost riders and wheel effects paced to 30 Hz\n");
+            const char* et = std::getenv("PSPRECOMP_P3_EFFECT_TRACE");
+            g_effect_trace = et && et[0] == '1';
         }
         const char* menu = std::getenv("PSPRECOMP_P3_MENU_30HZ");
         if (!(menu && menu[0] == '0')) {

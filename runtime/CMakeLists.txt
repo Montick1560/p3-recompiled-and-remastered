@@ -887,6 +887,13 @@ if(PSPRECOMP_GAME STREQUAL "patapon3")
     target_compile_options(test_p3_ping PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
     add_test(NAME p3_ping_tests COMMAND test_p3_ping)
 
+    # Patapon 3 mission effect actors paced at 60 fps, chosen by effect name.
+    add_executable(test_p3_effects tests/test_p3_effects.cpp
+                   ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime/p3_effects.cpp)
+    target_include_directories(test_p3_effects PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime)
+    target_compile_options(test_p3_effects PRIVATE -O2 -Wall -Wextra)
+    add_test(NAME p3_effects_tests COMMAND test_p3_effects)
+
     # Patapon 3 help-bar word tables: drawable, inside their rows, fitting at >= 75 %.
     add_executable(test_p3_prompt_labels tests/test_p3_prompt_labels.cpp src/psp_bar_text.cpp
                    src/stb_truetype_impl.cpp ${CMAKE_CURRENT_BINARY_DIR}/bar_fonts_data.cpp  # embedded below

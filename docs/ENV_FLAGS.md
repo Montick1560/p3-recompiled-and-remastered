@@ -1027,13 +1027,24 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
 - **Type:** env (`0` off; anything else or unset = on).
 - **Default:** on when `PSPRECOMP_PATCHES` enables `60fps`; never installed otherwise.
 - **Effect:** The update of mission effect actors (`0x088D3AB4`, vtable +60; a0 = actor,
-  a1 = frame time in ticks) moves them by a fixed step per call while their life counts
-  the frame time, so Pyokojinete's hero-mode ghost riders ran twice as far at 60 fps
-  (1197 units in 1.68 s instead of 584 in 1.71 s). In missions (not the hideout) each actor
-  runs once per two vblanks with the skipped call's frame time
-  (`runtime/include/psp_paced_step.h`), as at 30 fps. Install prints
-  `[P3] 60fps: mission effect actors paced to 30 Hz (hero ghost riders)`.
+  a1 = frame time in ticks). In missions (not the hideout), the actors whose effect name
+  (`games/patapon3/runtime/p3_effects.cpp`) needs it run once per two vblanks with the
+  skipped call's frame time (`runtime/include/psp_paced_step.h`), as at 30 fps:
+  Pyokojinete's hero-mode ghost riders (`HERO_PHANTOM_*`), which move by a fixed step per
+  call and ran twice as far at 60 fps (1197 units in 1.68 s instead of 584 in 1.71 s), and
+  Wooyari's hero wheel (`HERO_RING_*` and the effects born in its cycle), which vanished for
+  one vblank at each restart. Every other effect (arrows, javelins, hits) runs every vblank.
+  Install prints `[P3] 60fps: hero ghost riders and wheel effects paced to 30 Hz`.
 - **Set it when:** `0` to see the old double-distance ghost riders at 60 fps (A/B).
+
+### `PSPRECOMP_P3_EFFECT_TRACE`
+- **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`1` on).
+- **Default:** unset (off). Only with the `60fps` patch set and `PSPRECOMP_P3_EFFECT_30HZ` on.
+- **Effect:** Logs each new mission effect actor once:
+  `[P3-EFX] new a0=<actor> vb=<vblank> name=<last 15 characters of the effect name>x paced=<0|1>`.
+- **Set it when:** finding which effect a 60 fps problem belongs to, before adding its name to
+  `p3_effects.cpp`.
 
 ### `PSPRECOMP_P3_WEATHER_30HZ`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**
