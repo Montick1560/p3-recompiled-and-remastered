@@ -54,6 +54,15 @@ static void parse_address_forms() {
     CHECK(infra::parse_address("ftp://h").kind == A::Off, "unknown scheme -> off");
 }
 
+static bool wait_until(const std::function<bool()>& f, int ms) {
+    const auto t = Clock::now();
+    while (!f()) {
+        if (ms_since(t) > ms) return false;
+        sleep_ms(2);
+    }
+    return true;
+}
+
 static infra::Client::Options fast() {
     infra::Client::Options o;
     o.ping_interval_ms = 100;
@@ -327,6 +336,44 @@ static void rtt_from_ping() {
     CHECK(rtt >= 35 && rtt <= 200, "RTT from the ping answers");
 }
 
+// The ping under each hero: our RTT goes up with every ping after the first answer, the answer's peers give
+// each member's own; a relayed peer is ours + theirs, our own id is our RTT, anyone else unknown.
+static void ping_per_member() {
+    FakeInfraServer s;
+    s.ping_delay_ms = 20;
+    s.ping_extra = {{"peers", {{{"online_id", "P3B"}, {"vip", 0x0A500004}, {"rtt", 100}}}}};
+    s.start();
+    infra::Client c(s.address(), fast());
+    CHECK(c.peer_ping("P3B").ms == -1, "nothing before connecting");
+    CHECK(c.connect("P3A", 2000), "connect");
+    CHECK(wait_until([&] { return c.rtt_ms() >= 0 && c.peer_ping("P3B").ms >= 0; }, 2000), "peers arrive");
+    const int own = c.rtt_ms();
+    const infra::Client::PeerPing peer = c.peer_ping("P3B");
+    CHECK(peer.ms - 100 >= own - 30 && peer.ms - 100 <= own + 30, "relayed peer = ours + theirs");
+    CHECK(peer.via_server, "no direct path: the route goes through the server");
+    CHECK(c.peer_ping("P3A").ms == -1, "own id: no number (a ping is between two players)");
+    CHECK(c.peer_ping("P3Z").ms == -1, "not a member: unknown");
+    sleep_ms(300);
+    bool sent_rtt = false;
+    {
+        std::lock_guard<std::mutex> lock(s.mu);
+        for (const infra::Frame& f : s.got)
+            if (f.kind == infra::kKindJson && f.json.value("op", "") == "ping" && f.json.contains("rtt"))
+                sent_rtt = f.json["rtt"].is_number_integer() && f.json["rtt"].get<int>() >= 15;
+    }
+    CHECK(sent_rtt, "the ping carries our RTT once we have one");
+}
+
+// An old server answers pings without peers: every peer stays unknown.
+static void peers_absent_gives_unknown() {
+    FakeInfraServer s;
+    s.start();
+    infra::Client c(s.address(), fast());
+    CHECK(c.connect("P3A", 2000), "connect");
+    CHECK(wait_until([&] { return c.rtt_ms() >= 0; }, 2000), "pinged");
+    CHECK(c.peer_ping("P3B").ms == -1, "no peers: unknown");
+}
+
 static void silent_server_is_dead() {
     FakeInfraServer s;
     s.answer_pings = false;
@@ -401,14 +448,6 @@ static infra::Client::Options slow_opts(SlowTransport** last, int fail_first_at 
     return o;
 }
 
-static bool wait_until(const std::function<bool()>& f, int ms) {
-    const auto t = Clock::now();
-    while (!f()) {
-        if (ms_since(t) > ms) return false;
-        sleep_ms(2);
-    }
-    return true;
-}
 
 static void send_never_blocks() {
     FakeInfraServer s;
@@ -915,6 +954,8 @@ int main() {
     stream_segments_in_order();
     queues_bounded_in_bytes();
     rtt_from_ping();
+    ping_per_member();
+    peers_absent_gives_unknown();
     silent_server_is_dead();
     send_never_blocks();
     outbox_keeps_order();

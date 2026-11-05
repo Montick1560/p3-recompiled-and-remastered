@@ -54,6 +54,11 @@ public:
     void drop_peer(uint32_t peer_vip);
     bool has_peer(uint32_t peer_vip) const;
     bool is_up(uint32_t peer_vip) const;
+    struct Route {
+        int rtt_ms = -1;      // direct p50, or the measured relay p50 while the relay is faster; -1 unknown
+        bool direct = false;  // the datagrams take the direct path now
+    };
+    Route route(uint32_t peer_vip) const;  // the route this peer's datagrams take now
     bool send_dgram(uint32_t peer_vip, uint16_t dst, uint16_t src, const uint8_t* data, size_t len);  // false -> relay
     void on_relayed(uint32_t peer_vip, const uint8_t* bytes, size_t len);  // a kind 4 payload
     void set_impair(const std::string& text);  // lab: changes the impairment of a running link

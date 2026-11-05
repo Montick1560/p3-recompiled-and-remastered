@@ -228,6 +228,16 @@ bool Link::is_up(uint32_t peer_vip) const {
     return it != peers_.end() && it->second.path->state() == PathState::Up;
 }
 
+Link::Route Link::route(uint32_t peer_vip) const {
+    std::lock_guard<std::mutex> l(mu_);
+    auto it = peers_.find(peer_vip);
+    if (it == peers_.end()) return {};
+    const Path& p = *it->second.path;
+    const PathStats s = p.stats();
+    if (p.use_direct()) return {s.rtt_p50, true};
+    return {p.relay_preferred() ? s.relay_p50 : -1, false};
+}
+
 bool Link::send_dgram(uint32_t peer_vip, uint16_t dst, uint16_t src, const uint8_t* data, size_t len) {
     std::lock_guard<std::mutex> l(mu_);
     auto it = peers_.find(peer_vip);

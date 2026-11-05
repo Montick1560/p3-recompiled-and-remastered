@@ -24,6 +24,7 @@
 // vblanks; a frame in between keeps the held words and clears the edge words,
 // so each press, release and repeat reaches one frame, at the 30 fps timing.
 #include "p3_achievements.h"
+#include "p3_ping.h"
 #include "p3_prompts.h"
 #include "psp_achievements_run.h"
 #include "psp_presence_run.h"
@@ -1426,6 +1427,7 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
     psp_achievements_register(ach, ach_sources);  // main() starts the system (psp_achievements_run.h)
     psp_presence_register({"1565627786004275340", p3_presence_activity_from_ram, psp_np2_party});  // Discord app "Patapon 3 DxD Remastered"
     p3_prompts_register();  // help bars show the player's keyboard / controller buttons
+    p3_ping_register();     // online: each hero's ping and a real signal meter
     const char* fast_load = std::getenv("PSPRECOMP_P3_FAST_LOAD");
     if (!(fast_load && fast_load[0] == '0')) {
         g_loading_icon_draw = RECOMP_LOOKUP(kLoadingIconDraw);

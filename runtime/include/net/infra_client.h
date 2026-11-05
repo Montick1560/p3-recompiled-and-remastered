@@ -141,6 +141,14 @@ public:
     bool direct_up(uint32_t peer_vip) const { return direct_.is_up(peer_vip); }
 
     int rtt_ms() const;  // median of the last 5 pings, -1 before the first answer
+    struct PeerPing {
+        int ms = -1;              // -1 unknown
+        bool via_server = false;  // the route goes through the server (no direct path in use)
+    };
+    // A room member's ping as this player lives it: the RTT of the route our datagrams to it take now (direct
+    // path, else through the server: measured, or ours + theirs, net/infra_signal.h peer_ping_ms). A ping is
+    // between two players, so our own id (and anyone not in our rooms) gets {-1}. Any thread.
+    PeerPing peer_ping(const std::string& online_id) const;
     LinkSummary link_summary() const { return link_.summary(); }  // this session's relay-link numbers
     uint32_t vip() const { return vip_; }
     std::string session() const;
@@ -198,6 +206,11 @@ private:
     std::deque<Datagram> streams_;
     size_t queued_bytes_ = 0, stream_bytes_ = 0;
     std::deque<int> rtts_;
+    struct PeerRtt {
+        uint32_t vip = 0;
+        int rtt = -1;  // its own server RTT, -1 unknown
+    };
+    std::map<std::string, PeerRtt> peers_;  // by online id: the other members of our rooms, from the last ping answer
     LinkStats link_;
     std::multiset<int64_t> pings_out_;  // send times (now_ms) of the unanswered pings
     std::atomic<bool> link_refused_{false};

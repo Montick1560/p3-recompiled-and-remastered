@@ -16,4 +16,17 @@ inline uint8_t strength_from_rtt(int rtt_ms) {
     return 5;
 }
 
+// The ping shown under a room member's hero: the direct route's measured RTT when there is one (route_rtt >= 0),
+// else ours to the server + theirs (the server forwards each member's); -1 when a part is unknown.
+inline int peer_ping_ms(int route_rtt, int own_rtt, int their_rtt) {
+    if (route_rtt >= 0) return route_rtt;
+    return own_rtt >= 0 && their_rtt >= 0 ? own_rtt + their_rtt : -1;
+}
+
+enum class PingQuality { Unknown, Good, Fair, Poor };
+inline PingQuality ping_quality(int ms) {
+    if (ms < 0) return PingQuality::Unknown;
+    return ms < 80 ? PingQuality::Good : ms < 150 ? PingQuality::Fair : PingQuality::Poor;
+}
+
 }  // namespace infra

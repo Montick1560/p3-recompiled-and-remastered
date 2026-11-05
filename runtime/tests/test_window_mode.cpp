@@ -3,6 +3,7 @@
 #include "psp_window_mode.h"
 
 #include <cstdio>
+#include <string>
 
 static int failures = 0;
 #define CHECK(cond, msg) \
@@ -76,7 +77,24 @@ static void names() {
     CHECK(psp_window_mode_name(M::Fullscreen)[0] == 'f', "fullscreen name");
 }
 
+// "Ventana sin bordes": parse, name, toggle, and its rectangle (centred, capped to the display).
+static void borderless_window() {
+    CHECK(psp_window_mode("borderless_window", nullptr) == M::BorderlessWindow, "borderless_window");
+    CHECK(psp_window_mode("Borderless_Window", "1") == M::BorderlessWindow, "case-insensitive, beats fullscreen=1");
+    CHECK(std::string(psp_window_mode_name(M::BorderlessWindow)) == "borderless_window", "name");
+    CHECK(psp_window_mode_toggle(M::BorderlessWindow, M::BorderlessWindow) == M::Windowed, "F11 to a window");
+    CHECK(psp_window_mode_toggle(M::Windowed, M::BorderlessWindow) == M::BorderlessWindow, "F11 back");
+    PspRect r = psp_borderless_window_rect({0, 0, 1920, 1080}, 960, 544, nullptr, 0);
+    CHECK(r.x == 480 && r.y == 268 && r.w == 960 && r.h == 544, "centred");
+    r = psp_borderless_window_rect({-1366, 0, 1366, 768}, 960, 544, nullptr, 0);
+    CHECK(r.x == -1163 && r.y == 112 && r.w == 960 && r.h == 544, "centred on a monitor left of the primary");
+    const PspRect alone[] = {{0, 0, 1366, 768}};
+    r = psp_borderless_window_rect({0, 0, 1366, 768}, 3840, 2176, alone, 1);
+    CHECK(r.x == 0 && r.y == 0 && r.w == 1366 && r.h == 769, "too big: the full-display rule (never exactly the monitor)");
+}
+
 int main() {
+    borderless_window();
     mode_from_env();
     alone_grows_down();
     neighbour_on_the_right_grows_down();

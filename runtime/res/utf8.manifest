@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Narrow strings (getenv, argv, fopen, std::filesystem::u8path) are UTF-8 on Windows 10 1903+: game folders
+     with accents or n-tilde start (beta reports #83/#84: "locale not supported"). Nothing else is declared, so the
+     exe keeps every other default it had without a manifest. -->
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+</assembly>

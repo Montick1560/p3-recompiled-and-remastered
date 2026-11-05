@@ -378,13 +378,16 @@ endif()
 add_executable(psprecomp_runtime ${RUNTIME_SOURCES})
 
 # Game option catalog for settings.ini [game] (docs/contracts/settings-v1.md).
-# game_options.json and the official achievement catalogue (docs/contracts/achievements-v1.md) next to the exe,
-# read by the launcher. Copied whenever the source file changes, not only when the exe relinks.
+# game_options.json, the official achievement catalogue (docs/contracts/achievements-v1.md) and the game's own
+# image assets (assets/, e.g. the P3 ping icon) next to the exe; the launcher reads the JSON files.
+# Copied whenever the source file changes, not only when the exe relinks.
 set(_game_data_out "")
-foreach(_f game_options.json achievements.json)
+foreach(_f game_options.json achievements.json assets/ping_signal.png)
     set(_src "${CMAKE_CURRENT_SOURCE_DIR}/../games/${PSPRECOMP_GAME}/${_f}")
     if(EXISTS "${_src}")
+        get_filename_component(_dst_dir "${CMAKE_CURRENT_BINARY_DIR}/${_f}" DIRECTORY)
         add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${_f}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${_dst_dir}"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_src}" "${CMAKE_CURRENT_BINARY_DIR}/${_f}"
             DEPENDS "${_src}" VERBATIM)
         list(APPEND _game_data_out "${CMAKE_CURRENT_BINARY_DIR}/${_f}")
@@ -392,6 +395,7 @@ foreach(_f game_options.json achievements.json)
 endforeach()
 if(_game_data_out)
     add_custom_target(psp_game_data ALL DEPENDS ${_game_data_out})
+    add_dependencies(psprecomp_runtime psp_game_data)  # `ninja psprecomp_runtime` (beta packaging) copies them too
 endif()
 
 # ── Code-overlay banks (M2) ────────────────────────────────────────────────
@@ -459,6 +463,16 @@ if(PSPRECOMP_WINDOW_TITLE)
         COMPILE_DEFINITIONS "PSPRECOMP_WINDOW_TITLE=\"${PSPRECOMP_WINDOW_TITLE}\"")
     message(STATUS "psprecomp: window title ${PSPRECOMP_WINDOW_TITLE}")
 endif()
+
+# Windows: a manifest that makes the process code page UTF-8 (res/utf8.manifest).
+if(WIN32)
+    set(_manifest_rc "${CMAKE_CURRENT_BINARY_DIR}/utf8_manifest.rc")
+    file(WRITE "${_manifest_rc}" "1 24 \"${CMAKE_CURRENT_SOURCE_DIR}/res/utf8.manifest\"
+")
+    set_source_files_properties("${_manifest_rc}" PROPERTIES OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/res/utf8.manifest")
+    target_sources(psprecomp_runtime PRIVATE "${_manifest_rc}")
+endif()
+
 
 target_include_directories(psprecomp_runtime PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -864,6 +878,15 @@ if(PSPRECOMP_GAME STREQUAL "patapon3")
     target_compile_options(test_p3_presence_text PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
     add_test(NAME p3_presence_text_tests COMMAND test_p3_presence_text)
 
+    # Patapon 3 ping under each online hero: signatures, party slots in RAM, anchor -> slot, bars, tags.
+    add_executable(test_p3_ping tests/test_p3_ping.cpp
+                   ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime/p3_ping.cpp)
+    target_include_directories(test_p3_ping PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                               ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann
+                               ${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/runtime)
+    target_compile_options(test_p3_ping PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+    add_test(NAME p3_ping_tests COMMAND test_p3_ping)
+
     # Patapon 3 help-bar word tables: drawable, inside their rows, fitting at >= 75 %.
     add_executable(test_p3_prompt_labels tests/test_p3_prompt_labels.cpp src/psp_bar_text.cpp
                    src/stb_truetype_impl.cpp ${CMAKE_CURRENT_BINARY_DIR}/bar_fonts_data.cpp  # embedded below
@@ -906,6 +929,13 @@ add_executable(test_texrep_png tests/test_texrep_png.cpp src/psp_texrep_png.cpp)
 target_include_directories(test_texrep_png PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
 target_compile_options(test_texrep_png PRIVATE -O2)
 add_test(NAME texrep_png_tests COMMAND test_texrep_png)
+
+add_executable(test_world_tag_icon tests/test_world_tag_icon.cpp src/psp_texrep_png.cpp)
+target_include_directories(test_world_tag_icon PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
+target_compile_definitions(test_world_tag_icon PRIVATE
+    PSP_PING_ICON_PNG="${CMAKE_CURRENT_SOURCE_DIR}/../games/patapon3/assets/ping_signal.png")
+target_compile_options(test_world_tag_icon PRIVATE -O2)
+add_test(NAME world_tag_icon_tests COMMAND test_world_tag_icon)
 
 add_executable(test_texrep_queue tests/test_texrep_queue.cpp src/psp_texrep_queue.cpp)
 target_include_directories(test_texrep_queue PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

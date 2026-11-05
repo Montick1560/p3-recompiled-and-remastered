@@ -468,6 +468,7 @@ class Conn:
         self.vip = 0
         self.port = 0
         self.rooms = {}             # room id -> Room this connection is a member of
+        self.rtt = -1               # its own server RTT from its last ping (ms), -1 until it sends one
         self.dgram_window = 0.0
         self.dgram_count = 0
         self.dgram_dropped = 0
@@ -1173,11 +1174,23 @@ class Server:
         return answer
 
     def op_ping(self, conn, msg):
-        answer = {"id": msg.get("id"), "ok": True, "t": msg.get("t")}
+        # rtt: the client's own server RTT (ms), optional (older runtimes). The answer lists every other member of
+        # this connection's rooms with theirs, so each client can show ours + theirs under a relayed hero.
+        if "rtt" in msg:
+            rtt = msg["rtt"]
+            if type(rtt) is not int or not 0 <= rtt <= 60000:
+                raise Err(BAD_REQUEST)
+            conn.rtt = rtt
+        peers, seen = [], {conn}
+        for room in conn.rooms.values():
+            for m in room.members:
+                if m.conn not in seen:
+                    seen.add(m.conn)
+                    peers.append({"online_id": m.conn.online_id, "vip": m.conn.vip, "rtt": m.conn.rtt})
         if self.delay:
-            self.later(conn, json_frame(answer))
+            self.later(conn, json_frame({"id": msg.get("id"), "ok": True, "t": msg.get("t"), "peers": peers}))
             return None
-        return {"t": msg.get("t")}
+        return {"t": msg.get("t"), "peers": peers}
 
     def op_link_stats(self, conn, msg):
         # The session's relay-link numbers (client infra::LinkStats); a later report overwrites. Numbers only.
@@ -2027,6 +2040,7 @@ def selftest():
 
     beta_selftest(run, quiet, lines)
     link_stats_selftest(run, quiet, lines)
+    ping_peers_selftest(run, quiet)
     direct_selftest(run, quiet, lines)
     impair_selftest(run, quiet)
     lobby_status_selftest(run, quiet)
@@ -2388,6 +2402,32 @@ def direct_selftest(run, quiet, lines):
         cl.close()
     srv.running = False
     th.join(timeout=5)
+
+
+def ping_peers_selftest(run, quiet):
+    """Ping answers carry every other room member's server RTT (the ping under each hero); rtt is optional."""
+    srv = Server("127.0.0.1", 0, None, logger=quiet)
+    th = run(srv)
+    a, b, c = TestClient(srv.port), TestClient(srv.port), TestClient(srv.port)
+    a.ok("login", online_id="PING_A")
+    vb = b.ok("login", online_id="PING_B")["vip"]
+    c.ok("login", online_id="PING_C")
+    assert a.ok("ping", t=1, rtt=90)["peers"] == [], "no room: no peers"
+    room = a.ok("create", max_slot=4, flag_attr=0x04000000, ints=GAME_INTS, bins=[], member_bins=[])["room"]
+    b.ok("join", room_id=room["id"], member_bins=[])
+    assert a.ok("ping", t=2, rtt=90)["peers"] == [{"online_id": "PING_B", "vip": vb, "rtt": -1}], "B never sent one"
+    b.ok("ping", t=3, rtt=40)
+    assert a.ok("ping", t=4)["peers"] == [{"online_id": "PING_B", "vip": vb, "rtt": 40}], "old client form"
+    pb = b.ok("ping", t=5, rtt=41)
+    assert pb["t"] == 5 and [p["online_id"] for p in pb["peers"]] == ["PING_A"] and pb["peers"][0]["rtt"] == 90, pb
+    assert c.ok("ping", t=6, rtt=10)["peers"] == [], "not in the room"
+    for bad in ("x", -1, 60001, 1.5, True):
+        r = b.req("ping", t=7, rtt=bad)
+        assert not r["ok"] and r["error"] == BAD_REQUEST, (bad, r)
+    for cl in (a, b, c):
+        cl.close()
+    srv.running = False
+    th.join(timeout=2)
 
 
 def link_stats_selftest(run, quiet, lines):

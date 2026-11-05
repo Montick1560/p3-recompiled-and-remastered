@@ -7,6 +7,7 @@
 // drawn with a symbol fallback font when one exists on the host.
 #include "psp_osk_overlay.h"
 #include "psp_gl_api.h"
+#include "psp_icon_strip.h"
 #include "psp_osk_session.h"
 #include "psp_osk_skin.h"
 
@@ -236,12 +237,15 @@ Gl& gl() {
         "uniform sampler2D u_tex; uniform vec4 u_color; uniform int u_textured;\n"
         "uniform vec2 u_size; uniform float u_radius;\n"
         "in vec2 v_uv; out vec4 o;\n"
-        "void main(){ float a = u_textured != 0 ? texture(u_tex, v_uv).r : 1.0;"
+        // u_textured: 0 flat colour, 1 text (red = coverage), 2 RGBA image tinted by multiply (tag icons)
+        "void main(){ vec4 t = u_textured != 0 ? texture(u_tex, v_uv) : vec4(1.0);"
+        " float a = u_textured == 1 ? t.r : t.a;"
+        " vec3 rgb = u_textured == 2 ? t.rgb * u_color.rgb : u_color.rgb;"
         " vec2 p = v_uv * u_size;"
         " vec2 q = abs(p - u_size * 0.5) - (u_size * 0.5 - vec2(u_radius));"
         " float d = length(max(q, 0.0)) - u_radius;"
         " float cov = u_radius > 0.0 ? clamp(0.5 - d, 0.0, 1.0) : 1.0;"
-        " o = vec4(u_color.rgb, u_color.a * a * cov); }\n";
+        " o = vec4(rgb, u_color.a * a * cov); }\n";
     g.prog = glCreateProgram();
     const GLuint v = compile(GL_VERTEX_SHADER, vs), f = compile(GL_FRAGMENT_SHADER, fs);
     glAttachShader(g.prog, v);
@@ -298,9 +302,9 @@ void update_text(TextTex& t, const std::string& text, int px) {
 }
 
 // Draw a window-space rectangle (top-left origin, pixels). `radius` rounds the
-// corners with a 1 px antialiased edge; text quads pass 0.
+// corners with a 1 px antialiased edge; text quads pass 0. `image`: tex is RGBA, tinted by c (else a text mask).
 void rect(int win_w, int win_h, float x, float y, float w, float h, const float c[4], GLuint tex,
-          float radius = 0.0f) {
+          float radius = 0.0f, bool image = false) {
     Gl& g = gl();
     const float x0 = x / win_w * 2.0f - 1.0f, x1 = (x + w) / win_w * 2.0f - 1.0f;
     const float y0 = 1.0f - y / win_h * 2.0f, y1 = 1.0f - (y + h) / win_h * 2.0f;
@@ -309,7 +313,7 @@ void rect(int win_w, int win_h, float x, float y, float w, float h, const float 
     glBindBuffer(GL_ARRAY_BUFFER, g.vbo);
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(v), v);
     glUniform4fv(g.u_color, 1, c);
-    glUniform1i(g.u_textured, tex != 0 ? 1 : 0);
+    glUniform1i(g.u_textured, tex == 0 ? 0 : image ? 2 : 1);
     glUniform2f(g.u_size, w, h);
     glUniform1f(g.u_radius, radius > 0.0f ? std::min(radius, std::min(w, h) * 0.5f) : 0.0f);
     if (tex != 0) {
@@ -642,4 +646,99 @@ bool psp_toast_overlay_draw(int win_w, int win_h, int rx, int ry, int rw, int rh
     glBindVertexArray(0);
     glUseProgram(0);
     return true;
+}
+
+namespace {
+std::vector<TagRect> g_placed;  // tags drawn this frame (GL thread only)
+std::mutex g_icon_mu;
+IconStrip g_icon_new;            // decoded by psp_world_tag_set_icon, not uploaded yet (guarded by g_icon_mu)
+std::vector<GLuint> g_icon_tex;  // one texture per frame of the uploaded strip (GL thread only)
+
+// GL thread: uploads a newly registered strip, one mipmapped texture per frame (drawn at a few pixels).
+void icon_upload() {
+    IconStrip s;
+    {
+        std::lock_guard<std::mutex> l(g_icon_mu);
+        if (g_icon_new.frames == 0) return;
+        s = std::move(g_icon_new);
+        g_icon_new = IconStrip();
+    }
+    if (!g_icon_tex.empty()) glDeleteTextures(static_cast<GLsizei>(g_icon_tex.size()), g_icon_tex.data());
+    g_icon_tex.assign(s.frames, 0);
+    glGenTextures(s.frames, g_icon_tex.data());
+    const int fw = s.w / s.frames;
+    std::vector<uint8_t> frame(static_cast<size_t>(fw) * s.h * 4);
+    for (int f = 0; f < s.frames; f++) {
+        for (int y = 0; y < s.h; y++)
+            std::copy_n(&s.rgba[(static_cast<size_t>(y) * s.w + f * fw) * 4], fw * 4, &frame[static_cast<size_t>(y) * fw * 4]);
+        glBindTexture(GL_TEXTURE_2D, g_icon_tex[f]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, fw, s.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, frame.data());
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+}
+}  // namespace
+
+bool psp_world_tag_set_icon(const std::string& png_path, int frames) {
+    IconStrip s;
+    if (!psp_icon_strip_load(png_path, frames, &s)) return false;
+    std::lock_guard<std::mutex> l(g_icon_mu);
+    g_icon_new = std::move(s);
+    return true;
+}
+
+void psp_world_tags_begin_frame() { g_placed.clear(); }
+
+void psp_world_tag_draw_target(const WorldTag& t, int fb_w, int fb_h) {
+    static std::map<std::string, TextTex> cache;  // by text + size; numbers repeat, so it stays small
+    if (fb_w <= 0 || fb_h <= 0) return;
+    icon_upload();
+    const bool icon = t.icon >= 0 && t.icon < static_cast<int>(g_icon_tex.size());
+    const int px = t.size_px > 0.0f ? std::max(8, static_cast<int>(std::lround(fb_h * t.size_px / 272.0f)))
+                                    : std::max(12, static_cast<int>(std::lround(fb_h * 0.046f)));
+    if (cache.size() > 48) {  // a long session of changing numbers: start over
+        for (auto& kv : cache) glDeleteTextures(1, &kv.second.tex);
+        cache.clear();
+    }
+    TextTex* text = nullptr;
+    if (!t.text.empty()) {
+        text = &cache[t.text + "@" + std::to_string(px)];
+        update_text(*text, t.text, px);
+        if (text->w <= 0) text = nullptr;
+    }
+    if (!text && !icon) return;
+    const float sx = fb_w / 480.0f, sy = fb_h / 272.0f, o = std::max(1.0f, fb_h / 360.0f);
+    const float tw = text ? static_cast<float>(text->w) : 0.0f, th = text ? static_cast<float>(text->h) : 0.0f;
+    const float iw = icon ? std::round(7.0f * sx) : 0.0f, ih = icon ? std::round(6.0f * sy) : 0.0f;  // 7x6 PSP px
+    const float gap = icon && text ? std::round(sx) : 0.0f;
+    const float w = iw + gap + tw, h = std::max(th, ih);
+    TagRect at = psp_tag_unstack({t.x * sx - w * 0.5f, t.y * sy - (t.above ? h : 0.0f), w, h}, g_placed, t.above);
+    at.x = std::round(at.x);  // whole pixels: the glyph texels land 1:1, sharp at render scale 1
+    at.y = std::round(at.y);
+    Gl& g = gl();
+    glUseProgram(g.prog);
+    glBindVertexArray(g.vao);
+    glViewport(0, 0, fb_w, fb_h);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_SCISSOR_TEST);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBlendEquation(GL_FUNC_ADD);
+    const float c[4] = {t.r / 255.0f, t.g / 255.0f, t.b / 255.0f, 1.0f};
+    if (icon) rect(fb_w, fb_h, at.x, std::round(at.y + (h - ih) * 0.5f), iw, ih, c, g_icon_tex[t.icon], 0.0f, true);
+    if (text) {
+        const float x = at.x + iw + gap, y = std::round(at.y + (h - th) * 0.5f);
+        const float shadow[4] = {0.0f, 0.0f, 0.0f, 0.85f};
+        const float offs[4][2] = {{-o, 0.0f}, {o, 0.0f}, {0.0f, -o}, {0.0f, o}};
+        for (const auto& d : offs) rect(fb_w, fb_h, x + d[0], y + d[1], tw, th, shadow, text->tex);
+        rect(fb_w, fb_h, x, y, tw, th, c, text->tex);
+    }
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glBindVertexArray(0);
 }

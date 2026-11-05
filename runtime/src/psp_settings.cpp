@@ -34,7 +34,7 @@ const CoreKey kCore[] = {
     {"paths", "savedata", "PSPRECOMP_SAVEDATA", Kind::Path, "savedata", 0, 0, nullptr},
     {"display", "fullscreen", "PSPRECOMP_FULLSCREEN", Kind::Bool, "true", 0, 0, nullptr},
     // No default: absent (an older launcher) leaves display.fullscreen to decide.
-    {"display", "window_mode", "PSPRECOMP_WINDOW_MODE", Kind::Enum, "", 0, 0, "windowed,borderless,fullscreen"},
+    {"display", "window_mode", "PSPRECOMP_WINDOW_MODE", Kind::Enum, "", 0, 0, "windowed,borderless,fullscreen,borderless_window"},
     {"display", "window_scale", "PSPRECOMP_WINDOW_SCALE", Kind::Int, "2", 1, 8, nullptr},
     {"display", "render_scale", "PSPRECOMP_RENDER_SCALE", Kind::Int, "4", 1, 8, nullptr},
     {"display", "present_filter", "PSPRECOMP_PRESENT_FILTER", Kind::Enum, "linear", 0, 0, "linear,nearest"},

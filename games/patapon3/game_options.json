@@ -33,6 +33,12 @@
       "label": {"es": "Iconos de botones", "en": "Button icons"},
       "description": {"es": "Las barras de ayuda muestran las teclas o los botones de tu mando.", "en": "Help bars show your keys or your controller's buttons."},
       "display": {"gray": {"es": "Gris", "en": "Gray"}, "color": {"es": "Color", "en": "Color"}}
+    },
+    {
+      "section": "game", "key": "show_ping", "type": "bool", "default": "true",
+      "tab": "online", "env": "PSPRECOMP_P3_SHOW_PING", "map": {"true": "1", "false": "0"},
+      "label": {"es": "Mostrar ping", "en": "Show ping"},
+      "description": {"es": "Muestra el ping de tu conexión con cada compañero: bajo su máscara en misión y bajo su héroe en el escondite (online).", "en": "Shows the ping of your connection to each partner: under their mask in missions and their hero in the hideout (online)."}
     }
   ]
 }

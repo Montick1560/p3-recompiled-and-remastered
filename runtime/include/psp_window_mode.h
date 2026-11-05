@@ -4,7 +4,8 @@
 // composed) and the F11 / Alt+Enter toggle. Pure, so the event loop only applies what these return.
 #include <cctype>
 
-enum class PspWindowMode { Windowed, Borderless, Fullscreen };
+// BorderlessWindow: no frame, at the window size (display.window_scale), centred on its display.
+enum class PspWindowMode { Windowed, Borderless, Fullscreen, BorderlessWindow };
 
 struct PspRect { int x, y, w, h; };
 
@@ -30,7 +31,7 @@ inline bool touches(PspRect d, PspRect o, int side) {
 }
 }  // namespace psp_window_mode_detail
 
-// PSPRECOMP_WINDOW_MODE ("windowed" | "borderless" | "fullscreen", any case) wins. Otherwise the
+// PSPRECOMP_WINDOW_MODE ("windowed" | "borderless" | "fullscreen" | "borderless_window", any case) wins. Otherwise the
 // legacy PSPRECOMP_FULLSCREEN: "1" is fullscreen, anything else windowed.
 inline PspWindowMode psp_window_mode(const char* mode_env, const char* fullscreen_env) {
     using psp_window_mode_detail::iequals;
@@ -38,6 +39,7 @@ inline PspWindowMode psp_window_mode(const char* mode_env, const char* fullscree
         if (iequals(mode_env, "windowed")) return PspWindowMode::Windowed;
         if (iequals(mode_env, "borderless")) return PspWindowMode::Borderless;
         if (iequals(mode_env, "fullscreen")) return PspWindowMode::Fullscreen;
+        if (iequals(mode_env, "borderless_window")) return PspWindowMode::BorderlessWindow;
     }
     return fullscreen_env && fullscreen_env[0] == '1' && fullscreen_env[1] == '\0'
         ? PspWindowMode::Fullscreen : PspWindowMode::Windowed;
@@ -63,6 +65,13 @@ inline PspRect psp_borderless_rect(PspRect d, const PspRect* others, int count) 
     return {d.x, d.y, d.w, d.h - 1};
 }
 
+// A borderless window of w x h centred on display d. One that would cover the display gets the full-display
+// borderless rectangle instead (capped, and never exactly the monitor: see psp_borderless_rect).
+inline PspRect psp_borderless_window_rect(PspRect d, int w, int h, const PspRect* others, int count) {
+    if (w >= d.w || h >= d.h) return psp_borderless_rect(d, others, count);
+    return {d.x + (d.w - w) / 2, d.y + (d.h - h) / 2, w, h};
+}
+
 // F11 / Alt+Enter: from a window to the configured mode (fullscreen when that is the window
 // itself); from either full-display mode back to a window.
 inline PspWindowMode psp_window_mode_toggle(PspWindowMode current, PspWindowMode configured) {
@@ -75,6 +84,7 @@ inline const char* psp_window_mode_name(PspWindowMode m) {
     case PspWindowMode::Windowed: return "windowed";
     case PspWindowMode::Borderless: return "borderless";
     case PspWindowMode::Fullscreen: return "fullscreen";
+    case PspWindowMode::BorderlessWindow: return "borderless_window";
     }
     return "windowed";
 }

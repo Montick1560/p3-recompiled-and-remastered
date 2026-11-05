@@ -77,7 +77,7 @@ static void apply_window_mode(PspWindowMode m) {
     case PspWindowMode::Windowed:
         SDL_SetWindowFullscreen(g_window, 0);
         SDL_SetWindowBordered(g_window, SDL_TRUE);
-        if (g_window_mode == PspWindowMode::Borderless) {  // fullscreen restores its own size
+        if (g_window_mode == PspWindowMode::Borderless || g_window_mode == PspWindowMode::BorderlessWindow) {  // fullscreen restores its own size
             const int d = SDL_GetWindowDisplayIndex(g_window);
             SDL_SetWindowSize(g_window, 480 * g_window_scale, 272 * g_window_scale);
             SDL_SetWindowPosition(g_window, SDL_WINDOWPOS_CENTERED_DISPLAY(d < 0 ? 0 : d),
@@ -106,6 +106,30 @@ static void apply_window_mode(PspWindowMode m) {
             SDL_GetWindowPosition(g_window, &x, &y);
             SDL_GetWindowSize(g_window, &w, &h);
             std::fprintf(stderr, "[RT] borderless rect %dx%d at %d,%d\n", w, h, x, y);
+        }
+        break;
+    }
+    case PspWindowMode::BorderlessWindow: {
+        SDL_SetWindowFullscreen(g_window, 0);
+        if (SDL_GetWindowFlags(g_window) & SDL_WINDOW_MAXIMIZED) SDL_RestoreWindow(g_window);
+        SDL_SetWindowBordered(g_window, SDL_FALSE);
+        const int d = SDL_GetWindowDisplayIndex(g_window);
+        SDL_Rect b;
+        if (SDL_GetDisplayBounds(d < 0 ? 0 : d, &b) == 0) {
+            PspRect others[8];
+            int n = 0;
+            for (int i = 0, all = SDL_GetNumVideoDisplays(); i < all && n < 8; ++i) {
+                SDL_Rect o;
+                if (SDL_GetDisplayBounds(i, &o) == 0) others[n++] = {o.x, o.y, o.w, o.h};
+            }
+            const PspRect r = psp_borderless_window_rect({b.x, b.y, b.w, b.h}, 480 * g_window_scale,
+                                                         272 * g_window_scale, others, n);
+            SDL_SetWindowSize(g_window, r.w, r.h);
+            SDL_SetWindowPosition(g_window, r.x, r.y);
+            int x, y, w, h;
+            SDL_GetWindowPosition(g_window, &x, &y);
+            SDL_GetWindowSize(g_window, &w, &h);
+            std::fprintf(stderr, "[RT] borderless window rect %dx%d at %d,%d\n", w, h, x, y);
         }
         break;
     }
@@ -549,7 +573,8 @@ int psp_runtime_init_sdl() {
     g_window_scale = win_scale;
     g_window_mode_cfg = psp_window_mode(std::getenv("PSPRECOMP_WINDOW_MODE"), std::getenv("PSPRECOMP_FULLSCREEN"));
     // A borderless window stays up when another window takes the focus (Alt+Tab).
-    if (g_window_mode_cfg == PspWindowMode::Borderless) SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");
+    if (g_window_mode_cfg == PspWindowMode::Borderless || g_window_mode_cfg == PspWindowMode::BorderlessWindow)
+        SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");
     apply_window_mode(g_window_mode_cfg);
 
     // 6. Print GL info for diagnostics, and the hardware line problem reports rely on

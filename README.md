@@ -335,6 +335,9 @@ as does `"direct": false` in the beta config, read live; `--stun HOST:PORT,...` 
 clients are given (default `stun.cloudflare.com:3478,stun.l.google.com:19302`). Clients that turned it off
 (`[online] direct = false`) or run an older version keep the relay. With `--db`, each client's per-pair numbers at
 the end of a session go to a `direct_stats` table (path kind, RTT, keepalive loss, seconds direct, fallbacks).
+Each ping answer also lists the other room members' own server RTT, so the Patapon 3 build can show the ping of
+the connection to every partner (direct, or through the server) under their party mask in missions and their hero
+in the hideout, with a signal icon, and turn the game's signal badge into a real meter (`PSPRECOMP_P3_SHOW_PING`).
 
 ### Prerequisites
 

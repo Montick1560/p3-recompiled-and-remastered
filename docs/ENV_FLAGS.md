@@ -386,11 +386,13 @@ Read by the runtime binary at start-up or during execution.
 ### `PSPRECOMP_WINDOW_MODE`
 - **Read in:** `runtime/src/psp_event_loop.cpp` (`psp_runtime_init_sdl`, rules in
   `runtime/include/psp_window_mode.h`); `settings.ini display.window_mode` sets it.
-- **Type:** env (`windowed` | `borderless` | `fullscreen`, any case).
+- **Type:** env (`windowed` | `borderless` | `fullscreen` | `borderless_window`, any case).
 - **Default:** unset (then `PSPRECOMP_FULLSCREEN` decides: `1` fullscreen, else windowed).
 - **Effect:** `borderless` = a window without border covering the bounds of the display it is
-  on, not minimised when it loses the focus; `fullscreen` = desktop fullscreen; `windowed` = the
-  480x272 x `PSPRECOMP_WINDOW_SCALE` window. F11 / Alt+Enter toggle between a window and the
+  on, not minimised when it loses the focus; `borderless_window` = a window without border of
+  480x272 x `PSPRECOMP_WINDOW_SCALE`, centred on its display (one that would cover the display gets the
+  `borderless` rectangle; logs `[RT] borderless window rect WxH at X,Y`); `fullscreen` = desktop
+  fullscreen; `windowed` = the 480x272 x `PSPRECOMP_WINDOW_SCALE` window. F11 / Alt+Enter toggle between a window and the
   chosen mode (a window toggles with fullscreen). Logs `[RT] window mode: <name>`.
 - **Set it when:** you want borderless instead of fullscreen.
 
@@ -1192,6 +1194,20 @@ Compiled only under `-DPSPRECOMP_GAME=patapon3`. **Game-specific: patapon3.**
   a step ahead, and the largest per-run step seen.
 - **Set it when:** checking that scripted props move every frame at 60 fps (a screenshot
   loop is too slow to see 60 Hz motion).
+
+### `PSPRECOMP_P3_SHOW_PING`
+- **Read in:** `games/patapon3/runtime/p3_ping_run.cpp`. **Game-specific: patapon3.**
+- **Type:** env (`0` off; anything else or unset = on). Launcher: `[game] show_ping` (Online tab).
+- **Default:** on.
+- **Effect:** In infrastructure mode, each partner gets the ping of our connection to them: under the
+  signal badge in the hideout ("N ms"), under the party mask's health bar in missions (signal icon from
+  `assets/ping_signal.png` + digits; the icon has a server mark when the route goes through the server;
+  grey icon while unknown), green < 80 ms, yellow < 150 ms, red; the partner badge's three bars become a
+  meter (3/2/1 in the same colour). The number is the route in use: the direct path's RTT, else through
+  the server (measured, or ours + theirs: the server forwards each member's in ping answers; an older
+  server -> no number for relayed partners). Our own hero and mask get nothing. Logs
+  `[P3] ping under online heroes: on (icon on | icon missing, number only)` and, once,
+  `[P3] ping: party table at 0x...`. Off: the runtime touches no PRIM.
 
 ### `PSPRECOMP_P3_FAST_LOAD`
 - **Read in:** `games/patapon3/runtime/hooks_main.cpp`. **Game-specific: patapon3.**

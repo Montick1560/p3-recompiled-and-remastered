@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include "monocypher.h"
+#include "net/infra_signal.h"
 #include "net/infra_stats.h"
 #include "net/relay_conn.h"
 #include "net/secure_random.h"
@@ -317,6 +318,7 @@ bool Client::connect(const std::string& online_id, int timeout_ms, const nlohman
         std::lock_guard<std::mutex> lock(mu_);
         rooms_.clear();
         rtts_.clear();
+        peers_.clear();
         pings_out_.clear();
         link_.reset();
         link_refused_ = false;
@@ -615,6 +617,18 @@ std::string Client::session() const {
     return session_;
 }
 
+Client::PeerPing Client::peer_ping(const std::string& id) const {
+    PeerRtt p;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        auto it = peers_.find(id);
+        if (id.empty() || id == online_id_ || it == peers_.end()) return {};
+        p = it->second;
+    }
+    const direct::Link::Route r = direct_.route(p.vip);
+    return {peer_ping_ms(r.rtt_ms, rtt_ms(), p.rtt), !r.direct};
+}
+
 std::string Client::online_id() const {
     std::lock_guard<std::mutex> lock(mu_);
     return online_id_;
@@ -845,12 +859,24 @@ void Client::ticker() {
                 std::lock_guard<std::mutex> lock(mu_);
                 pings_out_.insert(t);
             }
-            request({{"op", "ping"}, {"t", t}},
+            nlohmann::json ping = {{"op", "ping"}, {"t", t}};
+            if (const int own = rtt_ms(); own >= 0) ping["rtt"] = std::min(own, 60000);
+            request(std::move(ping),
                     [this, t](const nlohmann::json& j) {
                         std::lock_guard<std::mutex> lock(mu_);
                         auto it = pings_out_.find(t);
                         if (it != pings_out_.end()) pings_out_.erase(it);
                         if (!j.value("ok", false)) return;
+                        peers_.clear();  // an older server sends none: every peer is unknown
+                        if (j.contains("peers") && j["peers"].is_array()) {
+                            for (const nlohmann::json& p : j["peers"]) {
+                                if (!p.is_object() || !p.value("online_id", nlohmann::json()).is_string()) continue;
+                                const nlohmann::json vip = p.value("vip", nlohmann::json()), rtt = p.value("rtt", nlohmann::json());
+                                peers_[p["online_id"].get<std::string>()] = {
+                                    vip.is_number_unsigned() ? vip.get<uint32_t>() : 0u,
+                                    rtt.is_number_integer() ? rtt.get<int>() : -1};
+                            }
+                        }
                         const int rtt = static_cast<int>(now_ms() - t);
                         rtts_.push_back(rtt);
                         if (rtts_.size() > 5) rtts_.pop_front();

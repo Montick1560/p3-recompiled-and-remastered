@@ -2,6 +2,7 @@
 #include "psp_exit.h"
 #include "psp_freeze_watch.h"
 #include "psp_ge_draw.h"
+#include "psp_ge_observer.h"
 #include "psp_gl_api.h"
 #include "psp_ge_batch.h"
 #include "psp_ge_texpatch.h"
@@ -113,6 +114,32 @@ struct PackedVertex {
     uint8_t color[4];
     float fog;      // GE fog factor, unclamped (1 = none); the fragment shader clamps
 };
+static GePrimObserver g_prim_observer = nullptr;
+static GeFrameObserver g_frame_observer = nullptr;
+
+void psp_ge_set_observers(GePrimObserver prim, GeFrameObserver frame) {
+    g_prim_observer = prim;
+    g_frame_observer = frame;
+}
+
+void ge_draw_flush();
+static int fb_w();
+static int fb_h();
+
+// Drawn at the end of the current display list, each only into the target it was asked for.
+static std::vector<std::pair<int, WorldTag>> g_top_tags;
+
+void psp_ge_draw_tag(const WorldTag& t, bool on_top) {
+    if ((t.text.empty() && t.icon < 0) || g_current_target < 0) return;  // an icon alone is a tag too
+    if (on_top) {
+        g_top_tags.emplace_back(g_current_target, t);
+        return;
+    }
+    ge_draw_flush();  // the PRIMs so far (the anchor included) first
+    psp_world_tag_draw_target(t, fb_w(), fb_h());
+    gl_state_invalidate();  // the next GE draw re-emits its program, textures and enables
+}
+
 static_assert(sizeof(PackedVertex) == 32,
               "PackedVertex must be 32 bytes");
 static_assert(offsetof(PackedVertex, uv) == 16 && offsetof(PackedVertex, color) == 24 &&
@@ -539,6 +566,17 @@ void ge_draw_end_list() {
     // Mark the front buffer dirty so the liveness net can publish content
     // even for a title that draws but never calls sceDisplaySetFrameBuf.
     ge_draw_mark_dirty();
+    if (!g_top_tags.empty()) {
+        ge_draw_flush();
+        bool drew = false;
+        for (const auto& [target, t] : g_top_tags) {
+            if (target != g_current_target) continue;  // the list moved on to another buffer
+            psp_world_tag_draw_target(t, fb_w(), fb_h());
+            drew = true;
+        }
+        if (drew) gl_state_invalidate();
+        g_top_tags.clear();
+    }
     if (g_drawlog_lists.load(std::memory_order_relaxed) > 0) {
         std::fprintf(stderr, "[DL] ---- list end (fb=0x%06X)\n",
                      ge_get_state().framebuf_ptr);
@@ -1078,12 +1116,37 @@ void ge_draw_prim(
     }
     g_batch_max_v = std::max(g_batch_max_v, draw_max_v);
 
+    if (g_prim_observer && g_batch.size() > first) {
+        GePrimInfo info;
+        info.prim = prim_type;
+        info.count = count;
+        info.vtype = state.vertex_type & 0xFFFFFFu;
+        info.texture = state.texture_enable;
+        info.tex_addr = state.tex_addr[0] & 0xFFFFFFu;
+        info.tex_size = state.tex_size[0];
+        info.tex_fmt = state.tex_format;
+        info.clut_addr = state.clut_addr & 0xFFFFFFu;
+        info.world_x = state.world_matrix[9];
+        info.world_y = state.world_matrix[10];
+        GePrimBox box{1e30f, 1e30f, -1e30f, -1e30f};
+        for (size_t i = first; i < g_batch.size(); i++) {
+            const PackedVertex& pv = g_batch[i];
+            if (pv.pos[3] <= 0.0f) continue;
+            const float px = (pv.pos[0] / pv.pos[3] + 1.0f) * 240.0f, py = (1.0f - pv.pos[1] / pv.pos[3]) * 136.0f;
+            box = {std::min(box.x0, px), std::min(box.y0, py), std::max(box.x1, px), std::max(box.y1, py)};
+        }
+        if (!g_prim_observer(info, box, g_batch[first].color, g_batch.size() - first, sizeof(PackedVertex))) {
+            g_batch.resize(first);
+            return;
+        }
+    }
+
     if (drawlog) {
         // Screen rectangle (PSP pixels, 480x272) covered by all vertices
         // with w > 0: finds the draw that paints a given screen region.
         // Batching is off while logging, so this PRIM is the whole batch.
         const PackedVertex* packed = g_batch.data() + first;
-        const size_t n = g_batch.size() - first;
+        const size_t n = g_batch.size() > first ? g_batch.size() - first : 0;  // 0: a tag flushed this PRIM
         float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
         for (size_t i = 0; i < n; i++) {
             const PackedVertex& pv = packed[i];
@@ -1351,6 +1414,10 @@ void ge_present_frame(
         std::fprintf(stderr,
             "[PRESENT] Frame %d (fb=0x%08X key=0x%06X stride=%u fmt=%u)\n",
             present_count, fb_addr, key, fb_stride, fb_format);
+    }
+    if (g_frame_observer) {
+        g_frame_observer(rdram);
+        psp_world_tags_begin_frame();
     }
     present_blit(g_targets[slot].fbo);
 }
