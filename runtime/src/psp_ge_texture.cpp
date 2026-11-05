@@ -13,11 +13,15 @@
 #include "psp_texrep.h"
 #include "psp_texrep_lru.h"
 #include "psp_texrep_share.h"
+#include "psp_tex_upscale.h"
+#include "psp_tex_upscale_queue.h"
 #include "recomp.h"
 
 #include <glad/glad.h>
 #include "xxhash.h"
 #include <array>
+#include <cstdlib>
+#include <memory>
 #include <vector>
 #include <cstdio>
 #include <cstdlib>
@@ -41,6 +45,33 @@ static TexrepLru<int> g_gl_lru(256u << 20);
 // the default 300 (10 s at 30 fps; frame_num counts display lists, one per
 // frame in practice).
 static uint32_t g_tex_hot_frames = 300;
+
+// PSPRECOMP_TEX_UPSCALE=xbrz2|xbrz3|xbrz4: the game's own textures (not pack, patched or render-target ones) are
+// scaled with xBRZ on a worker (psp_tex_upscale_queue.h); the original is drawn until the result is ready.
+// Textures whose content changes often (palette animation) are left as they are.
+static int g_upscale_factor = 0;
+static std::unique_ptr<TexUpscaleQueue> g_upscale;
+static TexChangeTracker g_upscale_changes;
+static bool g_upscale_trace = false;  // PSPRECOMP_TEX_UPSCALE_TRACE=1: one line per 300 display lists
+static struct { uint32_t queued, uploaded, often, big, last_list; } g_upscale_stats{};
+constexpr size_t kUpscaleCpuBudget = 64u << 20;  // scaled images waiting for upload (CPU)
+
+static void upscale_trace(uint32_t frame_num) {
+    if (!g_upscale_trace || frame_num - g_upscale_stats.last_list < 300) return;
+    std::fprintf(stderr, "[TEX] upscale: queued %u, uploaded %u, skipped %u changing, %u too big\n",
+                 g_upscale_stats.queued, g_upscale_stats.uploaded, g_upscale_stats.often, g_upscale_stats.big);
+    g_upscale_stats = {};
+    g_upscale_stats.last_list = frame_num;
+}
+
+// Upload a finished xBRZ result into the bound texture; returns its bytes.
+static size_t upscale_upload(uint64_t key, const TexUpscaleImage* up) {
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, up->w, up->h, 0, GL_RGBA, GL_UNSIGNED_BYTE, up->rgba.data());
+    const size_t bytes = static_cast<size_t>(up->w) * up->h * 4;
+    g_upscale->release(key);
+    g_upscale_stats.uploaded++;
+    return bytes;
+}
 // One live GL texture per pack file, shared by the slots that resolve to it
 // (psp_texrep_share.h). Render-thread only, like the cache.
 static TexrepShare g_rep_share;
@@ -256,6 +287,13 @@ void ge_texture_init() {
     g_rep_share.clear();
     g_gl_lru.clear();
     g_gl_lru.set_budget(ge_texrep_budget_bytes());
+    g_upscale_factor = tex_upscale_factor_parse(std::getenv("PSPRECOMP_TEX_UPSCALE"));
+    if (g_upscale_factor != 0) {
+        g_upscale = std::make_unique<TexUpscaleQueue>(tex_upscale_xbrz, kUpscaleCpuBudget);
+        const char* t = std::getenv("PSPRECOMP_TEX_UPSCALE_TRACE");
+        g_upscale_trace = t != nullptr && t[0] == '1';
+        std::fprintf(stderr, "[TEX] upscale: xBRZ %dx of the game's own textures\n", g_upscale_factor);
+    }
 }
 
 void ge_texture_shutdown() {
@@ -266,6 +304,7 @@ void ge_texture_shutdown() {
     }
     g_rep_share.clear();
     g_gl_lru.clear();
+    g_upscale.reset();  // joins the worker
     g_tex_initialized = false;
     gl_state_invalidate();
     std::fprintf(stderr, "[TEX] Texture cache shutdown\n");
@@ -426,6 +465,19 @@ GLuint ge_texture_bind(
             }
             entry.replace_pending = r == GeTexrepResult::Pending;
         }
+        if (entry.upscale_pending && g_upscale && g_upscale->ready_epoch() != entry.upscale_epoch) {
+            // The worker finished something since the last try: poll this texture's result.
+            entry.upscale_epoch = g_upscale->ready_epoch();
+            const TexUpscaleImage* up = nullptr;
+            const auto s = g_upscale->request(entry.upscale_key, g_upscale_factor, nullptr, 0, 0, &up);
+            if (s == TexUpscaleQueue::State::Ready) {
+                gl_state_bind_texture(entry.gl_tex);
+                account_slot(slot, upscale_upload(entry.upscale_key, up));
+                trim_gl_budget(frame_num, slot);
+            }
+            entry.upscale_pending = s == TexUpscaleQueue::State::Pending;
+        }
+        upscale_trace(frame_num);
         const bool bound = gl_state_bind_texture(entry.gl_tex);
         const bool sampled = apply_sampler(state, entry.forced_filter);
         // Perf: count the binds that reached the driver (the shadow skips
@@ -460,6 +512,8 @@ GLuint ge_texture_bind(
     }
     const bool bound = gl_state_bind_texture(entry.gl_tex);
     size_t patched_bytes = 0;
+    size_t upscaled_bytes = 0;
+    entry.upscale_pending = false;
     if (shared) {
         // Already uploaded; forced_filter came with the share.
     } else if (patch != 0) {
@@ -483,7 +537,8 @@ GLuint ge_texture_bind(
         entry.rep_owner = true;
     } else {
         std::vector<uint8_t> rgba;
-        if (!ge_decode_texture(rdram, params, rgba)) {
+        const bool decoded = ge_decode_texture(rdram, params, rgba);
+        if (!decoded) {
             for (int i = 0; i < width * height; i++) {
                 rgba[i * 4 + 0] = 0xFF;
                 rgba[i * 4 + 1] = 0x00;
@@ -491,11 +546,33 @@ GLuint ge_texture_bind(
                 rgba[i * 4 + 3] = 0xFF;
             }
         }
-        glTexImage2D(
-            GL_TEXTURE_2D, 0, GL_RGBA8,
-            width, height, 0,
-            GL_RGBA, GL_UNSIGNED_BYTE,
-            rgba.data());
+        const TexUpscaleImage* up = nullptr;
+        TexUpscaleQueue::State up_state = TexUpscaleQueue::State::Failed;
+        const uint64_t up_key = uint64_t(psp_addr) << 32 | content_hash;
+        if (g_upscale && decoded) {
+            if (g_upscale_changes.changes_often(psp_addr, content_hash, frame_num)) {
+                g_upscale_stats.often++;
+            } else if (width * g_upscale_factor > kTexUpscaleMaxSide || height * g_upscale_factor > kTexUpscaleMaxSide) {
+                g_upscale_stats.big++;
+            } else {
+                up_state = g_upscale->request(up_key, g_upscale_factor, rgba.data(), width, height, &up);
+                if (up_state == TexUpscaleQueue::State::Pending) g_upscale_stats.queued++;
+            }
+        }
+        if (up_state == TexUpscaleQueue::State::Ready) {
+            upscaled_bytes = upscale_upload(up_key, up);
+        } else {
+            glTexImage2D(
+                GL_TEXTURE_2D, 0, GL_RGBA8,
+                width, height, 0,
+                GL_RGBA, GL_UNSIGNED_BYTE,
+                rgba.data());
+        }
+        if (up_state == TexUpscaleQueue::State::Pending) {
+            entry.upscale_pending = true;
+            entry.upscale_epoch = g_upscale->ready_epoch();
+            entry.upscale_key = up_key;
+        }
     }
     if (!shared) entry.forced_filter = replaced ? static_cast<int>(rep.filter) : 0;
     const bool sampled = apply_sampler(state, entry.forced_filter);
@@ -513,9 +590,8 @@ GLuint ge_texture_bind(
     // while over budget (this slot is in use right now, so it is kept). A
     // shared pack texture is accounted once, by the slot that uploaded it.
     g_gl_lru.remove(slot);
-    const size_t tex_bytes = patch != 0 ? patched_bytes : shared ? 0 : (replaced
-        ? static_cast<size_t>(rep.w) * rep.h
-        : static_cast<size_t>(width) * height) * 4;
+    const size_t tex_bytes = patch != 0 ? patched_bytes : shared ? 0 : upscaled_bytes != 0 ? upscaled_bytes
+        : (replaced ? static_cast<size_t>(rep.w) * rep.h : static_cast<size_t>(width) * height) * 4;
     account_slot(slot, tex_bytes);
     trim_gl_budget(frame_num, slot);
 

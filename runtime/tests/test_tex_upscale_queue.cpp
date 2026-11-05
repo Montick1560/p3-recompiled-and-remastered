@@ -16,12 +16,22 @@ int main() {
         for (uint32_t l = 0; l < 100; l++) often |= t.changes_often(0x1000, 7, l);
         CHECK(!often, "same hash every list: not often");
         CHECK(!t.changes_often(0x2000, 1, 0), "first sight");
-        CHECK(!t.changes_often(0x2000, 2, 10), "one change");
-        CHECK(t.changes_often(0x2000, 3, 20), "second change within 60 lists");
-        CHECK(t.changes_often(0x2000, 3, 30), "still often while both changes are recent");
-        CHECK(!t.changes_often(0x2000, 3, 200), "quiet for long: not often any more");
-        CHECK(!t.changes_often(0x3000, 1, 0) && !t.changes_often(0x3000, 2, 10), "changes far apart (1)");
-        CHECK(!t.changes_often(0x3000, 3, 100), "changes far apart (2)");
+        CHECK(!t.changes_often(0x2000, 2, 10) && !t.changes_often(0x2000, 3, 20) && !t.changes_often(0x2000, 4, 30),
+              "three new hashes: a few variants");
+        CHECK(t.changes_often(0x2000, 5, 40), "fourth new hash within 60 lists");
+        CHECK(t.changes_often(0x2000, 5, 50), "still often while the changes are recent");
+        CHECK(!t.changes_often(0x2000, 5, 200), "quiet for long: not often any more");
+        bool far = false;
+        for (uint32_t i = 0; i < 6; i++) far |= t.changes_often(0x3000, 900 + i, i * 30);
+        CHECK(!far, "new hashes 30 lists apart: never 4 within 60");
+        // one texture drawn with a few palettes (unit colours): alternating known hashes is not a change
+        bool alt = false;
+        for (uint32_t l = 0; l < 200; l++) alt |= t.changes_often(0x4000, 100 + l % 3, l);
+        CHECK(!alt, "three palettes in turn: not often");
+        // an animation keeps producing new hashes
+        bool anim = false;
+        for (uint32_t l = 0; l < 40; l++) anim |= t.changes_often(0x5000, 500 + l, l);
+        CHECK(anim, "new hash every list: often");
     }
     {   // queue, with a fake scaler that doubles and counts
         std::atomic<int> calls{0};
@@ -55,6 +65,12 @@ int main() {
         q.request(4, 2, src.data(), 4, 4, &img);  // over budget: the least recent (1) goes
         CHECK(q.request(1, 2, src.data(), 4, 4, &img) == TexUpscaleQueue::State::Pending, "evicted key scales again");
         q.wait_idle();
+        // a poll without the source (cache hit path): no copy; an unknown key just fails, never crashes
+        const int before = calls;
+        CHECK(q.request(9, 2, nullptr, 4, 4, &img) == TexUpscaleQueue::State::Pending, "poll of unknown key");
+        q.wait_idle();
+        CHECK(q.request(9, 2, nullptr, 4, 4, &img) == TexUpscaleQueue::State::Failed && calls == before,
+              "no source -> Failed, scaler not called");
     }
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("test_tex_upscale_queue: all passed\n");

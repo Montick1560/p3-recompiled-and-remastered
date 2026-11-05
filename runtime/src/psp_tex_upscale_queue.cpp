@@ -3,15 +3,22 @@
 bool TexChangeTracker::changes_often(uint32_t addr, uint32_t hash, uint32_t list) {
     // shortcut: past kMaxAddrs addresses the history restarts; an LRU if scaling ever churns because of it.
     if (recs_.size() >= kMaxAddrs && recs_.find(addr) == recs_.end()) recs_.clear();
-    auto [it, fresh] = recs_.try_emplace(addr, Rec{hash});
+    auto [it, fresh] = recs_.try_emplace(addr);
     Rec& r = it->second;
-    if (fresh) return false;
-    if (r.hash != hash) {
-        r.hash = hash;
-        r.older = r.newer;
-        r.newer = list;
+    bool known = false;
+    for (size_t i = 0; i < r.count; i++) known |= r.recent[i] == hash;
+    if (!known) {
+        r.recent[r.next] = hash;
+        r.next = (r.next + 1) % kRecent;
+        if (r.count < kRecent) r.count++;
+        if (!fresh) {
+            r.changes[r.next_change] = list;
+            r.next_change = (r.next_change + 1) % kChanges;
+            if (r.n_changes < kChanges) r.n_changes++;
+        }
     }
-    return r.older != kNone && list - r.older <= kWindow;
+    // the oldest of the last kChanges new hashes is the slot next_change points at once the ring is full
+    return r.n_changes == kChanges && list - r.changes[r.next_change] <= kWindow;
 }
 
 TexUpscaleQueue::TexUpscaleQueue(ScaleFn scale, size_t budget_bytes)
@@ -27,7 +34,7 @@ TexUpscaleQueue::State TexUpscaleQueue::request(uint64_t key, int factor, const 
     std::lock_guard<std::mutex> lk(mu_);
     const State s = queue_.request(k, out);
     if (s == State::Pending) {
-        if (sources_.find(k) == sources_.end())
+        if (rgba != nullptr && sources_.find(k) == sources_.end())
             sources_[k] = Source{factor, w, h, std::vector<uint8_t>(rgba, rgba + static_cast<size_t>(w) * h * 4)};
     } else {
         sources_.erase(k);

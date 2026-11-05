@@ -17,6 +17,9 @@ struct TexCacheEntry {
     int forced_filter = 0;  // texture pack [filtering]: 0 none, 1 nearest, 2 linear
     bool replace_pending = false;   // pack image still decoding: original drawn
     uint64_t replace_epoch = 0;     // ge_texrep_epoch() at the last attempt
+    bool upscale_pending = false;   // xBRZ result still scaling: original drawn (PSPRECOMP_TEX_UPSCALE)
+    uint64_t upscale_epoch = 0;     // TexUpscaleQueue::ready_epoch() at the last attempt
+    uint64_t upscale_key = 0;
     // Pack file this slot shows (psp_texrep_share.h): slots resolving to the
     // same file share one GL texture; empty for an original texture.
     std::string rep_path;
