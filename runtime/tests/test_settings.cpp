@@ -200,8 +200,22 @@ static void achievements_keys() {
           "an environment value wins (nothing emitted)");
 }
 
+// display.texture_upscale -> PSPRECOMP_TEX_UPSCALE, display.antialiasing -> PSPRECOMP_AA (off by default).
+static void graphics_keys() {
+    SettingsResolution r = psp_settings_resolve("", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_TEX_UPSCALE") == "off" && val(r, "PSPRECOMP_AA") == "off", "graphics options off by default");
+    r = psp_settings_resolve("[display]\ntexture_upscale = xbrz3\nantialiasing = smaa\n", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_TEX_UPSCALE") == "xbrz3", "texture_upscale xbrz3");
+    CHECK(val(r, "PSPRECOMP_AA") == "smaa", "antialiasing smaa");
+    CHECK(!logged(r, "unknown key"), "both are known keys");
+    r = psp_settings_resolve("[display]\ntexture_upscale = xbrz9\nantialiasing = msaa\n", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_TEX_UPSCALE") == "off" && logged(r, "display.texture_upscale"), "invalid upscale -> off, logged");
+    CHECK(val(r, "PSPRECOMP_AA") == "off" && logged(r, "display.antialiasing"), "invalid antialiasing -> off, logged");
+}
+
 // display.window_mode -> PSPRECOMP_WINDOW_MODE; absent or invalid sets nothing, so the legacy
 // display.fullscreen decides (psp_window_mode.h).
+
 static void window_mode_key() {
     SettingsResolution r = psp_settings_resolve("[display]\nwindow_mode = borderless\n", "", "C:/P", kNoEnv);
     CHECK(val(r, "PSPRECOMP_WINDOW_MODE") == "borderless", "window_mode borderless");
@@ -285,6 +299,7 @@ int main() {
     stick_keys();
     achievements_keys();
     button_icons_key();
+    graphics_keys();
     if (failures == 0) std::printf("test_settings: all passed\n");
     return failures == 0 ? 0 : 1;
 }

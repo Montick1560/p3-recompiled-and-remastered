@@ -28,6 +28,8 @@ window_scale = 2            ; PSPRECOMP_WINDOW_SCALE, 1..8
 render_scale = 4            ; PSPRECOMP_RENDER_SCALE, 1..8
 present_filter = linear     ; PSPRECOMP_PRESENT_FILTER: linear | nearest
 texture_filter = auto       ; PSPRECOMP_TEX_FILTER: auto | nearest | linear
+texture_upscale = off       ; PSPRECOMP_TEX_UPSCALE: off | xbrz2 | xbrz3 | xbrz4 (game textures, not the HD pack)
+antialiasing = off          ; PSPRECOMP_AA: off | fxaa | smaa
 renderer = auto             ; PSPRECOMP_GL_API: auto | desktop | es
 hd_textures = true          ; PSPRECOMP_TEXTURES=<texture_pack> only when true
 texture_pack = textures/INFN00001
@@ -179,6 +181,8 @@ invalid values, future version) that both the C++ and the Rust readers are teste
 | display.render_scale | PSPRECOMP_RENDER_SCALE | int 1..8 | copied |
 | display.present_filter | PSPRECOMP_PRESENT_FILTER | enum linear,nearest | copied |
 | display.texture_filter | PSPRECOMP_TEX_FILTER | enum auto,nearest,linear | copied |
+| display.texture_upscale | PSPRECOMP_TEX_UPSCALE | enum off,xbrz2,xbrz3,xbrz4 | copied |
+| display.antialiasing | PSPRECOMP_AA | enum off,fxaa,smaa | copied |
 | display.renderer | PSPRECOMP_GL_API | enum auto,desktop,es | copied (auto = OpenGL, Direct3D/ANGLE only if OpenGL cannot start) |
 | display.hd_textures + display.texture_pack | PSPRECOMP_TEXTURES | bool + path | resolved pack path when true, unset when false |
 | display.osk_skin | PSPRECOMP_OSK_SKIN | name `[a-z0-9_-]+` | resolved to `<ini folder>/skins/osk/<name>.json` when valid, unset otherwise |

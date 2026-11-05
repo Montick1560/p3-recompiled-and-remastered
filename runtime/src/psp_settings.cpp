@@ -39,6 +39,8 @@ const CoreKey kCore[] = {
     {"display", "render_scale", "PSPRECOMP_RENDER_SCALE", Kind::Int, "4", 1, 8, nullptr},
     {"display", "present_filter", "PSPRECOMP_PRESENT_FILTER", Kind::Enum, "linear", 0, 0, "linear,nearest"},
     {"display", "texture_filter", "PSPRECOMP_TEX_FILTER", Kind::Enum, "auto", 0, 0, "auto,nearest,linear"},
+    {"display", "texture_upscale", "PSPRECOMP_TEX_UPSCALE", Kind::Enum, "off", 0, 0, "off,xbrz2,xbrz3,xbrz4"},
+    {"display", "antialiasing", "PSPRECOMP_AA", Kind::Enum, "off", 0, 0, "off,fxaa,smaa"},
     {"display", "renderer", "PSPRECOMP_GL_API", Kind::Enum, "auto", 0, 0, "auto,desktop,es"},
     {"display", "hd_textures", "PSPRECOMP_TEXTURES", Kind::Bool, "true", 0, 0, nullptr},
     {"display", "texture_pack", nullptr, Kind::Path, "textures/INFN00001", 0, 0, nullptr},
