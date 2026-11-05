@@ -33,6 +33,7 @@
 #include <cstdlib>
 #include <cstring>
 #include "psp_present.h"
+#include "psp_present_aa.h"
 #include "xxhash.h"
 
 // ---- Generic FBO pool (issue #59 — honor fb_addr / double buffer) ----
@@ -1323,6 +1324,23 @@ static GLenum present_filter() {
     return f;
 }
 
+// PSPRECOMP_AA=fxaa|smaa (psp_present_aa.h): read once, logged once.
+static PspAa present_aa_mode() {
+    static const PspAa m = [] {
+        const PspAa v = psp_aa_parse(std::getenv("PSPRECOMP_AA"));
+        if (v != PspAa::Off) std::fprintf(stderr, "[DRAW] anti-aliasing: %s\n", v == PspAa::Fxaa ? "FXAA" : "SMAA");
+        return v;
+    }();
+    return m;
+}
+
+// The colour texture of a frame FBO (0 when it is not one of ours).
+static GLuint target_color_tex(GLuint fbo) {
+    for (const GeTarget& t : g_targets)
+        if (t.fbo == fbo && fbo != 0) return t.color_tex;
+    return 0;
+}
+
 // Blit the given front FBO to the window and swap. Common to the routine
 // (page-flip) present and the liveness net.
 static void present_blit(GLuint fbo) {
@@ -1331,6 +1349,13 @@ static void present_blit(GLuint fbo) {
     if (perf_enabled()) g_perf.presents.fetch_add(1, std::memory_order_relaxed);
     glDisable(GL_SCISSOR_TEST);  // the GE scissor must not crop the blit
     present_service_screenshot(fbo);
+    // Anti-aliasing at the internal resolution, after the screenshot and before the window scale.
+    GLuint src = fbo;
+    if (present_aa_mode() != PspAa::Off) {
+        const GLuint aa = psp_present_aa_apply(present_aa_mode(), fbo, target_color_tex(fbo), fb_w(), fb_h());
+        gl_state_invalidate();
+        if (aa != 0) src = aa;
+    }
     // Letterbox the rendered image into the drawable, keeping the PSP aspect
     // ratio; linear scaling unless PSPRECOMP_PRESENT_FILTER=nearest. The GE
     // path re-sets viewport, colour mask and clear colour before its draws.
@@ -1342,7 +1367,7 @@ static void present_blit(GLuint fbo) {
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, src);
     glBlitFramebuffer(0, 0, fb_w(), fb_h(), r.x, r.y, r.x + r.w, r.y + r.h,
                       GL_COLOR_BUFFER_BIT, present_filter());
     glBindFramebuffer(GL_FRAMEBUFFER, 0);

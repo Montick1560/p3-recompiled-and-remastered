@@ -273,6 +273,26 @@ Read by the runtime binary at start-up or during execution.
 - **Set it when:** comparing against old nearest-only screenshots or PPSSPP's
   forced filter modes.
 
+### `PSPRECOMP_TEX_UPSCALE`
+- **Read in:** `runtime/src/psp_ge_texture.cpp` (`ge_texture_init`; settings key `display.texture_upscale`).
+- **Type:** env (`off`, `xbrz2`, `xbrz3`, `xbrz4`; anything else = off).
+- **Default:** off.
+- **Effect:** the game's own textures (decoded from guest RAM; never HD-pack, patched or render-target ones) are
+  scaled 2x/3x/4x with xBRZ (`runtime/third_party/xbrz`, GPL-3.0) on a worker thread
+  (`psp_tex_upscale_queue.h`); the original is drawn until the result is ready, then uploaded on a later bind.
+  Textures whose content keeps changing (4 hashes new to their address within 60 display lists, e.g. palette
+  animation) and textures whose scaled side would pass 2048 px are left as they are. Scaled bytes count against
+  the GL texture budget. Install prints `[TEX] upscale: xBRZ <n>x of the game's own textures`.
+- **Set it when:** playing without the HD pack (weak PCs) and you want sharper textures.
+
+### `PSPRECOMP_TEX_UPSCALE_TRACE`
+- **Read in:** `runtime/src/psp_ge_texture.cpp`.
+- **Type:** env (`1` on).
+- **Default:** off.
+- **Effect:** with `PSPRECOMP_TEX_UPSCALE` on, one line per 300 display lists:
+  `[TEX] upscale: queued N, uploaded N, skipped N changing, N too big`.
+- **Set it when:** checking that scaling settles (no steady stream of jobs in a scene).
+
 ### `PSPRECOMP_TEX_HASH_BACKOFF`
 - **Read in:** `runtime/src/psp_ge_texture.cpp` (`tex_hash_backoff_window`,
   applied in `ge_texture_init`); policy in `runtime/include/psp_ge_texmemo.h`.
@@ -434,6 +454,18 @@ Read by the runtime binary at start-up or during execution.
   (letterboxed to the PSP aspect ratio). `nearest` keeps hard pixel edges.
   Screenshots (`S`, `PSPRECOMP_SCREENSHOT`) are always the unscaled 480x272 FBO.
 - **Set it when:** you prefer sharp pixels or compare against nearest captures.
+
+### `PSPRECOMP_AA`
+- **Read in:** `runtime/src/psp_ge_draw.cpp` (`present_aa_mode`; passes in `runtime/src/psp_present_aa.cpp`;
+  settings key `display.antialiasing`).
+- **Type:** env (`fxaa`, `smaa`, any case; anything else = off).
+- **Default:** off.
+- **Effect:** screen anti-aliasing of each presented frame at the internal resolution, before the window blit:
+  `fxaa` one pass (classic FXAA, MIT port of glsl-fxaa), `smaa` the three SMAA 1x passes at the MEDIUM preset
+  (`runtime/third_party/smaa`, MIT). Overlays (keyboard, prompts, toasts) are drawn after it; screenshots read the
+  frame before it. A shader that does not compile is logged once (`[AA] ...`) and the frame is shown without AA.
+  Install prints `[DRAW] anti-aliasing: FXAA|SMAA`.
+- **Set it when:** jagged edges bother you, especially at low render scales (weak PCs).
 
 ### `PSPRECOMP_SAVEDATA`
 - **Read in:** `runtime/src/hle/psp_savedata.cpp` (`default_root()`; used by the

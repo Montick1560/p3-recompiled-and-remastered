@@ -195,6 +195,8 @@ set(RUNTIME_SOURCES
     src/psp_texrep_queue.cpp
     src/psp_tex_upscale.cpp
     src/psp_tex_upscale_queue.cpp
+    src/psp_present_aa.cpp
+    src/psp_present_aa_parse.cpp
     third_party/xbrz/xbrz.cpp
     src/psp_pad.cpp
     src/psp_wheel.cpp
@@ -483,6 +485,7 @@ target_include_directories(psprecomp_runtime PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb  # stb_image (texture replacement PNGs)
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/xbrz  # xBRZ (texture upscaling)
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/smaa  # SMAA area/search textures (anti-aliasing)
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann  # json.hpp (settings.ini game catalog)
     ${PSPRECOMP_OUTPUT_DIR}/include  # recomp.h
     ${PSPRECOMP_OUTPUT_DIR}          # funcs.h
@@ -1000,6 +1003,15 @@ add_custom_command(OUTPUT ${PSP_PROMPT_ICONS_CPP}
     COMMENT "Embedding button-prompt icons" VERBATIM)
 target_sources(psprecomp_runtime PRIVATE ${PSP_PROMPT_ICONS_CPP})
 
+# SMAA.hlsl (MIT, third_party/smaa) embedded as text for the GLSL anti-aliasing passes (src/psp_present_aa.cpp).
+set(PSP_SMAA_SOURCE_CPP ${CMAKE_CURRENT_BINARY_DIR}/smaa_source_data.cpp)
+add_custom_command(OUTPUT ${PSP_SMAA_SOURCE_CPP}
+    COMMAND ${CMAKE_COMMAND} -DOUT=${PSP_SMAA_SOURCE_CPP} -DSYMBOL=g_smaa_source
+            "-DFILES=${CMAKE_CURRENT_SOURCE_DIR}/third_party/smaa/SMAA.hlsl" -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_files.cmake
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/smaa/SMAA.hlsl ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_files.cmake
+    COMMENT "Embedding SMAA.hlsl" VERBATIM)
+target_sources(psprecomp_runtime PRIVATE ${PSP_SMAA_SOURCE_CPP})
+
 # Button-prompt raster helpers + the embedded icon set. Pure (no GL).
 add_executable(test_prompt_raster tests/test_prompt_raster.cpp src/psp_prompt_raster.cpp src/psp_prompts.cpp
     src/psp_controls.cpp src/psp_input_device.cpp src/psp_texrep_png.cpp ${PSP_PROMPT_ICONS_CPP})
@@ -1127,6 +1139,12 @@ add_executable(test_tex_upscale_queue tests/test_tex_upscale_queue.cpp src/psp_t
 target_include_directories(test_tex_upscale_queue PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_tex_upscale_queue PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME tex_upscale_queue_tests COMMAND test_tex_upscale_queue)
+
+# Screen anti-aliasing option (PSPRECOMP_AA): parse only (the passes need a GL context).
+add_executable(test_present_aa tests/test_present_aa.cpp src/psp_present_aa_parse.cpp)
+target_include_directories(test_present_aa PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_present_aa PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME present_aa_tests COMMAND test_present_aa)
 
 add_executable(test_paced_step tests/test_paced_step.cpp)
 target_include_directories(test_paced_step PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

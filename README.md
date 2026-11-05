@@ -556,8 +556,10 @@ This port stands on the work of the PSP and Patapon communities:
   (downloaded separately; `PSPRECOMP_TEXTURES`): WallSoGB (Patapon3Textures lead),
   Shockturtle, owocek, efonte (AI upscaling), Keamble, Hozzzd, KnotSora, Lin, Olimp666,
   wondaoxigen, Rin Casi.
-- Vendored libraries: xxHash (Yann Collet, BSD-2) and stb_image (Sean Barrett, public
-  domain / MIT), both under `runtime/third_party/`.
+- Vendored libraries: xxHash (Yann Collet, BSD-2), stb_image (Sean Barrett, public
+  domain / MIT), xBRZ (Zenju, GPL-3.0, texture upscaling) and SMAA (Jorge Jimenez et al., MIT,
+  anti-aliasing), all under `runtime/third_party/`; the FXAA pass is a port of glsl-fxaa (Matt DesLauriers,
+  MIT) of Timothy Lottes' FXAA.
 
 ## License
 
