@@ -193,6 +193,8 @@ set(RUNTIME_SOURCES
     src/psp_texrep_pack.cpp
     src/psp_texrep_png.cpp
     src/psp_texrep_queue.cpp
+    src/psp_tex_upscale.cpp
+    third_party/xbrz/xbrz.cpp
     src/psp_pad.cpp
     src/psp_wheel.cpp
     src/psp_patch_sets.cpp
@@ -376,6 +378,8 @@ else()
 endif()
 
 add_executable(psprecomp_runtime ${RUNTIME_SOURCES})
+# Vendored xBRZ: its own unused helpers warn; not our code to change.
+set_source_files_properties(third_party/xbrz/xbrz.cpp PROPERTIES COMPILE_OPTIONS "-w")
 
 # Game option catalog for settings.ini [game] (docs/contracts/settings-v1.md).
 # game_options.json, the official achievement catalogue (docs/contracts/achievements-v1.md) and the game's own
@@ -477,6 +481,7 @@ endif()
 target_include_directories(psprecomp_runtime PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb  # stb_image (texture replacement PNGs)
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/xbrz  # xBRZ (texture upscaling)
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann  # json.hpp (settings.ini game catalog)
     ${PSPRECOMP_OUTPUT_DIR}/include  # recomp.h
     ${PSPRECOMP_OUTPUT_DIR}          # funcs.h
@@ -1109,6 +1114,12 @@ add_executable(test_ge_list_blend tests/test_ge_list_blend.cpp)
 target_include_directories(test_ge_list_blend PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_ge_list_blend PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME ge_list_blend_tests COMMAND test_ge_list_blend)
+
+# xBRZ texture upscaling (PSPRECOMP_TEX_UPSCALE): factor parse, RGBA round trip, size limits.
+add_executable(test_tex_upscale tests/test_tex_upscale.cpp src/psp_tex_upscale.cpp third_party/xbrz/xbrz.cpp)
+target_include_directories(test_tex_upscale PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/third_party/xbrz)
+target_compile_options(test_tex_upscale PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME tex_upscale_tests COMMAND test_tex_upscale)
 
 add_executable(test_paced_step tests/test_paced_step.cpp)
 target_include_directories(test_paced_step PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
