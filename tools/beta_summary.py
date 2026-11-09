@@ -69,6 +69,43 @@ def hardware(log_text):
     return found
 
 
+NAT_NAMES = {0: "desconocido", 1: "estable", 2: "cambia por servidor"}
+
+
+def percent(part, whole):
+    return "%d %%" % round(100 * part / whole) if whole else "-"
+
+
+def connections(c, have):
+    """What u18 clients report about each link: the numbers that decide whether the relay still matters. Rows of
+    (what, value) for the "Conexiones" table; files older than those columns give none."""
+    if not {"sessions", "direct_stats", "events"} <= have:
+        return []
+    if "host_link" not in {r[1] for r in c.execute("PRAGMA table_info(direct_stats)")}:
+        return []
+    links = c.execute("SELECT d.path, d.host_link, s.nat, d.peer_nat, d.direct_wins, d.relay_wins FROM direct_stats d "
+                      "JOIN sessions s ON s.id = d.session WHERE d.host_link IS NOT NULL").fetchall()
+    rows = []
+    for name, chosen in (("Enlaces con el anfitrión", [x for x in links if x[1]]), ("Todos los enlaces", links)):
+        direct = sum(1 for x in chosen if x[0] == "direct")
+        rows.append((name + ": directos", "%d de %d (%s)" % (direct, len(chosen), percent(direct, len(chosen)))))
+    by_nat = collections.defaultdict(lambda: [0, 0])
+    for path, _, nat, peer_nat, _, _ in links:
+        by_nat[tuple(sorted((nat or 0, peer_nat or 0)))][0 if path == "direct" else 1] += 1
+    for (a, b), (direct, relay) in sorted(by_nat.items()):
+        rows.append(("NAT %s + %s" % (NAT_NAMES[a], NAT_NAMES[b]),
+                     "%d directos, %d por servidor (%s directos)" % (direct, relay, percent(direct, direct + relay))))
+    direct_wins, relay_wins = sum(x[4] for x in links), sum(x[5] for x in links)
+    rows.append(("Datagramas: llegaron primero", "directa %d, servidor %d (%s por servidor)" % (
+        direct_wins, relay_wins, percent(relay_wins, direct_wins + relay_wins))))
+    frames, slow, worst = c.execute("SELECT SUM(frames), SUM(slow_frames), MAX(frame_max_ms) FROM sessions").fetchone()
+    rows.append(("Imágenes de 100 ms o más", "%d de %d (la peor, %d ms)" % (slow or 0, frames or 0, worst or 0)))
+    for why, n in c.execute("SELECT detail, COUNT(*) FROM events WHERE kind='client_lost' GROUP BY detail "
+                            "ORDER BY 2 DESC").fetchall():
+        rows.append(("Conexión perdida: " + why, n))
+    return rows
+
+
 def summarize(db, logs_dir=None, now=None):
     now = time.time() if now is None else now
     c = sqlite3.connect(db)
@@ -149,6 +186,12 @@ def summarize(db, logs_dir=None, now=None):
         [(esc((label or "(sin código)") + (" (staff)" if staff else "")), esc(start), minutes)
          + tuple("-" if v is None else esc(v) for v in nums)
          for label, staff, start, minutes, *nums in link_rows]) + "</div>")
+
+    conn_rows = connections(c, have)
+    stats["connections"] = dict(conn_rows)
+    if conn_rows:
+        parts.append("<h2>Conexiones</h2>")
+        parts.append(table(["Qué", "Cuánto"], [(esc(k), esc(v)) for k, v in conn_rows]))
 
     parts.append("<h2>Problemas de conexión</h2>")
     parts.append(table(["Qué", "Veces"], [(esc(k), n) for k, n in [
@@ -295,6 +338,31 @@ def selftest():
     assert "<td>invitado 02</td><td>2026-10-24T03:08:00Z</td><td>30</td>" + "<td>-</td>" * 6 in page, \
         "unreported session: dashes"
     assert st["link_sessions"] == 1, st
+    assert "<h2>Conexiones</h2>" not in page, "a file without the u18 columns has no section"
+    # connections: host links apart from all links, links by NAT pair, wins per route, frames, why connections ended
+    c = sqlite3.connect(db)
+    for col in ("frames", "slow_frames", "frame_max_ms", "nat"):
+        c.execute("ALTER TABLE sessions ADD COLUMN %s INT" % col)
+    c.execute("CREATE TABLE direct_stats(session INT, path TEXT, host_link INT, peer_nat INT, direct_wins INT, "
+              "relay_wins INT)")
+    c.execute("UPDATE sessions SET frames=5000, slow_frames=4, frame_max_ms=420, nat=1 WHERE id=1")
+    c.execute("UPDATE sessions SET nat=2 WHERE id=2")
+    c.executemany("INSERT INTO direct_stats VALUES (?,?,?,?,?,?)",
+                  [(1, "direct", 1, 1, 900, 100), (1, "relay", 0, 2, 0, 0), (2, "relay", 1, 1, 0, 0),
+                   (2, "direct", None, None, None, None)])
+    c.executemany("INSERT INTO events(kind, detail) VALUES (?, ?)", [("client_lost", "server silent")] * 2)
+    c.commit()
+    c.close()
+    page, st = summarize(db, now=parse_utc("2026-10-24T06:00:00Z"))
+    conn = st["connections"]
+    assert conn["Enlaces con el anfitrión: directos"] == "1 de 2 (50 %)", conn
+    assert conn["Todos los enlaces: directos"] == "1 de 3 (33 %)", conn
+    assert conn["NAT estable + estable"] == "1 directos, 0 por servidor (100 % directos)", conn
+    assert conn["NAT estable + cambia por servidor"] == "0 directos, 2 por servidor (0 % directos)", conn
+    assert conn["Datagramas: llegaron primero"] == "directa 900, servidor 100 (10 % por servidor)", conn
+    assert conn["Imágenes de 100 ms o más"] == "4 de 5000 (la peor, 420 ms)", conn
+    assert conn["Conexión perdida: server silent"] == 2, conn
+    assert "<h2>Conexiones</h2>" in page
     # a file with only the queue (the report service alone) still summarizes
     q = os.path.join(tmp, "solo_cola.db")
     c = sqlite3.connect(q)

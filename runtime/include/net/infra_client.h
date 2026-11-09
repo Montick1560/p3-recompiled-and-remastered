@@ -60,6 +60,9 @@ const char* direct_off_reason(const Address& a, const char* env_direct, bool hav
 // Lab hooks (PSPRECOMP_INFRA_DIRECT_IMPAIR, PSPRECOMP_INFRA_DIRECT_TEST_HOSTS) for the process-wide client():
 // main() turns them on only outside beta builds. Call before client() is first used.
 void set_lab_hooks(bool on);
+// What the process-wide client() tells the server about the player for the public lobby page (an object or null),
+// read before each ping and sent only when it changed. Call before client() is first used.
+void set_status_source(std::function<nlohmann::json()> source);
 
 class Transport {
 public:
@@ -83,6 +86,7 @@ public:
         bool lab_hooks = false;  // honour the direct path's lab env vars (never in beta builds)
         // Makes the transport of each connection; empty -> make_transport (tests inject slow ones).
         std::function<std::unique_ptr<Transport>(Address::Kind)> transport_factory;
+        std::function<nlohmann::json()> status;  // see set_status_source; empty -> no status
     };
     struct Datagram {
         uint32_t vip = 0;
@@ -166,6 +170,7 @@ private:
         uint8_t kind = 0;  // kKindDatagram / kKindStream (stats rows) / kKindChannel, 0 for JSON
         uint32_t vip = 0;
         uint16_t src = 0, dst = 0;
+        bool droppable = false;  // a datagram or a hedge copy: the outbox may lose it, as a full socket buffer would
     };
     static constexpr size_t kFrameHeader = 13;  // u32 length | u8 kind | u32 vip | u16 dst | u16 src
     void reader();
@@ -187,7 +192,8 @@ private:
 
     Address addr_;
     Options opt_;
-    std::unique_ptr<Transport> transport_;
+    std::shared_ptr<Transport> transport_;  // replaced under mu_ once no thread of the old connection is left, but a
+                                            // lost() on a guest thread may still be closing the old one: it holds a copy
     std::thread reader_, ticker_, writer_;
     std::atomic<bool> running_{false}, connected_{false};
     std::atomic<uint32_t> vip_{0};
@@ -215,6 +221,7 @@ private:
     std::multiset<int64_t> pings_out_;  // send times (now_ms) of the unanswered pings
     std::atomic<bool> link_refused_{false};
     std::string session_, online_id_;
+    std::string last_lost_;  // why the last connection was lost, until a login has told the server
     std::set<int64_t> rooms_;  // joined rooms (hideout + VS), for the room_destroyed synthesised on loss
     direct::Link direct_;
     std::atomic<const char*> direct_reason_{"not connected"};

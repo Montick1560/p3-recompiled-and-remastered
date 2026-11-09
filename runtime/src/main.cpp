@@ -28,6 +28,7 @@
 #include "psp_eboot_loader.h"
 #include "psp_exit.h"
 #include "psp_freeze_watch.h"
+#include "psp_handoff.h"
 #include "psp_input_device.h"
 
 // Build fingerprint of the output/ this binary was generated from (issue #36).
@@ -76,6 +77,9 @@ extern "C" __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 extern thread_local uint32_t g_last_func_addr;
 
 #ifdef _WIN32
+void psp_module_of(uintptr_t addr, char* out, size_t size);  // psp_backtrace.cpp
+void psp_print_host_backtrace(const char* tag);              // psp_backtrace.cpp
+
 // Last-chance crash report: one grep-stable line with the exception, its
 // address as an offset into the executable (symbolize with
 // `llvm-addr2line -f -e psprecomp_runtime.exe 0x140000000+offset` or nm),
@@ -84,16 +88,19 @@ static LONG WINAPI psp_crash_filter(EXCEPTION_POINTERS* ep) {
     const EXCEPTION_RECORD* er = ep->ExceptionRecord;
     const uintptr_t addr = reinterpret_cast<uintptr_t>(er->ExceptionAddress);
     const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
+    char module[MAX_PATH + 32];
+    psp_module_of(addr, module, sizeof module);
     std::fprintf(stderr,
-                 "[CRASH] exception 0x%08lX at %p (exe+0x%llx) access=%llu addr=0x%llx "
+                 "[CRASH] exception 0x%08lX at %p (exe+0x%llx) module=%s access=%llu addr=0x%llx "
                  "last_guest_func=0x%08X os_thread=%lu\n",
                  static_cast<unsigned long>(er->ExceptionCode), er->ExceptionAddress,
-                 static_cast<unsigned long long>(addr - base),
+                 static_cast<unsigned long long>(addr - base), module,
                  er->NumberParameters > 0
                      ? static_cast<unsigned long long>(er->ExceptionInformation[0]) : 0ull,
                  er->NumberParameters > 1
                      ? static_cast<unsigned long long>(er->ExceptionInformation[1]) : 0ull,
                  g_last_func_addr, GetCurrentThreadId());
+    psp_print_host_backtrace("crash");
     std::fflush(stderr);
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -270,6 +277,7 @@ int main(int argc, char* argv[]) {
         psp_achievements_start({base ? base : "", psp_toast_post});
         SDL_free(base);
     }
+    infra::set_status_source([rdram] { return psp_presence_online_status(rdram); });
     {
         // Discord Rich Presence: off without a registered client id or with PSPRECOMP_DISCORD=0.
         const char* ui = std::getenv("PSPRECOMP_UI_LANG");
@@ -617,6 +625,11 @@ int main(int argc, char* argv[]) {
         constexpr int kQuitStatsMs = 400;
         stage(infra::client().disconnect_if_idle(kQuitStatsMs) ? "online session closed"
                                                                : "online session busy (not waited for)");
+    }
+    constexpr std::chrono::milliseconds kHandoffLimit{1500};  // a launcher that never answers only delays the exit this much
+    if (psp_handoff_finish(kHandoffLimit)) {
+        stage("launcher took over");
+        psp_hide_window();
     }
     psp_presence_stop();  // clears the Discord activity
     psp_achievements_stop();  // writes what is still queued

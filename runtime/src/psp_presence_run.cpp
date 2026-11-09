@@ -95,6 +95,10 @@ void run_main(Run* r) {
 
 void psp_presence_register(const PspPresenceSource& s) { g_source = s; }
 
+nlohmann::json psp_presence_online_status(const uint8_t* rdram) {
+    return g_source.online_status ? g_source.online_status(rdram) : nlohmann::json();
+}
+
 nlohmann::json psp_presence_with_party(nlohmann::json activity, const np2::Party& party, const char* lang) {
     if (activity.is_null()) return activity;
     activity["party"] = {{"id", "room-" + std::to_string(party.room)}, {"size", {party.size, party.max}}};

@@ -163,6 +163,16 @@ bool send_dgram(Sim& sim, Node& n, uint8_t tag) {
     return ok;
 }
 
+// The same datagram on both routes.
+bool hedge(Sim& sim, Node& n, uint8_t tag) {
+    std::vector<Out> outs;
+    const uint8_t body[4] = {tag, 1, 2, 3};
+    const bool ok = n.path->send(Type::Dgram, body, sizeof body, sim.now, &outs, &sim.rel);
+    sim.send(n, outs);
+    sim.relay(n);
+    return ok;
+}
+
 }  // namespace
 
 int main() {
@@ -565,6 +575,135 @@ int main() {
         bool apart = true;
         for (size_t i = 1; i < n.size(); i++) apart = apart && n[i] - n[i - 1] >= PathConfig{}.route_hold_ms;
         CHECK(apart, "flaps: switches to the relay at least route_hold_ms apart");
+    }
+    {   // flaps_reset: a return that lasted over route_flap_ms clears the back-off (window of 5: fast score changes)
+        PathConfig cfg;
+        cfg.route_window = 5;
+        Sim sim;
+        sim.delay = 150, sim.relay_delay = 40;
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}}, cfg);
+        sim.nodes = {&a, &b};
+        auto until_pref = [&](bool pref) {
+            for (const int64_t limit = sim.now + 200000; sim.now < limit && a.path->relay_preferred() != pref;)
+                sim.step(10);
+            CHECK(a.path->relay_preferred() == pref, "flaps reset: the route changed");
+            return sim.now;
+        };
+        until_pref(true);
+        sim.delay = 10;
+        until_pref(false);
+        sim.delay = 150;
+        const int64_t quick = until_pref(true);  // undone within route_flap_ms: the hold doubles to 20 s
+        sim.delay = 10;
+        const int64_t doubled = until_pref(false) - quick;
+        CHECK(doubled >= 20000, "flaps reset: a quick flip back holds the relay twice as long");
+        sim.run_until(sim.now + 70000);  // direct held longer than route_flap_ms
+        sim.delay = 150;
+        const int64_t calm = until_pref(true);
+        sim.delay = 10;
+        const int64_t base = until_pref(false) - calm;
+        CHECK(base < 20000, "flaps reset: after a calm spell the hold is the base one again");
+    }
+    {   // hedge_both_routes: one seal, the same bytes on both routes, one delivery, the direct route wins
+        Sim sim;
+        sim.relay_delay = 40;
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
+        sim.nodes = {&a, &b};
+        CHECK(!hedge(sim, a, 1), "hedge: Probing sends nothing");
+        CHECK(sim.relay_log.empty(), "hedge: nothing sealed for the relay while Probing");
+        sim.run_until(1000);
+        CHECK(a.path->state() == PathState::Up && b.path->state() == PathState::Up, "hedge: Up");
+        sim.log.clear(), sim.relay_log.clear();
+        CHECK(hedge(sim, a, 2), "hedge: sent");
+        CHECK(sim.log.size() == 1 && sim.relay_log.size() == 1 && sim.log[0].bytes == sim.relay_log[0].bytes,
+              "hedge: the same bytes on both routes");
+        sim.run_until(sim.now + 100);
+        CHECK(b.got.size() == 1 && b.got[0].body[0] == 2, "hedge: delivered once");
+        CHECK(b.path->stats().direct_wins == 1 && b.path->stats().relay_wins == 0, "hedge: direct first");
+    }
+    {   // hedge_relay_first: the later direct copy neither delivers again nor makes the path look dead
+        Sim sim;
+        sim.relay_delay = 5;
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
+        sim.nodes = {&a, &b};
+        sim.run_until(1000);
+        sim.delay = 100;
+        int sent = 0;
+        for (const int64_t t = sim.now + 10000; sim.now < t; sim.run_until(sim.now + 100)) sent += hedge(sim, a, 3);
+        sim.run_until(sim.now + 500);
+        CHECK(sent == 100 && static_cast<int>(b.got.size()) == sent, "hedge first: one delivery per datagram");
+        CHECK(b.path->stats().relay_wins == 100 && b.path->stats().direct_wins == 0, "hedge first: the relay won them");
+        CHECK(b.path->state() == PathState::Up && a.path->state() == PathState::Up, "hedge first: both stay Up");
+    }
+    {   // hedge_direct_lost: a lost direct packet still arrives, by the relay
+        Sim sim;
+        sim.relay_delay = 40;
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
+        sim.nodes = {&a, &b};
+        sim.run_until(1000);
+        sim.deliver = [](const Addr& to) { return !(to == kB); };
+        CHECK(hedge(sim, a, 4), "hedge lost: sent");
+        sim.run_until(sim.now + 100);
+        CHECK(b.got.size() == 1 && b.path->stats().relay_wins == 1, "hedge lost: the relay copy delivered it");
+    }
+    for (const auto& [relay_delay, delivered] : {std::pair<int, bool>{400, true}, {800, false}}) {
+        // hedge_stale_copy: a rescue behind a newer datagram arrives, unless the newer one came stale_copy_ms ago or more
+        Sim sim;
+        sim.relay_delay = relay_delay;
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
+        sim.nodes = {&a, &b};
+        sim.run_until(1000);
+        sim.deliver = [](const Addr& to) { return !(to == kB); };
+        CHECK(hedge(sim, a, 6), "hedge stale: first datagram sent, its direct copy lost");
+        sim.run_until(sim.now + 50);
+        sim.deliver = [](const Addr&) { return true; };
+        CHECK(hedge(sim, a, 7), "hedge stale: a newer one sent");
+        sim.run_until(sim.now + 50);
+        CHECK(b.got.size() == 1 && b.got[0].body[0] == 7, "hedge stale: the newer one came first, direct");
+        sim.deliver = [](const Addr& to) { return !(to == kB); };
+        sim.run_until(sim.now + 1000);
+        const auto got = [&](uint8_t tag) {
+            return std::count_if(b.got.begin(), b.got.end(), [&](const auto& o) { return o.body[0] == tag; });
+        };
+        CHECK(got(6) == (delivered ? 1 : 0), "hedge stale: the first one's relay copy");
+        CHECK(got(7) == 1, "hedge stale: the newer one's relay copy changes nothing");
+        CHECK(hedge(sim, a, 8), "hedge stale: the next one, direct lost");
+        sim.run_until(sim.now + 1000);
+        CHECK(got(8) == 1, "hedge stale: a relay copy with nothing newer always arrives");
+    }
+    for (const auto& [relay_delay, delivered] : {std::pair<int, bool>{400, true}, {800, false}}) {
+        // hedge_overtaken_copy: newer datagrams keep arriving; what counts is when the first of them passed the copy
+        Sim sim;
+        sim.relay_delay = relay_delay;
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
+        sim.nodes = {&a, &b};
+        sim.run_until(1000);
+        sim.deliver = [](const Addr& to) { return !(to == kB); };
+        CHECK(hedge(sim, a, 9), "hedge overtaken: its direct copy lost");
+        sim.run_until(sim.now + 50);
+        sim.deliver = [](const Addr&) { return true; };
+        for (const int64_t t = sim.now + 1500; sim.now < t; sim.run_until(sim.now + 100)) hedge(sim, a, 10);
+        const auto rescued = std::count_if(b.got.begin(), b.got.end(), [](const auto& o) { return o.body[0] == 9; });
+        CHECK(rescued == (delivered ? 1 : 0), "hedge overtaken: the copy's age, not the last arrival's");
+    }
+    {   // hedge_ignores_route_choice: the relay preferred, a plain send refuses, a hedged one uses both routes
+        Sim sim;
+        sim.delay = 150, sim.relay_delay = 40;
+        Node a, b;
+        make_pair(a, b, {{kB, CandType::Srflx}}, {{kA, CandType::Srflx}});
+        sim.nodes = {&a, &b};
+        while (sim.now < 30000 && !a.path->relay_preferred()) sim.step(10);
+        CHECK(a.path->relay_preferred(), "hedge pref: relay preferred");
+        CHECK(!send_dgram(sim, a, 5), "hedge pref: a plain send refuses");
+        sim.log.clear(), sim.relay_log.clear();
+        CHECK(hedge(sim, a, 5), "hedge pref: a hedged send goes");
+        CHECK(sim.log.size() == 1 && sim.relay_log.size() == 1, "hedge pref: both routes");
     }
     {   // relay_stats_match_score: the reported relay numbers are the ones the route choice used
         Sim sim;

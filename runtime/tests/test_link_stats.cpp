@@ -50,16 +50,37 @@ int main() {
         const infra::LinkSummary s = l.summary();
         CHECK(s.pings == 0 && s.slow_pings == 0 && s.rtt_max == -1 && s.max_rx_gap_ms == 0, "reset clears all");
     }
-    {   // the request body: exactly six integer keys, no address
+    {   // presented frames: slow means 100 ms or more; the gap before the first frame of a session is not one
+        infra::LinkStats l;
+        l.reset();
+        int64_t t = 5000000;
+        infra::frame_presented(t);
+        for (int i = 0; i < 10; i++) infra::frame_presented(t += 16000);
+        CHECK(l.summary().frames == 10 && l.summary().slow_frames == 0, "10 frames, none slow");
+        infra::frame_presented(t += 99999);
+        CHECK(l.summary().slow_frames == 0, "99.999 ms is not slow");
+        infra::frame_presented(t += 150000);
+        const infra::LinkSummary s = l.summary();
+        CHECK(s.frames == 12 && s.slow_frames == 1 && s.frame_max_ms == 150, "one slow frame of 150 ms");
+        l.reset();
+        CHECK(l.summary().frames == 0 && l.summary().slow_frames == 0 && l.summary().frame_max_ms == 0, "reset: frames");
+        infra::frame_presented(t += 9000000);
+        CHECK(l.summary().frames == 0 && l.summary().frame_max_ms == 0, "the time before the session does not count");
+        infra::frame_presented(t += 2000000000000);
+        CHECK(l.summary().frame_max_ms == infra::kLinkNumberMax, "numbers stay in the server's range");
+        l.reset();
+    }
+    {   // the request body: exactly nine integer keys, no address
         infra::LinkStats l;
         l.ping_rtt(40);
         l.rx_gap(120);
         const nlohmann::json j = infra::to_json(l.summary());
-        CHECK(j.is_object() && j.size() == 6, "six keys");
+        CHECK(j.is_object() && j.size() == 9, "nine keys");
         bool ints = true;
-        for (const char* k : {"pings", "slow_pings", "rtt_p50", "rtt_p95", "rtt_max", "max_rx_gap_ms"})
+        for (const char* k : {"pings", "slow_pings", "rtt_p50", "rtt_p95", "rtt_max", "max_rx_gap_ms", "frames",
+                              "slow_frames", "frame_max_ms"})
             ints &= j.contains(k) && j[k].is_number_integer();
-        CHECK(ints, "all six present and integers");
+        CHECK(ints, "all nine present and integers");
         CHECK(j["pings"] == 1 && j["rtt_p50"] == 40 && j["max_rx_gap_ms"] == 120, "values carried");
     }
     if (failures) {

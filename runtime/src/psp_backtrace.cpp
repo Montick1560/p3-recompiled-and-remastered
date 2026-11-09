@@ -4,6 +4,7 @@
 // image base; build/tools/bt.py symbolizes them with llvm-nm.
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -23,6 +24,27 @@ void psp_print_host_backtrace(const char* tag) {
     std::fprintf(stderr, "\n");
 #else
     (void)tag;
+#endif
+}
+
+// The module holding an address, for the [CRASH] line: "exe+0x1234", "ig9icd64.dll+0x1234", or "?" when no module
+// holds it (a jump through a bad pointer). No allocation: the heap may be what broke.
+void psp_module_of(uintptr_t addr, char* out, size_t size) {
+    std::snprintf(out, size, "?");
+#ifdef _WIN32
+    HMODULE m = nullptr;
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<const char*>(addr), &m) || !m)
+        return;
+    const unsigned long long offset = addr - reinterpret_cast<uintptr_t>(m);
+    if (m == GetModuleHandleW(nullptr)) {
+        std::snprintf(out, size, "exe+0x%llx", offset);
+        return;
+    }
+    char path[MAX_PATH] = {};
+    GetModuleFileNameA(m, path, sizeof path);
+    const char* slash = std::strrchr(path, '\\');
+    std::snprintf(out, size, "%s+0x%llx", slash ? slash + 1 : path, offset);
 #endif
 }
 

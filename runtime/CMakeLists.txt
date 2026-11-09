@@ -141,6 +141,7 @@ set(RUNTIME_SOURCES
     src/psp_rtc.cpp
     src/psp_beta.cpp
     src/psp_freeze_watch.cpp
+    src/psp_handoff.cpp
     src/psp_hw_info.cpp
     src/psp_gpu_adapters.cpp
     src/psp_gl_api.cpp
@@ -1151,6 +1152,11 @@ target_include_directories(test_paced_step PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/i
 target_compile_options(test_paced_step PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME paced_step_tests COMMAND test_paced_step)
 
+# The [CRASH] line's module name.
+add_executable(test_backtrace tests/test_backtrace.cpp src/psp_backtrace.cpp)
+target_compile_options(test_backtrace PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME backtrace_tests COMMAND test_backtrace)
+
 # Relay-link telemetry of an infrastructure session (link_stats).
 add_executable(test_link_stats tests/test_link_stats.cpp src/net/link_stats.cpp)
 target_include_directories(test_link_stats PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -1235,6 +1241,10 @@ add_test(NAME on_exit_quick_tests COMMAND test_on_exit --quick)
 set_tests_properties(on_exit_quick_tests PROPERTIES PASS_REGULAR_EXPRESSION "on_exit handler ran")
 add_test(NAME on_exit_normal_tests COMMAND test_on_exit)
 set_tests_properties(on_exit_normal_tests PROPERTIES PASS_REGULAR_EXPRESSION "on_exit handler ran")
+
+add_executable(test_handoff tests/test_handoff.cpp src/psp_handoff.cpp)
+target_include_directories(test_handoff PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME handoff_tests COMMAND test_handoff)
 
 add_executable(test_wheel tests/test_wheel.cpp src/psp_wheel.cpp)
 target_include_directories(test_wheel PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

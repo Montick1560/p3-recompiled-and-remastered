@@ -49,7 +49,23 @@ static void lone_surrogate_is_replaced() {
     CHECK(!threw, "dump does not throw");
 }
 
+// What the online server shows on the public lobby page: the hero and the mission, nothing else.
+static void online_status() {
+    const auto h = p3_online_status({P3Place::Hideout, 2, 35, false, u""});
+    CHECK(h == (nlohmann::json{{"class", "Yarida"}, {"level", 35}}), "hideout: class and level");
+    const auto m = p3_online_status({P3Place::Mission, 2, 35, false, u"Torre"});
+    CHECK(m == (nlohmann::json{{"class", "Yarida"}, {"level", 35}, {"mission", "Torre"}}), "mission name");
+    CHECK(p3_online_status({P3Place::Title, 0, 0, false, u""}).is_null(), "no save: nothing to say");
+    CHECK(p3_online_status({P3Place::Unknown, 0, 0, false, u""}).is_null(), "unknown place: nothing to say");
+    const auto n = p3_online_status({P3Place::Mission, 0, 0, false, u"Torre"});
+    CHECK(n == (nlohmann::json{{"mission", "Torre"}}), "a mission without a sane save");
+    CHECK(p3_online_status({P3Place::Hideout, 35, 10, false, u""}).is_null(), "a class out of range is not a class");
+    const auto s = p3_online_status({P3Place::Mission, 2, 35, false, std::u16string(1, char16_t(0xD800))});
+    CHECK(!s.dump().empty(), "a torn name still makes valid JSON");
+}
+
 int main() {
+    online_status();
     activity_hideout_es();
     activity_mission_en();
     activity_versus_hides_class();

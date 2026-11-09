@@ -43,6 +43,8 @@ std::u16string missionName(const uint8_t* ram) {
         const uint32_t a = holder + kMissionName + 2 * i;
         const char16_t u = static_cast<char16_t>(ram[a & kMask] | (ram[(a + 1) & kMask] << 8));
         if (!u) return s;
+        // The game draws these enclosed symbols as its own icons (U+32A4 is the mission's heart): not readable text.
+        if (u >= 0x3200 && u <= 0x33FF) continue;
         s += u;
     }
     return u"";  // no terminator within the cap: not a name

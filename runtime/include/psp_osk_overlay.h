@@ -43,6 +43,7 @@ struct WorldTag {
     bool above = false;
     float size_px = 0.0f;  // text height in PSP pixels; 0 = the default size
     int icon = -1;         // frame of the icon strip (psp_world_tag_set_icon) drawn left of the text; -1 none
+    float align = 0.5f;    // share of the tag's width left of x: 0.5 centred, 0 starts at x, 1 ends at x
 };
 // GL thread: draws `t` into the bound render target of fb_w x fb_h pixels (PSP 480x272 scaled), moved clear of
 // the tags already drawn this frame; psp_world_tags_begin_frame forgets those.

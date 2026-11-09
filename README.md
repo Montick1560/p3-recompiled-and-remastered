@@ -309,7 +309,7 @@ VS between two parties also works (one PC, four instances for 2v2 and two for a 
 the "Puerta combate", the game finds the other side's VS room while staying in its own hideout room, the battle
 starts on every instance and runs to the results and back to the hideouts.
 Run the server with `python -I tools/infra_server.py` (TCP 27320, WebSocket 27321 on `/infra`) or
-`tools/run_infra_server.bat`; the runtime connects to `PSPRECOMP_INFRA_SERVER` (default
+`tools/run_infra_server_local.bat`; the runtime connects to `PSPRECOMP_INFRA_SERVER` (default
 `wss://online.montick.app/infra`, `off` to disable) only after the player picks infrastructure mode
 ([docs/ENV_FLAGS.md](docs/ENV_FLAGS.md)). Play across machines is not tested yet; the signal meter under each hero
 always shows full bars (see the spec). The game tells players apart by the console MAC: each machine generates

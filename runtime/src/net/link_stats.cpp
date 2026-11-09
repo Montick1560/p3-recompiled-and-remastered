@@ -2,11 +2,15 @@
 #include "net/link_stats.h"
 
 #include <algorithm>
+#include <atomic>
 #include <vector>
 
 namespace infra {
 
 namespace {
+
+std::atomic<int64_t> g_last_present_us{0};  // 0: no frame yet in this session
+std::atomic<int> g_frames{0}, g_slow_frames{0}, g_frame_max_ms{0};
 
 // Nearest rank: the element at index ceil(p * n) - 1 of the sorted values (p in percent).
 int nearest_rank(const std::vector<int>& sorted, int p) {
@@ -16,6 +20,16 @@ int nearest_rank(const std::vector<int>& sorted, int p) {
 }
 
 }  // namespace
+
+void frame_presented(int64_t now_us) {
+    const int64_t prev = g_last_present_us.exchange(now_us, std::memory_order_relaxed);
+    if (prev == 0) return;
+    const int ms = static_cast<int>(std::min<int64_t>((now_us - prev) / 1000, kLinkNumberMax));
+    if (g_frames.load(std::memory_order_relaxed) < kLinkNumberMax) g_frames.fetch_add(1, std::memory_order_relaxed);
+    if (ms >= kSlowFrameMs && g_slow_frames.load(std::memory_order_relaxed) < kLinkNumberMax)
+        g_slow_frames.fetch_add(1, std::memory_order_relaxed);
+    if (ms > g_frame_max_ms.load(std::memory_order_relaxed)) g_frame_max_ms.store(ms, std::memory_order_relaxed);
+}
 
 void LinkStats::ping_rtt(int ms) {
     std::lock_guard<std::mutex> lock(mu_);
@@ -32,6 +46,9 @@ void LinkStats::rx_gap(int ms) {
 
 LinkSummary LinkStats::summary() const {
     LinkSummary s;
+    s.frames = g_frames.load(std::memory_order_relaxed);
+    s.slow_frames = g_slow_frames.load(std::memory_order_relaxed);
+    s.frame_max_ms = g_frame_max_ms.load(std::memory_order_relaxed);
     std::vector<int> v;
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -52,11 +69,14 @@ void LinkStats::reset() {
     std::lock_guard<std::mutex> lock(mu_);
     rtts_.clear();
     pings_ = slow_ = max_gap_ = 0;
+    g_last_present_us = 0;
+    g_frames = g_slow_frames = g_frame_max_ms = 0;
 }
 
 nlohmann::json to_json(const LinkSummary& s) {
-    return {{"pings", s.pings},     {"slow_pings", s.slow_pings}, {"rtt_p50", s.rtt_p50},
-            {"rtt_p95", s.rtt_p95}, {"rtt_max", s.rtt_max},       {"max_rx_gap_ms", s.max_rx_gap_ms}};
+    return {{"pings", s.pings},     {"slow_pings", s.slow_pings},   {"rtt_p50", s.rtt_p50},
+            {"rtt_p95", s.rtt_p95}, {"rtt_max", s.rtt_max},         {"max_rx_gap_ms", s.max_rx_gap_ms},
+            {"frames", s.frames},   {"slow_frames", s.slow_frames}, {"frame_max_ms", s.frame_max_ms}};
 }
 
 }  // namespace infra

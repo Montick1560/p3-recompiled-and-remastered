@@ -59,6 +59,8 @@ static void mission_name() {
     r.mission(u"Borra la sonrisa de la g\u00e1rgola");
     const P3Presence p = p3_presence_read(r.m.data());
     CHECK(p.place == P3Place::Mission && p.mission == u"Borra la sonrisa de la g\u00e1rgola" && !p.versus, "mission");
+    r.mission(u"Borra la sonrisa de la g\u00e1rgola\u32a4");  // live name: the heart the game's font draws
+    CHECK(p3_presence_read(r.m.data()).mission == u"Borra la sonrisa de la g\u00e1rgola", "the game's icon is not text");
 }
 
 static void versus_hides_nothing_but_flags() {

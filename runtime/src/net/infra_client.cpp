@@ -31,6 +31,7 @@ constexpr int kStatsWaitMs = 1000;  // disconnect waits this long at most for th
 constexpr int kGatherMs = 2000;  // STUN gathering before direct_offer
 
 std::atomic<bool> g_lab_hooks{false};
+std::function<nlohmann::json()> g_status_source;
 
 // "a.b.c.d" -> host-order IPv4; false otherwise.
 bool parse_ipv4(const std::string& s, uint32_t* ip) {
@@ -260,6 +261,8 @@ const char* direct_off_reason(const Address& a, const char* env_direct, bool hav
 
 void set_lab_hooks(bool on) { g_lab_hooks = on; }
 
+void set_status_source(std::function<nlohmann::json()> source) { g_status_source = std::move(source); }
+
 const char* login_error_name(uint32_t code) {
     switch (code) {
     case 0x80550DA1: return "INVITE_UNKNOWN";
@@ -309,8 +312,12 @@ bool Client::connect(const std::string& online_id, int timeout_ms, const nlohman
     if (ticker_.joinable()) ticker_.join();
     if (writer_.joinable()) writer_.join();
     if (offer_.joinable()) offer_.join();
-    transport_ = opt_.transport_factory ? opt_.transport_factory(addr_.kind) : make_transport(addr_.kind);
-    if (!transport_->open(addr_, timeout_ms)) {
+    std::shared_ptr<Transport> fresh = opt_.transport_factory ? opt_.transport_factory(addr_.kind) : make_transport(addr_.kind);
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        transport_ = fresh;
+    }
+    if (!fresh->open(addr_, timeout_ms)) {
         std::fprintf(stderr, "[INFRA] cannot reach %s\n", to_string(addr_).c_str());
         return false;
     }
@@ -342,6 +349,10 @@ bool Client::connect(const std::string& online_id, int timeout_ms, const nlohman
     nlohmann::json login = login_extra.is_object() ? login_extra : nlohmann::json::object();
     login["op"] = "login";
     login["online_id"] = online_id;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (!last_lost_.empty()) login["prev_lost"] = last_lost_;
+    }
     uint8_t probe[8];
     const char* off = direct_off_reason(addr_, std::getenv("PSPRECOMP_INFRA_DIRECT"), net::secure_random(probe, 8));
     if (!off) login["caps"] = {{"direct", 1}};
@@ -368,6 +379,7 @@ bool Client::connect(const std::string& online_id, int timeout_ms, const nlohman
         std::lock_guard<std::mutex> lock(mu_);
         session_ = answer.value("session", "");
         online_id_ = online_id;
+        last_lost_.clear();
     }
     vip_ = answer.value("vip", 0u);
     std::fprintf(stderr, "[INFRA] connected to %s as %s, virtual IP %u.%u.%u.%u\n", to_string(addr_).c_str(),
@@ -396,20 +408,24 @@ void Client::close_session(int wait_ms) {
         // Both of the session's numbers go out first, then one wait for both answers (or a lost connection), so a
         // slow server costs one round trip, not two.
         const auto until = Clock::now() + std::chrono::milliseconds(wait_ms);
-        auto link = std::make_shared<AnswerWait>(), direct = std::make_shared<AnswerWait>();
+        auto link = std::make_shared<AnswerWait>(), direct = std::make_shared<AnswerWait>(),
+             bye = std::make_shared<AnswerWait>();
         const bool link_sent = report_link([link](const nlohmann::json&) { link->finish(); }, wait_ms);
         const nlohmann::json pairs = direct_.running() ? direct_.stats_json() : nlohmann::json::array();
         if (!pairs.empty())
             request({{"op", "direct_stats"}, {"pairs", pairs}}, [direct](const nlohmann::json&) { direct->finish(); },
                     wait_ms);
+        request({{"op", "bye"}}, [bye](const nlohmann::json&) { bye->finish(); }, wait_ms);
         if (link_sent) link->wait_until(until);
         if (!pairs.empty()) direct->wait_until(until);
+        bye->wait_until(until);
     }
     lost("disconnect");  // closing the transport also unblocks a writer stuck in a send
     if (reader_.joinable()) reader_.join();
     if (ticker_.joinable()) ticker_.join();
     if (writer_.joinable()) writer_.join();
     if (offer_.joinable()) offer_.join();
+    std::lock_guard<std::mutex> lock(mu_);
     transport_.reset();
 }
 
@@ -423,11 +439,14 @@ void Client::lost(const char* why) {
     std::map<uint32_t, Pending> pending;
     std::set<int64_t> rooms;
     EventFn fn;
+    std::shared_ptr<Transport> transport;
     {
         std::lock_guard<std::mutex> lock(mu_);
         running_ = false;
         if (!connected_) return;
         connected_ = false;
+        transport = transport_;
+        if (std::strcmp(why, "disconnect") != 0 && std::strcmp(why, "login failed") != 0) last_lost_ = why;
         pending.swap(pending_);
         rooms.swap(rooms_);
         fn = on_event_;
@@ -442,7 +461,7 @@ void Client::lost(const char* why) {
         out_dgram_bytes_ = out_stream_bytes_ = 0;
     }
     out_cv_.notify_all();
-    if (transport_) transport_->close();
+    if (transport) transport->close();
     if (std::strcmp(why, "disconnect") != 0) {
         std::fprintf(stderr, "[INFRA] connection lost: %s\n", why);
         log_link();  // a lost connection sends nothing; the numbers stay in the log
@@ -470,21 +489,25 @@ bool Client::report_link(Done done, int timeout_ms) {
 void Client::log_link() const {
     const LinkSummary s = link_.summary();
     if (s.pings == 0) return;
-    std::fprintf(stderr, "[INFRA] link: %d pings, p50 %d ms, p95 %d ms, max %d ms, %d slow, longest gap %d ms\n",
-                 s.pings, s.rtt_p50, s.rtt_p95, s.rtt_max, s.slow_pings, s.max_rx_gap_ms);
+    std::fprintf(stderr,
+                 "[INFRA] link: %d pings, p50 %d ms, p95 %d ms, max %d ms, %d slow, longest gap %d ms, "
+                 "%d frames, %d slow, longest %d ms\n",
+                 s.pings, s.rtt_p50, s.rtt_p95, s.rtt_max, s.slow_pings, s.max_rx_gap_ms, s.frames, s.slow_frames,
+                 s.frame_max_ms);
 }
 
 void Client::send(Outgoing o) {
     bool backlog = false;
     {
         std::lock_guard<std::mutex> lock(out_mu_);
-        const bool dgram = o.kind == kKindDatagram;
-        (dgram ? out_dgram_bytes_ : out_stream_bytes_) += o.bytes.size();
+        const bool droppable = o.droppable;
+        (droppable ? out_dgram_bytes_ : out_stream_bytes_) += o.bytes.size();
         out_.push_back(std::move(o));
-        while (dgram && out_dgram_bytes_ > kMaxOutboxDgramBytes) {  // a full socket buffer drops datagrams
-            auto it = std::find_if(out_.begin(), out_.end(), [](const Outgoing& x) { return x.kind == kKindDatagram; });
-            stats::record(stats::Ev::Drop, it->kind, it->vip, it->src, it->dst, it->bytes.data() + kFrameHeader,
-                          it->bytes.size() - kFrameHeader);
+        while (droppable && out_dgram_bytes_ > kMaxOutboxDgramBytes) {  // a full socket buffer drops datagrams
+            auto it = std::find_if(out_.begin(), out_.end(), [](const Outgoing& x) { return x.droppable; });
+            if (it->kind)  // a hedge copy has no stats row: its datagram already has one
+                stats::record(stats::Ev::Drop, it->kind, it->vip, it->src, it->dst, it->bytes.data() + kFrameHeader,
+                              it->bytes.size() - kFrameHeader);
             out_dgram_bytes_ -= it->bytes.size();
             out_.erase(it);
         }
@@ -503,7 +526,7 @@ void Client::writer() {
             if (!running_) return;
             o = std::move(out_.front());
             out_.pop_front();
-            (o.kind == kKindDatagram ? out_dgram_bytes_ : out_stream_bytes_) -= o.bytes.size();
+            (o.droppable ? out_dgram_bytes_ : out_stream_bytes_) -= o.bytes.size();
         }
         if (!transport_->send_frame(o.bytes)) {
             lost("send failed");
@@ -550,7 +573,7 @@ void Client::send_datagram(uint32_t vip, uint16_t dst_port, uint16_t src_port, c
         stats::record(stats::Ev::TxDone, kKindDatagram, vip, src_port, dst_port, data, len);
         return;
     }
-    send(Outgoing{encode_datagram(vip, dst_port, src_port, data, len), kKindDatagram, vip, src_port, dst_port});
+    send(Outgoing{encode_datagram(vip, dst_port, src_port, data, len), kKindDatagram, vip, src_port, dst_port, true});
 }
 
 bool Client::pop_datagram(uint16_t local_port, Datagram* out) {
@@ -750,6 +773,10 @@ void Client::start_direct(const nlohmann::json& answer) {
     direct::LinkOptions lo;
     for (const auto& s : d.value("stun", nlohmann::json::array()))
         if (s.is_string()) lo.stun.push_back(s.get<std::string>());
+    if (d.value("hedge", false))
+        lo.hedge = [this](uint32_t vip, std::vector<uint8_t> sealed) {
+            send(Outgoing{encode_channel(vip, sealed.data(), sealed.size()), 0, vip, 0, 0, true});
+        };
     const char* impair = std::getenv("PSPRECOMP_INFRA_DIRECT_IMPAIR");
     if (opt_.lab_hooks) {
         if (impair) lo.impair = impair;
@@ -787,7 +814,7 @@ void Client::start_direct(const nlohmann::json& answer) {
         for (const direct::Cand& c : cands)
             list.push_back({{"t", c.type == direct::CandType::Host ? "host" : "srflx"},
                             {"a", ipv4_text(c.addr.ip) + ":" + std::to_string(c.addr.port)}});
-        request({{"op", "direct_offer"}, {"cands", list}}, [](const nlohmann::json&) {}, 5000);
+        request({{"op", "direct_offer"}, {"cands", list}, {"nat", direct_.nat_kind()}}, [](const nlohmann::json&) {}, 5000);
     });
 }
 
@@ -812,12 +839,14 @@ void Client::on_direct_event(const nlohmann::json& j) {
         cands.push_back({{ip, static_cast<uint16_t>(port)}, t == "host" ? direct::CandType::Host : direct::CandType::Srflx});
     }
     if (cands.size() > 4) cands.resize(4);
-    direct_.add_peer(vip_, peer, j.value("pair", 0u), key, std::move(cands));
+    direct_.add_peer(vip_, peer, j.value("pair", 0u), key, std::move(cands), j.value("host_link", 0),
+                     j.value("peer_nat", 0));
     crypto_wipe(key, sizeof key);
 }
 
 void Client::ticker() {
     int64_t last_ping = 0, last_report = now_ms(), last_impair = 0;
+    nlohmann::json status_sent;  // per connection: this thread lives as long as the connection
     // Lab only: the impairment of the direct path follows a file, so a test can kill and restore it mid-game.
     const char* impair_file = opt_.lab_hooks ? std::getenv("PSPRECOMP_INFRA_DIRECT_IMPAIR_FILE") : nullptr;
     std::string impair_now;
@@ -861,6 +890,18 @@ void Client::ticker() {
             }
             nlohmann::json ping = {{"op", "ping"}, {"t", t}};
             if (const int own = rtt_ms(); own >= 0) ping["rtt"] = std::min(own, 60000);
+            if (opt_.status) {
+                try {  // nothing may escape this thread; the source reads guest RAM that the game is writing
+                    nlohmann::json now = opt_.status();
+                    (void)now.dump();  // request() would throw on text that is not UTF-8
+                    if (!now.is_null() && now != status_sent) {
+                        ping["status"] = now;
+                        status_sent = std::move(now);
+                    }
+                } catch (const std::exception& e) {
+                    std::fprintf(stderr, "[INFRA] status skipped: %s\n", e.what());
+                }
+            }
             request(std::move(ping),
                     [this, t](const nlohmann::json& j) {
                         std::lock_guard<std::mutex> lock(mu_);
@@ -911,6 +952,7 @@ Client& client() {
     static Client* c = [] {
         Client::Options o;
         o.lab_hooks = g_lab_hooks;
+        o.status = g_status_source;
         return new Client(parse_address(std::getenv("PSPRECOMP_INFRA_SERVER")), o);
     }();
     return *c;

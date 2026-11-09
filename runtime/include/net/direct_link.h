@@ -20,16 +20,19 @@
 
 namespace direct {
 
-struct LinkOptions {
-    std::vector<std::string> stun;        // "host:port" from the login answer
-    std::vector<uint32_t> test_host_ips;  // tests only: host candidates to add (e.g. 127.0.0.1)
-    std::string impair;                   // "delay=MS,jitter=MS,loss=PCT,reorder=PCT"; the caller drops it in beta builds
-};
-
 // A game datagram (any order) or, from the stream channel on, a stream segment already in order.
 using DeliverFn =
     std::function<void(uint32_t peer_vip, Type type, uint16_t dst, uint16_t src, std::vector<uint8_t> payload)>;
 using RelayFn = std::function<void(uint32_t peer_vip, std::vector<uint8_t> sealed)>;  // to send as kind 4
+
+struct LinkOptions {
+    std::vector<std::string> stun;        // "host:port" from the login answer
+    std::vector<uint32_t> test_host_ips;  // tests only: host candidates to add (e.g. 127.0.0.1)
+    std::string impair;                   // "delay=MS,jitter=MS,loss=PCT,reorder=PCT"; the caller drops it in beta builds
+    // Set: while a pair is Up every game datagram also goes here, on the guest's thread, to travel by the relay. The
+    // first copy to arrive wins. It may lose the connection, so it is never called under the Link's lock.
+    RelayFn hedge;
+};
 
 // Lab link impairment of one side: loss drops packets both ways; delay, jitter and reorder hold outgoing ones.
 struct Impair {
@@ -50,7 +53,12 @@ public:
     // srflx from STUN (+ test_host_ips, + this PC's LAN addresses as host candidates), at most 4, after gathering
     // for up to wait_ms.
     std::vector<Cand> local_candidates(int wait_ms);
-    void add_peer(uint32_t my_vip, uint32_t peer_vip, uint32_t pair_id, const uint8_t key[32], std::vector<Cand> cands);
+    // After local_candidates: 1 both STUN servers saw one mapping, 2 each saw its own (only a path both punch through
+    // works), 0 fewer than two answers.
+    int nat_kind() const { return nat_kind_; }
+    // host_link and peer_nat, from the server, only come back in this peer's stats entry.
+    void add_peer(uint32_t my_vip, uint32_t peer_vip, uint32_t pair_id, const uint8_t key[32], std::vector<Cand> cands,
+                  int host_link = 0, int peer_nat = 0);
     void drop_peer(uint32_t peer_vip);
     bool has_peer(uint32_t peer_vip) const;
     bool is_up(uint32_t peer_vip) const;
@@ -69,6 +77,7 @@ private:
         std::unique_ptr<Path> path;
         PathState logged = PathState::Probing;
         bool logged_relay = false;  // the route choice last logged
+        int host_link = 0, peer_nat = 0;
     };
     struct Delivery {
         uint32_t vip;
@@ -91,7 +100,7 @@ private:
     void deliver_all(std::vector<Delivery>& got);
     using Relayed = std::vector<std::pair<uint32_t, std::vector<uint8_t>>>;  // (peer vip, sealed) for relay_
     void relay_all(Relayed& rel);
-    nlohmann::json entry(const PathStats& s) const;
+    nlohmann::json entry(const Peer& p) const;
 
     int fd_ = -1;
     uint16_t port_ = 0;
@@ -108,6 +117,7 @@ private:
     std::map<uint32_t, Peer> peers_;  // by peer vip
     std::vector<StunAsk> stun_asks_;
     std::vector<Addr> srflx_;
+    std::atomic<int> nat_kind_{0};
     Impair impair_;
     std::deque<Held> held_;
     std::vector<nlohmann::json> finished_;  // stats of peers dropped during this connection

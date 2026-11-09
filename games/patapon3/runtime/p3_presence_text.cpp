@@ -64,3 +64,15 @@ nlohmann::json p3_presence_activity(const P3Presence& p, const char* lang, int64
 nlohmann::json p3_presence_activity_from_ram(const uint8_t* rdram, const char* lang, int64_t start_unix) {
     return p3_presence_activity(p3_presence_read(rdram), lang, start_unix);
 }
+
+nlohmann::json p3_online_status(const P3Presence& p) {
+    nlohmann::json s;
+    if (p.class_id >= 1 && p.class_id <= 34 && p.level >= 1) {
+        s["class"] = kClassNames[p.class_id];
+        s["level"] = p.level;
+    }
+    if (!p.mission.empty()) s["mission"] = utf8(p.mission);
+    return s;
+}
+
+nlohmann::json p3_online_status_from_ram(const uint8_t* rdram) { return p3_online_status(p3_presence_read(rdram)); }

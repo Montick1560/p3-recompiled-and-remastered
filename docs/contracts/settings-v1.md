@@ -238,3 +238,13 @@ Both are optional and independent.
 | 13 | the player quit or went back to the menu while the game was frozen (no frame for 15 s, `PSPRECOMP_FREEZE_SECONDS`); the launcher treats it as a crash |
 | 14 | the graphics could not start (no window or OpenGL context; the launcher shows how to update the GPU driver) |
 | anything else | crash / failure (the launcher shows the crash notice and the log) |
+
+## Going back to the menu without showing the desktop
+
+Windows only, optional on both sides. Before starting the game, the launcher creates the manual-reset events `Local\<base>-leaving` and `Local\<base>-ready` and sets `PSPRECOMP_HANDOFF=<base>`, with `<base>` unique per launch.
+
+1. On its way to exit code 10, the game sets `leaving` and keeps its window on screen while it shuts down.
+2. The launcher prepares its window unseen, shows it, then sets `ready`.
+3. The game lets go of its window at `ready`, or after 1.5 s, and exits.
+
+Without the variable or the events, the game hides its window at once and the launcher opens after the exit. The launcher goes by the real exit code: any other code discards the prepared window.

@@ -311,7 +311,7 @@ font:600 1rem system-ui,sans-serif;cursor:pointer}button:disabled{opacity:.6}
 """
 
 # The public beta (no invite codes): what to download and how to start. Bump the zip name with every package.
-DOWNLOAD_URL = "https://descargas.montick.app/patapon3-beta1-u16.zip"
+DOWNLOAD_URL = "https://descargas.montick.app/patapon3-beta1-u21.zip"
 DISCORD_URL = "https://discord.gg/MQTTfEBa"
 
 SIGNUP_PAGE = """<!doctype html><html lang="es"><head><meta charset="utf-8">
@@ -437,12 +437,28 @@ h1{margin:0;font:inherit;display:inline}
 .det{grid-area:det;font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;color:var(--print-dim);min-height:0}
 .det:empty{display:none}
 .det b{color:var(--print);font-weight:700}
+.det p{margin:0}
+.dest{color:var(--print);font-size:clamp(.95rem,2.8vw,1.1rem);letter-spacing:.05em;line-height:1.2;overflow-wrap:anywhere}
+.crew{list-style:none;margin:7px 0 0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px 28px;
+ font-size:.86rem;letter-spacing:.06em}
+.crew li{display:flex;flex-wrap:wrap;justify-content:space-between;gap:0 12px;min-width:0}
+.who{color:var(--print);font-weight:700;overflow-wrap:anywhere;min-width:0}
+.what{font-variant-numeric:tabular-nums;white-space:nowrap}
+.what.none{opacity:.72}
+.join{margin-top:9px}
+.join button{font:700 .82rem/1 var(--face);letter-spacing:.08em;text-transform:uppercase;color:#1a1511;background:var(--plate);
+ border:0;border-radius:2px;padding:.62em .85em;min-height:36px;cursor:pointer;box-shadow:0 1px 0 #fff8 inset,0 2px 3px #0008}
+.join button:hover{background:#fff6dc}
+.join button:active{transform:translateY(1px);box-shadow:0 1px 1px #0008}
+.how{margin:8px 0 0;max-width:62ch;font-size:.82rem;line-height:1.35;letter-spacing:.02em;text-transform:none;color:var(--print)}
+.how:empty{display:none}
 
 @media (max-width:620px){
  .row{grid-template-columns:auto 1fr;grid-template-areas:"tag name" "players state" "det det"}
  .p,.s{justify-self:start}
  .row{gap:8px 12px}
  .s{justify-self:end}
+ .crew{grid-template-columns:minmax(0,1fr)}
 }
 
 .empty .row{opacity:.9}
@@ -530,12 +546,47 @@ function paintRoom(r,i){
  setWord(row._s,label,STATE_CELLS,d+200);
  row._s.className='word s t-'+tone;row._p.className='word p t-'+(r.members>=r.max_slot?'dim':'open');
  row._n.className='word n';
- if(r.kind==='vs'){
-  const bits=['Arena <b>'+(+r.mission)+'</b>','nivel <b>'+(+r.level)+'</b>'];
-  if(r.rule_type===0&&r.rule_value)bits.push('<b>'+Math.round(r.rule_value/60)+'</b> min');
-  row._d.innerHTML=bits.join(' · ')
- }else row._d.textContent=r.state==='in_vs'?'Su grupo está en una sala VS':'Cooperativo';
+ paintDetail(row._d,r);
  return row
+}
+const hero=m=>[m.class,m.level?'Nv '+m.level:''].filter(Boolean).join(' · ')||'Sin datos';
+const JOIN_ROUTE='En el juego: Heropuerta → Ir a otro escondite → Modo Infraestructura → ID online específica. Escribe ';
+let joining='';
+function joinButton(r){
+ const box=document.createElement('div');box.className='join';
+ const b=document.createElement('button');b.type='button';b.textContent='Copiar ID para entrar';
+ const hint=document.createElement('p');hint.className='how';hint.setAttribute('role','status');
+ const say=copied=>{hint.textContent=(copied?'ID copiado. ':'')+JOIN_ROUTE+r.owner+'.'};
+ b.onclick=async()=>{
+  joining=r.owner;
+  let copied=false;
+  try{await navigator.clipboard.writeText(r.owner);copied=true}catch(_){}
+  say(copied)
+ };
+ if(joining===r.owner)say(false);
+ box.append(b,hint);return box
+}
+function paintDetail(d,r){
+ const sig=JSON.stringify([r.mission_name,r.state,r.kind,r.level,r.mission,r.rule_type,r.rule_value,r.roster]);
+ if(d._sig===sig)return;d._sig=sig;  // a repaint every 5 s would take the focus off the button
+ const parts=[];
+ const note=r.mission_name||(r.state==='in_vs'?'Su grupo está en una sala VS':'');
+ if(note){const p=document.createElement('p');p.className='dest';p.textContent=note;parts.push(p)}
+ if(r.kind==='vs'){
+  const bits=[r.mission_name?'':'Arena <b>'+(+r.mission)+'</b>','nivel <b>'+(+r.level)+'</b>'].filter(Boolean);
+  if(r.rule_type===0&&r.rule_value)bits.push('<b>'+Math.round(r.rule_value/60)+'</b> min');
+  const p=document.createElement('p');p.className='rule';p.innerHTML=bits.join(' · ');parts.push(p)
+ }
+ if(r.roster&&r.roster.length){
+  const ul=document.createElement('ul');ul.className='crew';
+  ul.append(...r.roster.map(m=>{
+   const li=document.createElement('li'),who=document.createElement('span'),what=document.createElement('span');
+   who.className='who';who.textContent=m.name;what.className='what'+(m.class||m.level?'':' none');what.textContent=hero(m);
+   li.append(who,what);return li}));
+  parts.push(ul)
+ }
+ if(r.kind==='coop'&&r.state==='open')parts.push(joinButton(r));
+ d.replaceChildren(...parts)
 }
 function placeholder(left,right=''){
  rowsEl.querySelectorAll('.row').forEach(x=>x.remove());rowEls.clear();
@@ -575,7 +626,8 @@ async function load(){
   }
   const list=$('list');list.replaceChildren(...rooms.map(r=>{const li=document.createElement('li');
    li.textContent=(r.kind==='vs'?'VS de ':'Cuartel de ')+r.owner+', '+r.members+' de '+r.max_slot+', '+
-    (STATE[r.state]?STATE[r.state][0].toLowerCase():r.state)+(r.kind==='vs'?', arena '+r.mission+', nivel '+r.level:'');return li}));
+    (STATE[r.state]?STATE[r.state][0].toLowerCase():r.state)+(r.mission_name?', '+r.mission_name:r.kind==='vs'?', arena '+r.mission:'')+
+    (r.kind==='vs'?', nivel '+r.level:'')+((r.roster||[]).length?'. Jugadores: '+r.roster.map(m=>m.name+', '+hero(m)).join('; '):'');return li}));
   $('live').textContent=j.players+(j.players===1?' jugador':' jugadores')+' en línea, '+rooms.length+
    (rooms.length===1?' sala':' salas')+(vs?', '+vs+' VS en curso':'')+'.';
   $('stamp').className='live';$('stamp').textContent='En vivo · '+clock(j.t);first=false
@@ -762,6 +814,13 @@ def selftest():
         # lobby_page: beta.montick.app/salas polls /salas.json; the sign-up page links to it
         st, text = req("GET", "/salas", host="beta.montick.app")
         assert st == 200 and "/salas.json" in text and "jugadores" in text, (st, text[:200])
+        # lobby_roster: player and mission text comes from clients, so it never goes through innerHTML
+        assert "roster" in text and "mission_name" in text and "Sin datos" in text, text[:200]
+        # lobby_join: open hideouts offer the id and the real menu route; the page cannot join anyone by itself
+        assert "Copiar ID para entrar" in text and "ID online específica" in text, text[:200]
+        for line in text.splitlines():
+            if "innerHTML" in line:
+                assert "roster" not in line and "mission_name" not in line and ".name" not in line, line
         st, text = req("GET", "/", host="beta.montick.app")
         assert 'href="/salas"' in text, "sign-up page links to the lobby"
         st, _ = req("GET", "/salas", host="report.montick.app")
@@ -772,7 +831,8 @@ def selftest():
         assert st == 200 and json.loads(text) == {"ok": False}, (st, text)
         snap = {"t": round(time.time()), "players": 3, "rooms": [
             {"kind": "vs", "owner": "Montick", "members": 1, "max_slot": 2, "state": "searching", "mission": 3,
-             "level": 40, "rule_type": 0, "rule_value": 900}]}
+             "level": 40, "rule_type": 0, "rule_value": 900, "mission_name": "Arena",
+             "roster": [{"name": "Montick", "class": "Yarida", "level": 35}]}]}
         with open(status, "w", encoding="utf-8") as f:
             json.dump(snap, f)
         st, text = req("GET", "/salas.json", host="beta.montick.app")

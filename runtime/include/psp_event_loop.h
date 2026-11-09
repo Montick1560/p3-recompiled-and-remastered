@@ -11,6 +11,9 @@ int psp_runtime_init_sdl();
 /// threads. Blocks until g_should_exit is true or all game threads exit.
 void psp_event_loop(uint8_t* rdram);
 
+/// Takes the window off the screen. The shutdown then runs behind it.
+void psp_hide_window();
+
 /// Install SIGTERM/SIGINT signal handlers that set g_should_exit.
 void psp_install_signal_handlers();
 

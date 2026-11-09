@@ -267,6 +267,21 @@ challenges the pairing stops asking and stays direct, as before. Relay answers a
 pairing. `direct_stats` entries add `relay_p50`, `relay_p95` and `relay_s` (seconds Up with the relay preferred);
 the server accepts both the 5- and 8-number forms, so it must be deployed before the u8 client.
 
+**Send on both routes (5 Nov 2026, u18).** While a pairing is Up and the login answer's `direct.hedge` is true (the
+server's default; `--no-hedge` or the beta config `"hedge": false` turn it off for the next logins), every game datagram
+leaves on the direct path and, sealed with the same bytes, as kind 4 on the relay. The receiver's one replay window keeps
+whichever copy lands first, so no route has to be chosen in time: a loss on the direct path costs the relay's delay
+instead of a lost datagram, and when direct dies nothing is lost during the 4 s the path takes to be declared dead. The
+route choice above still runs while Up, but with hedging it only feeds the ping shown. Streams are not hedged (they
+already retransmit). A relay copy never harms the session: copies are the first thing the outbox drops at its cap, so a
+stalled server link costs copies, never a game packet or the connection, and they add no delivery-stats row.
+A relay copy whose direct twin was lost can land far behind newer datagrams (the relay is TCP, and the lab's bad profile
+measured up to 2.8 s): one that a newer datagram overtook 500 ms or more ago is dropped, so the worst case equals the
+direct path's plain loss and the game never sees such a copy. The clock starts at the first newer arrival, not the latest:
+at 7 to 30 datagrams a second the latest one is always recent, and a copy 1.8 s old would pass. `direct_stats` adds `host_link`, `peer_nat`, `direct_wins` and `relay_wins`: the last two count which route's copy
+arrived first. The cost is bandwidth: the relay carries a copy of every mission datagram, so a room with direct paths
+loads the server about as much as a relayed room does, plus the sealing overhead per packet.
+
 ## Phases
 
 The order is fixed by the user's priority (fast) and the security constraint (no half-safe intermediate ships):

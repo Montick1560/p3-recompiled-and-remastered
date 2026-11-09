@@ -715,7 +715,7 @@ void psp_world_tag_draw_target(const WorldTag& t, int fb_w, int fb_h) {
     const float iw = icon ? std::round(7.0f * sx) : 0.0f, ih = icon ? std::round(6.0f * sy) : 0.0f;  // 7x6 PSP px
     const float gap = icon && text ? std::round(sx) : 0.0f;
     const float w = iw + gap + tw, h = std::max(th, ih);
-    TagRect at = psp_tag_unstack({t.x * sx - w * 0.5f, t.y * sy - (t.above ? h : 0.0f), w, h}, g_placed, t.above);
+    TagRect at = psp_tag_unstack({t.x * sx - w * t.align, t.y * sy - (t.above ? h : 0.0f), w, h}, g_placed, t.above);
     at.x = std::round(at.x);  // whole pixels: the glyph texels land 1:1, sharp at render scale 1
     at.y = std::round(at.y);
     Gl& g = gl();

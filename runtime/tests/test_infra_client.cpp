@@ -13,6 +13,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -538,7 +539,7 @@ static void disconnect_unblocks_writer() {
     CHECK(wait_until([&] { return slow->waiting == 1; }, 2000), "a send is held");
     const auto t = Clock::now();
     c.disconnect();
-    CHECK(ms_since(t) < 1000, "disconnect returns while the writer is blocked in a send");
+    CHECK(ms_since(t) < 1500, "disconnect returns while the writer is blocked in a send (bye waits 1 s at most)");
     CHECK(!c.connected(), "disconnected");
 }
 
@@ -607,10 +608,118 @@ static void link_stats_sent_on_disconnect() {
     const nlohmann::json& j = v[0];
     CHECK(j.value("pings", 0) >= 3, "carries the answered pings");
     bool keys = true;
-    for (const char* k : {"pings", "slow_pings", "rtt_p50", "rtt_p95", "rtt_max", "max_rx_gap_ms"})
+    for (const char* k : {"pings", "slow_pings", "rtt_p50", "rtt_p95", "rtt_max", "max_rx_gap_ms", "frames",
+                          "slow_frames", "frame_max_ms"})
         keys &= j.contains(k) && j[k].is_number_integer();
-    CHECK(keys, "all six numbers");
-    CHECK(!j.contains("addr") && !j.contains("ip") && j.size() == 8, "op, id and the six numbers only");
+    CHECK(keys, "all nine numbers");
+    CHECK(!j.contains("addr") && !j.contains("ip") && j.size() == 11, "op, id and the nine numbers only");
+}
+
+static int frames_with_op(FakeInfraServer& s, const char* op) {
+    std::lock_guard<std::mutex> l(s.mu);
+    int n = 0;
+    for (const auto& f : s.got) n += f.kind == infra::kKindJson && f.json.value("op", "") == op;
+    return n;
+}
+
+// The server tells a player who quit from one who lost the connection: "bye" goes out after the session's numbers,
+// and a lost connection cannot say it.
+static void bye_only_on_disconnect() {
+    FakeInfraServer s;
+    s.reaccept = true;
+    s.start();
+    infra::Client c(s.address(), fast());
+    CHECK(c.connect("P3A", 2000), "connect");
+    c.disconnect();
+    CHECK(wait_until([&] { return frames_with_op(s, "bye") == 1; }, 1000), "disconnect says bye");
+    CHECK(c.connect("P3A", 2000), "connect again");
+    CHECK(wait_until([&] { return s.client >= 0; }, 500), "server has it");
+    s.close_client();
+    CHECK(wait_until([&] { return !c.connected(); }, 2000), "loss seen");
+    CHECK(frames_with_op(s, "bye") == 1, "a lost connection says no bye");
+    c.disconnect();
+}
+
+static std::vector<nlohmann::json> status_frames(FakeInfraServer& s) {
+    std::vector<nlohmann::json> v;
+    std::lock_guard<std::mutex> l(s.mu);
+    for (const auto& f : s.got)
+        if (f.kind == infra::kKindJson && f.json.value("op", "") == "ping" && f.json.contains("status"))
+            v.push_back(f.json["status"]);
+    return v;
+}
+
+// The lobby page's facts ride on the ping, only when they changed; a new connection tells them again.
+static void status_sent_when_changed() {
+    FakeInfraServer s;
+    s.reaccept = true;
+    s.start();
+    std::atomic<int> level{5}, calls{0};
+    infra::Client::Options o = fast();
+    o.ping_interval_ms = 20;
+    o.status = [&]() -> nlohmann::json { calls++; return {{"level", level.load()}}; };
+    infra::Client c(s.address(), o);
+    CHECK(c.connect("P3A", 2000), "connect");
+    CHECK(wait_until([&] { return calls >= 4; }, 2000), "several pings");
+    CHECK(status_frames(s).size() == 1, "the same status goes out once");
+    level = 6;
+    CHECK(wait_until([&] { return status_frames(s).size() == 2; }, 2000), "a change goes out");
+    CHECK(status_frames(s)[1].value("level", 0) == 6, "with the new value");
+    s.close_client();
+    CHECK(wait_until([&] { return !c.connected(); }, 2000), "loss seen");
+    CHECK(c.connect("P3A", 2000), "connect again");
+    CHECK(wait_until([&] { return status_frames(s).size() == 3; }, 2000), "a new connection tells it again");
+    c.disconnect();
+}
+
+static void status_nothing_to_say_and_failures() {
+    FakeInfraServer s;
+    s.start();
+    std::atomic<int> calls{0};
+    infra::Client::Options o = fast();
+    o.ping_interval_ms = 20;
+    o.status = [&]() -> nlohmann::json {
+        const int n = calls++;
+        if (n < 2) return nullptr;                                     // the save has not loaded yet
+        if (n < 4) throw std::runtime_error("torn read");              // must not end the network thread
+        if (n < 6) return {{"mission", std::string("bad \xFF utf-8")}};  // must not reach the wire
+        return {{"level", 9}};
+    };
+    infra::Client c(s.address(), o);
+    CHECK(c.connect("P3A", 2000), "connect");
+    CHECK(wait_until([&] { return status_frames(s).size() == 1; }, 2000), "the good status arrives after the bad ones");
+    const auto v = status_frames(s);
+    CHECK(!v.empty() && v[0].value("level", 0) == 9, "only the good one");
+    CHECK(c.connected(), "still connected");
+    c.disconnect();
+}
+
+// Why the last connection was lost goes out once, in the next login; a clean disconnect has nothing to tell.
+static void prev_lost_in_next_login() {
+    auto logins = [](FakeInfraServer& srv) {
+        std::vector<nlohmann::json> v;
+        std::lock_guard<std::mutex> l(srv.mu);
+        for (const auto& f : srv.got)
+            if (f.kind == infra::kKindJson && f.json.value("op", "") == "login") v.push_back(f.json);
+        return v;
+    };
+    FakeInfraServer s;
+    s.reaccept = true;
+    s.start();
+    infra::Client c(s.address(), fast());
+    CHECK(c.connect("P3A", 2000), "connect 1");
+    s.close_client();
+    CHECK(wait_until([&] { return !c.connected(); }, 2000), "loss seen");
+    CHECK(c.connect("P3A", 2000), "connect 2");
+    c.disconnect();
+    CHECK(c.connect("P3A", 2000), "connect 3");
+    c.disconnect();
+    const auto v = logins(s);
+    CHECK(v.size() == 3, "three logins");
+    if (v.size() != 3) return;
+    CHECK(!v[0].contains("prev_lost"), "first login: nothing to tell");
+    CHECK(v[1].value("prev_lost", "") == "connection closed by the server", "second login: why it was lost");
+    CHECK(!v[2].contains("prev_lost"), "third login: told once; a clean disconnect is not a loss");
 }
 
 static void no_link_stats_after_loss() {
@@ -904,6 +1013,78 @@ static void quit_skips_a_busy_session() {
     worker.join();
 }
 
+// While the server link stalls, hedge copies pile up and the oldest are dropped: the session stays, and the game's
+// datagrams keep flowing by the direct path. With hedge off the relay gets none of them.
+static void hedge_stall_keeps_session(bool hedge_on) {
+    set_env("PSPRECOMP_INFRA_DIRECT_TEST_HOSTS", "127.0.0.1");
+    const uint32_t kPeer = 0x0A500009;
+    FakeInfraServer s;
+    s.login_extra = {{"direct", {{"on", true}, {"stun", nlohmann::json::array()}, {"hedge", hedge_on}}}};
+    std::mutex mu;
+    std::vector<direct::Cand> offered;
+    std::atomic<int> channel_big{0};
+    s.on_frame = [&](FakeInfraServer& srv, const infra::Frame& f) {
+        if (f.kind == infra::kKindChannel && f.payload.size() > 200) channel_big++;  // not a route challenge
+        if (f.kind != infra::kKindJson || f.json.value("op", "") != "direct_offer") return;
+        std::lock_guard<std::mutex> l(mu);
+        for (const auto& c : f.json["cands"]) {
+            const std::string a = c["a"];
+            if (a.rfind("127.0.0.1:", 0) == 0)
+                offered.push_back({{0x7F000001, static_cast<uint16_t>(std::stoi(a.substr(10)))}, direct::CandType::Host});
+        }
+        srv.send_json({{"id", f.json["id"]}, {"ok", true}});
+    };
+    s.start();
+    SlowTransport* slow = nullptr;
+    infra::Client::Options o = slow_opts(&slow);
+    o.dead_after_ms = 20000;
+    o.lab_hooks = true;
+    infra::Client c(s.address(), o);
+    CHECK(c.connect("P3A", 2000, infra::login_fields("02000000000a", nullptr)), "hedge stall: connect");
+    CHECK(wait_until([&] { std::lock_guard<std::mutex> l(mu); return !offered.empty(); }, 3000), "hedge stall: offer");
+
+    std::atomic<int> delivered{0};
+    direct::Link peer;
+    direct::LinkOptions po;
+    po.test_host_ips = {0x7F000001};
+    CHECK(peer.start(po, [&](uint32_t, direct::Type, uint16_t, uint16_t, std::vector<uint8_t>) { delivered++; }, nullptr),
+          "hedge stall: peer");
+    const auto peer_cands = peer.local_candidates(300);
+    const std::string key_hex(64, 'a');
+    uint8_t key[32];
+    std::memset(key, 0xAA, sizeof key);
+    {
+        std::lock_guard<std::mutex> l(mu);
+        peer.add_peer(kPeer, c.vip(), 77, key, offered);
+    }
+    nlohmann::json cands = nlohmann::json::array();
+    for (const direct::Cand& pc : peer_cands)
+        if (pc.addr.ip == 0x7F000001)
+            cands.push_back({{"t", "host"}, {"a", "127.0.0.1:" + std::to_string(pc.addr.port)}});
+    s.send_json({{"ev", "direct_peer"}, {"vip", kPeer}, {"pair", 77}, {"key", key_hex}, {"cands", cands}});
+    CHECK(wait_until([&] { return c.direct_up(kPeer); }, 3000), "hedge stall: direct Up");
+
+    slow->set(true);  // the server link stalls
+    const std::vector<uint8_t> d(1024, 7);
+    const int kSent = 1000;  // about 1 MiB of copies: four times the outbox's cap for droppable frames
+    for (int i = 0; i < kSent; i++) {
+        c.send_datagram(kPeer, 3658, 3658, d.data(), d.size());
+        if (i % 10 == 9) sleep_ms(2);
+    }
+    CHECK(wait_until([&] { return delivered >= kSent * 9 / 10; }, 2000), "hedge stall: the direct path keeps delivering");
+    CHECK(c.connected(), "hedge stall: the session is alive");
+    slow->set(false);
+    sleep_ms(500);
+    CHECK(c.connected(), "hedge stall: still alive after the stall");
+    if (hedge_on) {
+        CHECK(channel_big > 0 && channel_big <= 270, "hedge stall: copies arrive, at most the outbox's cap of them");
+    } else {
+        CHECK(channel_big == 0, "hedge off: the relay gets no game datagram");
+    }
+    peer.stop();
+    c.disconnect();
+}
+
 // Both of the session's numbers go out before any wait: a slow server still gets direct_stats within the budget.
 static void quit_sends_both_stats_at_once() {
     set_env("PSPRECOMP_INFRA_DIRECT_TEST_HOSTS", "127.0.0.1");
@@ -971,6 +1152,12 @@ int main() {
     link_stats_refreshed_while_connected();
     link_stats_stop_on_old_server();
     link_gap_counts_from_the_ping();
+    hedge_stall_keeps_session(true);
+    hedge_stall_keeps_session(false);
+    bye_only_on_disconnect();
+    prev_lost_in_next_login();
+    status_sent_when_changed();
+    status_nothing_to_say_and_failures();
     direct_off_reasons();
     caps_on_loopback();
     no_caps_when_opted_out();

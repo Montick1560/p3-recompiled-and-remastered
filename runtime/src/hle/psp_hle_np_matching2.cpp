@@ -538,6 +538,23 @@ void hle_sceNpMatching2SearchRoom(uint8_t* rdram, recomp_context* ctx) {
             for (uint32_t i = 0; i < n; i++)
                 req["ints"].push_back({rdram[(f + i * 12) & kAddrMask], psp_mem_read<uint16_t>(rdram, f + i * 12 + 4),
                                        psp_mem_read<uint32_t>(rdram, f + i * 12 + 8)});
+        // BinSearchFilter (16): u8 op @0, {u16 id @4, u8* data @8, u32 size @0xC}.
+        const uint32_t bf = psp_mem_read<uint32_t>(rdram, p + 0x28), nb = psp_mem_read<uint32_t>(rdram, p + 0x2C);
+        if (nb <= 16 && valid_range(bf, nb * 16)) {
+            nlohmann::json filters = nlohmann::json::array();
+            for (uint32_t i = 0; i < nb; i++) {
+                const uint32_t e = bf + i * 16, data = psp_mem_read<uint32_t>(rdram, e + 8), size = psp_mem_read<uint32_t>(rdram, e + 12);
+                std::string hex;
+                if (size <= 1024 && valid_range(data, size))
+                    for (uint32_t k = 0; k < size; k++) {
+                        char b[3];
+                        std::snprintf(b, sizeof b, "%02x", rdram[(data + k) & kAddrMask]);
+                        hex += b;
+                    }
+                filters.push_back({rdram[e & kAddrMask], psp_mem_read<uint16_t>(rdram, e + 4), hex});
+            }
+            if (nb) req["bins"] = std::move(filters);
+        }
         const uint32_t a = psp_mem_read<uint32_t>(rdram, p + 0x30), na = psp_mem_read<uint32_t>(rdram, p + 0x34);
         if (na <= 16 && valid_range(a, na * 2))
             for (uint32_t i = 0; i < na; i++) req["attrs"].push_back(psp_mem_read<uint16_t>(rdram, a + i * 2));

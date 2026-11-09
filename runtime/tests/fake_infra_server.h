@@ -92,7 +92,7 @@ struct FakeInfraServer {
                         nlohmann::json answer = {{"id", f.json["id"]}, {"ok", true}, {"t", f.json["t"]}};
                         answer.update(ping_extra);
                         send_json(answer);
-                    } else if (op == "link_stats" && answer_link_stats) {
+                    } else if ((op == "link_stats" && answer_link_stats) || op == "bye") {
                         send_json({{"id", f.json["id"]}, {"ok", true}});
                     } else if (on_frame) {
                         on_frame(*this, f);

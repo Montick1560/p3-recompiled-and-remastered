@@ -15,6 +15,8 @@ struct PspPresenceSource {
     // Activity object for the current guest state, or null when there is nothing to show yet.
     nlohmann::json (*activity)(const uint8_t* rdram, const char* lang, int64_t start_unix);
     bool (*party)(np2::Party* out) = nullptr;  // online party, or null when the game has none
+    // What the online server shows about the player on its public lobby page; independent of the Discord switch.
+    nlohmann::json (*online_status)(const uint8_t* rdram) = nullptr;
 };
 
 // The activity with "party" {id "room-<id>", size [size, max]} and, when it has no "state", the generic one.
@@ -22,6 +24,8 @@ struct PspPresenceSource {
 nlohmann::json psp_presence_with_party(nlohmann::json activity, const np2::Party& party, const char* lang);
 
 void psp_presence_register(const PspPresenceSource&);
+// The registered online_status for the current guest state, null without one.
+nlohmann::json psp_presence_online_status(const uint8_t* rdram);
 // lang: "en" or "es". Returns false (one [DISCORD] line) when presence stays off.
 bool psp_presence_start(const uint8_t* rdram, const std::string& lang);
 // Clears the activity, closes the pipe and joins the thread (bounded by the IPC timeouts). Safe when not started.

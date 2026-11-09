@@ -42,6 +42,8 @@ struct PathConfig {
     int relay_silent_probes = 5;  // a u7 peer never answers kind 4: stop relay challenges after these many
     int relay_retry_ms = 60000;   // ... and then send one every relay_retry_ms, in case the relay was only down
     int max_relay_answers_per_s = 10;
+    // A relay copy that a newer datagram overtook this long ago is old news: dropped, as if it had been lost.
+    int stale_copy_ms = 500;
 };
 enum class PathState { Probing, Up, Down, Closed };
 struct PathStats {
@@ -52,6 +54,7 @@ struct PathStats {
     int fallbacks = 0;
     int relay_p50 = -1, relay_p95 = -1;
     int64_t relay_ms = 0;  // Up, but the relay was faster and carried the datagrams
+    uint64_t direct_wins = 0, relay_wins = 0;  // game datagrams delivered first by each route
 };
 
 class Path {
@@ -66,8 +69,10 @@ public:
     // A packet whose header carries this pair id. true when *app holds an accepted Dgram/Seg/Ack.
     bool on_packet(const Addr& from, const uint8_t* pkt, size_t len, int64_t now_ms, std::vector<Out>* out,
                    Opened* app);
-    // false: not use_direct() / too big
-    bool send(Type type, const uint8_t* body, size_t len, int64_t now_ms, std::vector<Out>* out);
+    // false: not use_direct() / too big. With relay_copy: false only when not Up; whichever route the route choice
+    // prefers, the same sealed bytes go out on both, and the receiver's replay window keeps the first to arrive.
+    bool send(Type type, const uint8_t* body, size_t len, int64_t now_ms, std::vector<Out>* out,
+              std::vector<std::vector<uint8_t>>* relay_copy = nullptr);
     // Seals for the relay (kind 4) with the same counter space; empty when the counter is exhausted or Closed.
     std::vector<uint8_t> seal_for_relay(Type type, const uint8_t* body, size_t len);
     // A packet that came through the relay (kind 4): same checks, no address learning. Relay challenges are
@@ -113,6 +118,7 @@ private:
     void leave_up(int64_t now_ms);  // the Up time and relay time end; the relay is no longer preferred
     void sample(std::deque<int>* win, int ms);
     int score(const std::deque<int>& win) const;
+    bool overtaken(uint64_t counter, int64_t now_ms);  // notes an arrival; true: overtaken stale_copy_ms ago or more
     bool rate_ok(size_t len, int64_t now_ms);
     void wipe();
 
@@ -141,6 +147,8 @@ private:
     int64_t last_ka_ = 0, last_switch_ = INT64_MIN / 2, last_return_ = INT64_MIN / 2, last_relay_probe_ = INT64_MIN / 2;
     int flaps_ = 0;  // returns to direct undone within route_flap_ms, in a row
     std::deque<int64_t> relay_answers_;  // our relay answers in the last second
+    std::deque<std::pair<uint64_t, int64_t>> newest_dgrams_;  // counter, arrival: each newer than all before it
+    uint64_t stale_below_ = 0;  // a datagram under this counter was overtaken stale_copy_ms ago or more
     PathStats stats_;
 };
 

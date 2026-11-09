@@ -150,7 +150,8 @@ void Path::tick(int64_t now_ms, std::vector<Out>* out, std::vector<std::vector<u
     }
     if (state_ == PathState::Up) {
         const int d = direct_score(), r = relay_score();
-        // To the relay when it wins by the margin; back when direct is not slower (a tie goes to direct).
+        // shortcut: with hedging on the choice only feeds the ping shown, delete hold and flaps once u18's field numbers
+        // confirm hedging. To the relay when it wins by the margin; back when direct is not slower (a tie goes to direct).
         const bool flip = d >= 0 && r >= 0 && (relay_preferred_ ? d <= r : r + cfg_.route_margin_ms <= d);
         const int64_t hold =
             relay_preferred_ ? std::min<int64_t>(int64_t{cfg_.route_hold_ms} << std::min(flaps_, 20), cfg_.route_max_hold_ms)
@@ -295,6 +296,10 @@ bool Path::on_packet(const Addr& from, const uint8_t* pkt, size_t len, int64_t n
         state_ = PathState::Closed;
         return false;
     default:
+        if (o.type == Type::Dgram) {
+            overtaken(o.counter, now_ms);  // only relay copies are dropped for it; a direct arrival still counts as newer
+            stats_.direct_wins++;
+        }
         *app = std::move(o);
         return true;
     }
@@ -331,14 +336,29 @@ bool Path::on_relayed(const uint8_t* pkt, size_t len, int64_t now_ms, Opened* ap
         return false;
     }
     if (o.type != Type::Dgram && o.type != Type::Seg && o.type != Type::Ack) return false;
+    if (o.type == Type::Dgram) {
+        if (overtaken(o.counter, now_ms)) return false;
+        stats_.relay_wins++;
+    }
     *app = std::move(o);
     return true;
 }
 
-bool Path::send(Type type, const uint8_t* body, size_t len, int64_t now_ms, std::vector<Out>* out) {
-    if (!use_direct()) return false;
+bool Path::overtaken(uint64_t counter, int64_t now_ms) {
+    for (; !newest_dgrams_.empty() && now_ms - newest_dgrams_.front().second >= cfg_.stale_copy_ms;
+         newest_dgrams_.pop_front())
+        stale_below_ = newest_dgrams_.front().first;
+    if (counter < stale_below_) return true;
+    if (newest_dgrams_.empty() || counter > newest_dgrams_.back().first) newest_dgrams_.emplace_back(counter, now_ms);
+    return false;
+}
+
+bool Path::send(Type type, const uint8_t* body, size_t len, int64_t now_ms, std::vector<Out>* out,
+                std::vector<std::vector<uint8_t>>* relay_copy) {
+    if (relay_copy ? state_ != PathState::Up : !use_direct()) return false;
     std::vector<uint8_t> p = seal_next(type, body, len);
     if (p.empty()) return false;
+    if (relay_copy) relay_copy->push_back(p);
     out->push_back({path_, std::move(p)});
     last_tx_ = now_ms;
     stats_.sent++;

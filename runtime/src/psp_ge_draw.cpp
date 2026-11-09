@@ -32,6 +32,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include "net/link_stats.h"
 #include "psp_present.h"
 #include "psp_present_aa.h"
 #include "xxhash.h"
@@ -1386,6 +1387,8 @@ static void present_blit(GLuint fbo) {
     perf_frame_end();  // PSPRECOMP_FRAMELOG: this frame's row
     g_present_dirty = false;
     g_last_present = std::chrono::steady_clock::now();
+    infra::frame_presented(
+        std::chrono::duration_cast<std::chrono::microseconds>(g_last_present.time_since_epoch()).count());
 }
 
 void ge_present_frame(

@@ -1,4 +1,6 @@
 #include "psp_event_loop.h"
+#include "psp_exit.h"
+#include "psp_handoff.h"
 #include "psp_runtime.h"
 #include "psp_render_queue.h"
 #include "psp_scheduler.h"
@@ -687,7 +689,11 @@ void psp_event_loop(uint8_t* rdram) {
         }
     }
 
-    // Quit requested: the window goes away now; the rest of shutdown runs behind it.
+    // Quit requested: the window goes away now and the rest of shutdown runs behind it, unless the launcher is taking over from it.
+    if (psp_requested_exit_code().load() != 10 || !psp_handoff_begin()) psp_hide_window();
+}
+
+void psp_hide_window() {
     if (g_window) {
         SDL_HideWindow(g_window);
         SDL_PumpEvents();

@@ -41,6 +41,7 @@ import struct
 import sys
 import threading
 import time
+import unicodedata
 
 MAX_FRAME = 64 * 1024        # kind + body; a bigger frame closes the connection
 MAX_TX = 1024 * 1024         # a client that does not read its queued output is dropped
@@ -69,6 +70,13 @@ DIRECT_COLUMNS = ("rtt_p50", "rtt_p95", "loss_x10", "direct_s", "fallbacks")
 # down, as the route choice uses them) of the last 20 relay samples of the last direct Up span, and the seconds the
 # direct path was Up with the relay preferred.
 RELAY_COLUMNS = ("relay_p50", "relay_p95", "relay_s")
+# Numbers a u18 client adds to each direct_stats entry (NULL before): is this link with a room's owner (the links that
+# carry a mission), the peer's NAT kind, and which route delivered each game datagram first.
+PAIR_COLUMNS = ("host_link", "peer_nat", "direct_wins", "relay_wins")
+NAT_KINDS = (0, 1, 2)        # direct_offer "nat": unknown, one mapping for both STUN servers, a mapping per server
+# Why a client lost its connection (Client::lost), sent at its next login; anything else is ignored.
+LOST_REASONS = frozenset(("send backlog", "send failed", "connection closed by the server",
+                          "bad frame from the server", "server silent"))
 
 # SCE_NP_MATCHING2_ROOM_FLAG_ATTR_* (RPCS3 sceNp2.h)
 FLAG_CLOSED, FLAG_FULL, FLAG_HIDDEN = 0x40000000, 0x20000000, 0x10000000
@@ -101,8 +109,11 @@ OPS = {1: lambda a, b: a == b, 2: lambda a, b: a != b, 3: lambda a, b: a < b,
        4: lambda a, b: a <= b, 5: lambda a, b: a > b, 6: lambda a, b: a >= b}
 
 
+LOG_STAMP = "%Y-%m-%d %H:%M:%S"  # the log appends across days and across restarts
+
+
 def log(msg):
-    print(time.strftime("%H:%M:%S"), msg, flush=True)
+    print(time.strftime(LOG_STAMP), msg, flush=True)
 
 
 def tee_sink(path, echo=None):
@@ -134,7 +145,7 @@ class AsyncLog:
 
     def __call__(self, msg):
         try:
-            self.q.put_nowait("%s %s" % (time.strftime("%H:%M:%S"), msg))
+            self.q.put_nowait("%s %s" % (time.strftime(LOG_STAMP), msg))
         except queue.Full:
             self.dropped += 1
 
@@ -167,6 +178,7 @@ CREATE TABLE IF NOT EXISTS direct_stats(session INT, path TEXT, rtt_p50 INT, rtt
 """
 # Relay-link numbers a client reports with link_stats (NULL until then). Added to older files in place.
 LINK_COLUMNS = ("pings", "slow_pings", "rtt_p50", "rtt_p95", "rtt_max", "max_rx_gap_ms")
+FRAME_COLUMNS = ("frames", "slow_frames", "frame_max_ms")  # a u18 client's presented frames, NULL before
 LINK_MAX = 600000
 
 
@@ -189,11 +201,11 @@ class MetricsDb:
             c.execute("PRAGMA journal_mode=WAL")
             c.executescript(METRICS_SCHEMA)
             have = {r[1] for r in c.execute("PRAGMA table_info(sessions)")}
-            for col in LINK_COLUMNS:
+            for col in (*LINK_COLUMNS, *FRAME_COLUMNS, "nat"):
                 if col not in have:
                     c.execute("ALTER TABLE sessions ADD COLUMN %s INT" % col)
             have = {r[1] for r in c.execute("PRAGMA table_info(direct_stats)")}
-            for col in RELAY_COLUMNS:
+            for col in (*RELAY_COLUMNS, *PAIR_COLUMNS):
                 if col not in have:
                     c.execute("ALTER TABLE direct_stats ADD COLUMN %s INT" % col)
             now = iso_utc(time.time())
@@ -297,7 +309,8 @@ def load_beta(path):
         raw = json.load(f)
     cfg = {"starts": raw["starts"], "ends": raw["ends"], "t0": parse_utc(raw["starts"]), "t1": parse_utc(raw["ends"]),
            "min_proto": int(raw.get("min_proto", INFRA_PROTO)), "max_per_code": int(raw.get("max_per_code", 2)),
-           "public": bool(raw.get("public", False)), "direct": bool(raw.get("direct", True)), "codes": {}}
+           "public": bool(raw.get("public", False)), "direct": bool(raw.get("direct", True)),
+           "hedge": bool(raw.get("hedge", True)), "codes": {}}
     for c in raw.get("codes", []):
         sha = str(c["sha256"]).lower()
         if not re.fullmatch(r"[0-9a-f]{64}", sha):
@@ -396,6 +409,41 @@ def bin_attrs(items, limit=16, size=1024):
     return out
 
 
+ATTR_PURPOSE = 0x4D     # int: why the hideout was opened; a search by online id asks for its own value
+ATTR_SEARCH_ID = 0x54   # searchable bin: the online id typed in the game's "ID online específica" search
+
+
+def id_search_target(bins):
+    """The online id a search asks for (case folded), None for any other search. bins: [[op, attr, hex], ...]."""
+    if not isinstance(bins, list):
+        return None
+    for item in bins[:16]:
+        if isinstance(item, list) and len(item) == 3 and item[1] == ATTR_SEARCH_ID and isinstance(item[2], str):
+            try:
+                return bytes.fromhex(item[2]).split(b"\0")[0].decode("utf-8", "replace").casefold()
+            except ValueError:
+                return None
+    return None
+
+
+def clean_status(raw):
+    """What a client says about its hero for the public lobby page. It is untrusted: a bad field is dropped on its
+    own, so a bad status never fails the ping that carries it."""
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for key, limit in (("class", 24), ("mission", 64)):
+        text = raw.get(key)
+        if isinstance(text, str) and len(text) <= limit:
+            text = "".join(c for c in text if not unicodedata.category(c).startswith("C"))
+            if text:
+                out[key] = text
+    level = raw.get("level")
+    if type(level) is int and 1 <= level <= 99:
+        out["level"] = level
+    return out
+
+
 class Member:
     def __init__(self, conn, member_id, bins):
         self.conn = conn
@@ -469,12 +517,15 @@ class Conn:
         self.port = 0
         self.rooms = {}             # room id -> Room this connection is a member of
         self.rtt = -1               # its own server RTT from its last ping (ms), -1 until it sends one
+        self.status = {}            # hero and mission from its pings, for the lobby page (clean_status)
         self.dgram_window = 0.0
         self.dgram_count = 0
         self.dgram_dropped = 0
         self.stream_window = 0.0
         self.stream_bytes = 0
         self.last_due = 0.0         # --impair: due time of the last frame queued to this connection
+        self.bye = False            # said it is quitting: its socket closing is not a lost connection
+        self.nat = 0                # NAT_KINDS, from its direct_offer
         self.caps_direct = False    # protocol 3 login caps: speaks the direct path
         self.cands = None           # its last direct_offer candidates; never logged or stored
         self.offer_times = []
@@ -488,12 +539,18 @@ class Server:
     def __init__(self, host="127.0.0.1", port=27320, ws_port=27321, ws_path="/infra", max_rooms=64,
                  idle=30.0, stats_every=60.0, delay_ms=0, max_per_addr=4, max_conns=512, signal_timeout=15.0,
                  loss=0, logger=log, beta_path=None, clock=time.time, db_path=None, impair=None, status_path=None,
-                 status_every=2.0, no_direct=False, stun=None):
+                 status_every=2.0, no_direct=False, no_hedge=False, stun=None, drain_path=None, drain_every=1.0):
         self.log = logger
+        # --drain-file: while it exists nobody new enters a room, and the server stops when no game is left.
+        self.drain_path = drain_path
+        self.drain_every = drain_every
+        self.drain_t = 0.0
+        self.draining = False
         # --status: the public lobby summary (tools/beta_report_server.py serves it at beta.montick.app/salas)
         self.status_path = status_path
         self.status_every = status_every
         self.no_direct = no_direct
+        self.no_hedge = no_hedge
         self.stun = stun or DEFAULT_STUN
         self.pairs = {}         # frozenset({Conn, Conn}) -> (pair id, 32-byte key); one per connection pair
         self.status_t = 0.0
@@ -638,8 +695,8 @@ class Server:
         if conn.vip:
             self.by_vip.pop(conn.vip, None)
         if conn.sid is not None:
-            reason = {"server stopping": "server_stop", "connection closed": "closed", "idle": "idle",
-                      "beta closed": "beta_closed"}.get(why, why[:64])
+            reason = {"server stopping": "server_stop", "connection closed": "quit" if conn.bye else "closed",
+                      "idle": "idle", "beta closed": "beta_closed"}.get(why, why[:64])
             self.metrics.put("UPDATE sessions SET end_utc=?, end_reason=?, bytes_in=?, bytes_out=?, dgrams_dropped=? "
                              "WHERE id=?", (self.now_utc(), reason, conn.bytes_in, conn.bytes_out, conn.dgram_dropped,
                                             conn.sid))
@@ -779,7 +836,8 @@ class Server:
     def beta_status(self):
         b = self.beta or {}
         return {"open": self.beta_open(), "starts": b.get("starts"), "ends": b.get("ends"), "now": iso_utc(self.clock()),
-                "min_proto": b.get("min_proto", INFRA_PROTO), "public": bool(b.get("public", False))}
+                "min_proto": b.get("min_proto", INFRA_PROTO), "public": bool(b.get("public", False)),
+                "metrics": bool(self.metrics.path)}
 
     def beta_code(self, invite):
         if self.beta is None or not isinstance(invite, str) or not normalize_code(invite):
@@ -1025,6 +1083,9 @@ class Server:
     def direct_on(self):
         return not self.no_direct and (self.beta is None or self.beta["direct"])
 
+    def hedge_on(self):
+        return not self.no_hedge and (self.beta is None or self.beta["hedge"])
+
     @staticmethod
     def parse_cands(cands):
         if not isinstance(cands, list) or not 1 <= len(cands) <= MAX_CANDS:
@@ -1062,9 +1123,10 @@ class Server:
             pair_id = secrets.randbits(32)
         secret = secrets.token_bytes(32)
         self.pairs[key] = (pair_id, secret)
+        host_link = int(any(r.owner.conn in (a, b) and r.member_of(b) for r in a.rooms.values()))
         for to, about in ((a, b), (b, a)):
             self.send_json(to, {"ev": "direct_peer", "vip": about.vip, "pair": pair_id, "key": secret.hex(),
-                                "cands": self.cands_for(to, about)})
+                                "cands": self.cands_for(to, about), "host_link": host_link, "peer_nat": about.nat})
         self.event("direct_pair", a)
         self.log("direct: pair %s <-> %s" % (a.online_id, b.online_id))
 
@@ -1096,12 +1158,18 @@ class Server:
         if not conn.caps_direct:
             raise Err(BAD_REQUEST)
         cands = self.parse_cands(msg.get("cands"))
+        nat = msg.get("nat", conn.nat)
+        if type(nat) is not int or nat not in NAT_KINDS:
+            raise Err(BAD_REQUEST)
         now = time.monotonic()
         conn.offer_times = [t for t in conn.offer_times if now - t < 60]
         if len(conn.offer_times) >= OFFERS_PER_MIN:
             raise Err(SERVICE_UNAVAILABLE)
         conn.offer_times.append(now)
         conn.cands = cands
+        if "nat" in msg:
+            conn.nat = nat
+            self.metrics.put("UPDATE sessions SET nat=? WHERE id=?", (nat, conn.sid))
         for key in [k for k in self.pairs if conn in k]:  # a new offer replaces the pairing: drop, then a fresh key
             self.unpair(key)
         for room in list(conn.rooms.values()):
@@ -1114,19 +1182,22 @@ class Server:
         pairs = msg.get("pairs")
         if set(msg) - {"id", "op"} != {"pairs"} or not isinstance(pairs, list) or len(pairs) > MAX_DIRECT_PAIRS:
             raise Err(BAD_REQUEST)
-        # u7 clients send the DIRECT_COLUMNS form, u8 adds RELAY_COLUMNS.
-        forms = ({"path", *DIRECT_COLUMNS}, {"path", *DIRECT_COLUMNS, *RELAY_COLUMNS})
+        # u7 clients send the DIRECT_COLUMNS form, u8 adds RELAY_COLUMNS, u18 adds PAIR_COLUMNS.
+        forms = ({"path", *DIRECT_COLUMNS}, {"path", *DIRECT_COLUMNS, *RELAY_COLUMNS},
+                 {"path", *DIRECT_COLUMNS, *RELAY_COLUMNS, *PAIR_COLUMNS})
         for p in pairs:
             if (not isinstance(p, dict) or set(p) not in forms or p["path"] not in ("direct", "relay")
-                    or not all(type(p[k]) is int and 0 <= p[k] <= LINK_MAX for k in set(p) - {"path"})):
+                    or not all(type(p[k]) is int and 0 <= p[k] <= LINK_MAX for k in set(p) - {"path"})
+                    or p.get("host_link", 0) > 1 or p.get("peer_nat", 0) not in NAT_KINDS):
                 raise Err(BAD_REQUEST)
-        cols = DIRECT_COLUMNS + RELAY_COLUMNS
+        cols = DIRECT_COLUMNS + RELAY_COLUMNS + PAIR_COLUMNS
         for p in pairs:
             self.metrics.put("INSERT INTO direct_stats(session, path, %s) VALUES (?, ?%s)"
                              % (", ".join(cols), ", ?" * len(cols)), (conn.sid, p["path"], *(p.get(k) for k in cols)))
             relay = " relay p50 %d p95 %d %d s" % tuple(p[k] for k in RELAY_COLUMNS) if "relay_s" in p else ""
-            self.log("%s direct_stats: %s p50 %d p95 %d loss %d/1000 %d s fallbacks %d%s"
-                     % (conn.online_id, p["path"], *(p[k] for k in DIRECT_COLUMNS), relay))
+            link = " host %d peer nat %d wins %d/%d" % tuple(p[k] for k in PAIR_COLUMNS) if "host_link" in p else ""
+            self.log("%s direct_stats: %s p50 %d p95 %d loss %d/1000 %d s fallbacks %d%s%s"
+                     % (conn.online_id, p["path"], *(p[k] for k in DIRECT_COLUMNS), relay, link))
         return {}
 
     @staticmethod
@@ -1168,9 +1239,12 @@ class Server:
                          "VALUES (?, ?, ?, ?, ?, ?, ?)",
                          (conn.sid, conn.code_label, int(conn.staff), oid, conn.kind, conn.proto, self.now_utc()))
         self.log("login %s" % conn.label())
+        prev_lost = msg.get("prev_lost")
+        if isinstance(prev_lost, str) and prev_lost in LOST_REASONS:
+            self.event("client_lost", conn, detail=prev_lost)
         answer = {"session": conn.session, "vip": conn.vip}
         if isinstance(caps, dict):
-            answer["direct"] = {"on": self.direct_on(), "stun": self.stun}
+            answer["direct"] = {"on": self.direct_on(), "stun": self.stun, "hedge": self.hedge_on()}
         return answer
 
     def op_ping(self, conn, msg):
@@ -1181,6 +1255,8 @@ class Server:
             if type(rtt) is not int or not 0 <= rtt <= 60000:
                 raise Err(BAD_REQUEST)
             conn.rtt = rtt
+        if "status" in msg:  # optional, and only when it changed
+            conn.status = clean_status(msg["status"])
         peers, seen = [], {conn}
         for room in conn.rooms.values():
             for m in room.members:
@@ -1194,16 +1270,25 @@ class Server:
 
     def op_link_stats(self, conn, msg):
         # The session's relay-link numbers (client infra::LinkStats); a later report overwrites. Numbers only.
-        if set(msg) - {"id", "op"} != set(LINK_COLUMNS):
+        fields = set(msg) - {"id", "op"}
+        cols = LINK_COLUMNS + FRAME_COLUMNS if fields == {*LINK_COLUMNS, *FRAME_COLUMNS} else LINK_COLUMNS
+        if fields != set(cols):
             raise Err(BAD_REQUEST)
-        vals = [msg[k] for k in LINK_COLUMNS]
+        vals = [msg[k] for k in cols]
         if not all(type(v) is int and 0 <= v <= LINK_MAX for v in vals):
             raise Err(BAD_REQUEST)
-        self.metrics.put("UPDATE sessions SET " + ", ".join("%s=?" % k for k in LINK_COLUMNS) + " WHERE id=?",
+        self.metrics.put("UPDATE sessions SET " + ", ".join("%s=?" % k for k in cols) + " WHERE id=?",
                          tuple(vals) + (conn.sid,))
-        n = dict(zip(LINK_COLUMNS, vals))
-        self.log("%s link: p50 %d p95 %d max %d slow %d/%d gap %d" % (
-            conn.label(), n["rtt_p50"], n["rtt_p95"], n["rtt_max"], n["slow_pings"], n["pings"], n["max_rx_gap_ms"]))
+        n = dict(zip(cols, vals))
+        frames = " frames %d slow %d max %d" % tuple(n[k] for k in FRAME_COLUMNS) if "frames" in n else ""
+        self.log("%s link: p50 %d p95 %d max %d slow %d/%d gap %d%s" % (
+            conn.label(), n["rtt_p50"], n["rtt_p95"], n["rtt_max"], n["slow_pings"], n["pings"], n["max_rx_gap_ms"],
+            frames))
+        return {}
+
+    def op_bye(self, conn, msg):
+        # The client is quitting on purpose: its socket closing next is a "quit", not a lost connection.
+        conn.bye = True
         return {}
 
     def op_bound(self, conn, msg):
@@ -1235,7 +1320,13 @@ class Server:
         start = max(1, int(msg.get("start", 1)))
         count = max(0, min(20, int(msg.get("max", 20))))
         flag_filter, flag_attr = u32(msg.get("flag_filter", 0)), u32(msg.get("flag_attr", 0))
-        found = [r for r in self.rooms.values() if self.match(r, filters, flag_filter, flag_attr)]
+        target = id_search_target(msg.get("bins"))
+        if target is not None:  # any open hideout of that player, whatever purpose its host opened it with
+            filters = [f for f in filters if f[1] != ATTR_PURPOSE]
+        found = [] if self.draining else [r for r in self.rooms.values()
+                                          if self.match(r, filters, flag_filter, flag_attr)
+                                          and (target is None or
+                                               (r.bins and r.owner.conn.online_id.casefold() == target))]
         page = found[start - 1:start - 1 + count]
         self.log("%s search (%d filters) -> %d of %d rooms" % (conn.label(), len(filters), len(page), len(found)))
         return {"total": len(found), "rooms": [r.ext(attrs) for r in page]}
@@ -1290,7 +1381,7 @@ class Server:
             raise Err(ALREADY_JOINED)
         if len(conn.rooms) >= MAX_ROOMS_PER_CONN:
             raise Err(SERVICE_UNAVAILABLE)
-        if len(room.members) >= room.max_slot or room.flag_attr & (FLAG_CLOSED | FLAG_FULL):
+        if self.draining or len(room.members) >= room.max_slot or room.flag_attr & (FLAG_CLOSED | FLAG_FULL):
             raise Err(ROOM_FULL)
         # The game tells players apart by the OpenPSID built from the console
         # MAC: a second member with the same one would also be "player 1".
@@ -1396,7 +1487,20 @@ class Server:
         return {}
 
     # ---- loop ----
+    def check_drain(self):
+        draining = os.path.exists(self.drain_path)
+        if draining != self.draining:
+            self.draining = draining
+            self.log("drain: %s" % ("no one new enters a room; stopping when no game is left" if draining
+                                    else "cancelled"))
+        if draining and not any(len(r.members) >= 2 for r in self.rooms.values()):
+            self.log("drain: no game left, stopping")
+            self.running = False
+
     def tick(self, now):
+        if self.drain_path and now - self.drain_t >= self.drain_every:
+            self.drain_t = now
+            self.check_drain()
         if self.beta_path and now - self.beta_checked >= 1.0:
             self.beta_checked = now
             self.beta_reload()
@@ -1440,7 +1544,9 @@ class Server:
         for room in sorted(self.rooms.values(), key=lambda r: r.id):
             full = len(room.members) >= room.max_slot
             r = {"kind": "coop" if room.bins else "vs", "owner": room.owner.conn.online_id,
-                 "members": len(room.members), "max_slot": room.max_slot}
+                 "members": len(room.members), "max_slot": room.max_slot,
+                 "roster": [{"name": m.conn.online_id, "class": m.conn.status.get("class"),
+                             "level": m.conn.status.get("level")} for m in room.members]}
             if room.bins:
                 r["state"] = ("in_vs" if any(m.conn in in_vs for m in room.members)
                               else "in_mission" if room.flag_attr & FLAG_CLOSED
@@ -1450,6 +1556,11 @@ class Server:
                 r["state"] = "playing" if full else "searching"
                 r.update(mission=room.ints.get(0x4D, 0), level=room.ints.get(0x4F, 0),
                          rule_type=room.ints.get(0x50, 0), rule_value=room.ints.get(0x51, 0))
+            if not room.bins or r["state"] == "in_mission":  # a hideout may still hold the last mission's name
+                name = next((m.conn.status["mission"] for m in [room.owner] + room.members
+                             if "mission" in m.conn.status), None)
+                if name:
+                    r["mission_name"] = name
             rooms.append(r)
         return {"t": round(self.clock()), "players": sum(1 for c in self.conns.values() if c.session),
                 "rooms": rooms}
@@ -2044,7 +2155,76 @@ def selftest():
     direct_selftest(run, quiet, lines)
     impair_selftest(run, quiet)
     lobby_status_selftest(run, quiet)
+    drain_selftest(run, quiet)
     print("selftest OK")
+
+
+def drain_selftest(run, quiet):
+    """--drain-file: no one new enters a room, and the server stops once no room has a game (2 or more members)."""
+    import os
+    import tempfile
+
+    flag = os.path.join(tempfile.mkdtemp(prefix="p3drain_"), "drain.flag")
+
+    def touch():
+        open(flag, "w").close()
+
+    def wait_for(pred, what, timeout=3):
+        deadline = time.monotonic() + timeout
+        while not pred():
+            assert time.monotonic() < deadline, what
+            time.sleep(0.01)
+
+    srv = Server("127.0.0.1", 0, None, logger=quiet, drain_path=flag, drain_every=0.02)
+    th = run(srv)
+    host, guest, late, solo = (TestClient(srv.port) for _ in range(4))
+    host.ok("login", online_id="DR_HOST", proto=2)
+    guest.ok("login", online_id="DR_GUEST", proto=2)
+    late.ok("login", online_id="DR_LATE", proto=2)
+    solo.ok("login", online_id="DR_SOLO", proto=2)
+    hide = host.ok("create", max_slot=4, ints=GAME_INTS)["room"]
+    vs = host.ok("create", max_slot=2, ints=GAME_INTS)["room"]
+    guest.ok("join", room_id=hide["id"])
+    guest.ok("join", room_id=vs["id"])
+    solo.ok("create", max_slot=4, ints=GAME_INTS)
+    assert late.ok("search", ints=[])["total"] == 3
+    # drain_refuses_joins: the game goes on; search finds nothing, a join is ROOM_FULL, a solo hideout is still allowed
+    touch()
+    wait_for(lambda: srv.draining, "drain seen")
+    assert late.ok("search", ints=[]) ["total"] == 0, "nothing to find during a drain"
+    ans = late.req("join", room_id=hide["id"])
+    assert not ans["ok"] and ans["error"] == ROOM_FULL, ans
+    late.ok("create", max_slot=4, ints=GAME_INTS)
+    time.sleep(0.1)
+    assert srv.running, "a game is on: the server stays"
+    # drain_cancelled: the flag gone, everything works again
+    os.remove(flag)
+    wait_for(lambda: not srv.draining, "drain cancelled")
+    assert late.ok("search", ints=[])["total"] == 4
+    # drain_stop: one room emptied is not enough (the VS room counts by itself); the last game ending stops the server,
+    # with solo hideouts still open
+    touch()
+    wait_for(lambda: srv.draining, "drain seen again")
+    guest.ok("leave", room_id=hide["id"])
+    time.sleep(0.1)
+    assert srv.running, "the VS room still has two members"
+    guest.ok("leave", room_id=vs["id"])
+    th.join(timeout=3)
+    assert not th.is_alive() and not srv.running, "stopped with only solo rooms left"
+    for cl in (host, guest, late, solo):
+        cl.close()
+    # drain_empty: the flag already there on an empty server stops it at once
+    srv = Server("127.0.0.1", 0, None, logger=quiet, drain_path=flag, drain_every=0.02)
+    th = run(srv)
+    th.join(timeout=3)
+    assert not th.is_alive(), "an empty server stops at once"
+    # no flag option: nothing changes
+    srv = Server("127.0.0.1", 0, None, logger=quiet)
+    th = run(srv)
+    time.sleep(0.05)
+    assert srv.running and not srv.draining
+    srv.running = False
+    th.join(timeout=5)
 
 
 def lobby_status_selftest(run, quiet):
@@ -2080,14 +2260,62 @@ def lobby_status_selftest(run, quiet):
     # status_rooms: a hideout (bin attrs) is co-op, a room without bin attrs is VS with its settings
     s = status(lambda s: len(s["rooms"]) == 2, "two rooms")
     assert s["players"] == 2 and abs(s["t"] - time.time()) < 5, s
-    assert s["rooms"][0] == {"kind": "coop", "owner": "P3A", "members": 1, "max_slot": 4, "state": "open"}, s
+    no_status = [{"name": "P3A", "class": None, "level": None}]
+    assert s["rooms"][0] == {"kind": "coop", "owner": "P3A", "members": 1, "max_slot": 4, "state": "open",
+                             "roster": no_status}, s
+    # search_by_id: the game's "ID online específica" finds an open hideout by its owner, whatever its purpose
+    id_ints = [[1, 0x4C, 0], [1, ATTR_PURPOSE, 0x30006], [2, 0x4E, 0], [4, 0x4F, 40], [6, 0x50, 40], [6, 0x51, 1], [4, 0x52, 40]]
+    by_id = lambda name: {"ints": id_ints, "bins": [[1, ATTR_SEARCH_ID, name.encode().ljust(20, b"\0").hex()]]}
+    assert b.ok("search", **by_id("P3A"))["total"] == 1, "found by the owner's id"
+    assert b.ok("search", **by_id("p3a"))["total"] == 1, "typing it in lower case finds it too"
+    assert b.ok("search", **by_id("P3Z"))["total"] == 0, "nobody with that id"
+    assert a.ok("search", **by_id("P3B"))["total"] == 0, "a VS room is not a hideout"
+    assert b.ok("search", ints=id_ints)["total"] == 0, "without an id, the purpose still counts"
+    assert b.ok("search", ints=GAME_FILTERS)["total"] == 1, "the normal search does not change"
+    assert id_search_target([[1, ATTR_SEARCH_ID, "zz"]]) is None and id_search_target("x") is None
+    assert id_search_target([[1, 0x55, "5033"]]) is None and id_search_target([1]) is None
     assert s["rooms"][1] == {"kind": "vs", "owner": "P3B", "members": 1, "max_slot": 2, "state": "searching",
-                             "mission": 3, "level": 32, "rule_type": 0, "rule_value": 300}, s
+                             "mission": 3, "level": 32, "rule_type": 0, "rule_value": 300,
+                             "roster": [{"name": "P3B", "class": None, "level": None}]}, s
+    # status_roster: each member's hero in join order; a client without status keeps its name only
+    a.ok("ping", t=1, status={"class": "Yarida", "level": 35, "mission": "Torre"})
+    c = TestClient(srv.port)
+    c.ok("login", online_id="P3C")
+    c.ok("join", room_id=hide["id"], member_bins=[])
+    s = status(lambda s: s["rooms"][0]["members"] == 2 and s["rooms"][0]["roster"][0]["class"], "the hero of P3A")
+    assert s["rooms"][0]["roster"] == [{"name": "P3A", "class": "Yarida", "level": 35},
+                                       {"name": "P3C", "class": None, "level": None}], s
+    # status_mission_only_in_mission: an open hideout shows no mission, even with one reported
+    assert "mission_name" not in s["rooms"][0], s
+    # status_vs_mission_name: a VS room shows the name in any state
+    b.ok("ping", t=1, status={"mission": "Arena del Trueno"})
+    s = status(lambda s: "mission_name" in s["rooms"][1], "the VS arena name")
+    assert s["rooms"][1]["mission_name"] == "Arena del Trueno" and s["rooms"][1]["mission"] == 3, s
     # status_coop_mission: a co-op party leaving hides its hideout, then closes it at departure (no VS room)
     a.ok("set_internal", room_id=hide["id"], flag_filter=0x54000000, flag_attr=0x14000000)
-    status(lambda s: s["rooms"][0]["state"] == "departing", "co-op party choosing a mission")
+    s = status(lambda s: s["rooms"][0]["state"] == "departing", "co-op party choosing a mission")
+    assert "mission_name" not in s["rooms"][0], s
     a.ok("set_internal", room_id=hide["id"], flag_filter=0x54000000, flag_attr=0x54000000)
-    status(lambda s: s["rooms"][0]["state"] == "in_mission", "co-op mission")
+    s = status(lambda s: s["rooms"][0]["state"] == "in_mission", "co-op mission")
+    assert s["rooms"][0]["mission_name"] == "Torre", s
+    # status_mission_from_a_member: the owner's mission first, otherwise the first member that has one
+    a.ok("ping", t=1, status={"class": "Yarida", "level": 35})
+    c.ok("ping", t=1, status={"mission": "Bosque"})
+    s = status(lambda s: s["rooms"][0].get("mission_name") == "Bosque", "the mission of a member")
+    # status_bad_fields: a bad field is dropped on its own and the ping still answers
+    assert clean_status({"class": 7, "level": 500, "mission": "ok"}) == {"mission": "ok"}
+    assert clean_status({"class": "x" * 25, "level": "9", "mission": "m" * 65}) == {}
+    assert clean_status({"level": True}) == {} and clean_status({"level": 0}) == {}
+    assert clean_status({"class": "Yarida", "level": 99}) == {"class": "Yarida", "level": 99}
+    assert clean_status("x") == {} and clean_status(None) == {} and clean_status([1]) == {}
+    # status_control_chars: gone before they reach the file; escaping markup is the page's job
+    assert clean_status({"mission": "A\u0000B\nC‮D"}) == {"mission": "ABCD"}
+    assert clean_status({"mission": "<b>x</b>"}) == {"mission": "<b>x</b>"}
+    assert clean_status({"mission": "\n\n"}) == {}
+    assert c.ok("ping", t=1, status="x")["t"] == 1
+    assert c.ok("ping", t=2, status={"level": "bad"})["t"] == 2
+    c.close()
+    status(lambda s: s["rooms"][0]["members"] == 1, "P3C gone")
     # status_vs_playing: a hideout whose member is in a VS room is in VS; a full VS room is a match being played
     a.ok("set_internal", room_id=hide["id"], flag_filter=0x54000000, flag_attr=0x14000000)
     a.ok("join", room_id=vs["id"], member_bins=[])
@@ -2221,7 +2449,7 @@ def direct_selftest(run, quiet, lines):
     # direct_caps_answer
     a, b, c, old = (TestClient(srv.port) for _ in range(4))
     la = a.ok("login", online_id="DIR_A", proto=3, caps=caps)
-    assert la["direct"] == {"on": True, "stun": DEFAULT_STUN}, la
+    assert la["direct"] == {"on": True, "stun": DEFAULT_STUN, "hedge": True}, la
     b.ok("login", online_id="DIR_B", proto=3, caps=caps)
     c.ok("login", online_id="DIR_C", proto=3, caps=caps)
     lo = old.ok("login", online_id="DIR_OLD", proto=2)
@@ -2238,13 +2466,18 @@ def direct_selftest(run, quiet, lines):
     assert not ans["ok"] and ans["error"] == BAD_REQUEST, "no caps, no offer"
     # pair_on_join: A creates, both offer, B joins
     hide = a.ok("create", max_slot=4, ints=GAME_INTS)["room"]
-    a.ok("direct_offer", cands=[srflx("203.0.113.5:4000"), {"t": "host", "a": "192.168.1.20:4001"}])
+    for bad_nat in (3, -1, "1", True):
+        ans = a.req("direct_offer", cands=[srflx("203.0.113.5:4000")], nat=bad_nat)
+        assert not ans["ok"] and ans["error"] == BAD_REQUEST, (bad_nat, ans)
+    a.ok("direct_offer", cands=[srflx("203.0.113.5:4000"), {"t": "host", "a": "192.168.1.20:4001"}], nat=1)
     b.ok("direct_offer", cands=[srflx("198.51.100.7:5000"), {"t": "host", "a": "192.168.1.21:5001"}])
     assert not direct_events(a, b), "no pairing before a shared room"
     b.ok("join", room_id=hide["id"])
     pa = a.event(lambda e: e["ev"] == "direct_peer", what="A: direct_peer")
     pb = b.event(lambda e: e["ev"] == "direct_peer", what="B: direct_peer")
     assert pa["pair"] == pb["pair"] and pa["pair"] and pa["key"] == pb["key"], (pa, pb)
+    assert (pa["peer_nat"], pb["peer_nat"]) == (0, 1), "each side learns the other's NAT kind (0 when not sent)"
+    assert pa["host_link"] == 1 and pb["host_link"] == 1, "A owns the room they share"
     assert re.fullmatch(r"[0-9a-f]{64}", pa["key"]), pa
     assert (pa["vip"], pb["vip"]) == (0x0A500002, 0x0A500001), (pa, pb)
     assert pa["cands"] == [srflx("198.51.100.7:5000")], pa
@@ -2264,6 +2497,7 @@ def direct_selftest(run, quiet, lines):
     assert ca["cands"] == [srflx("203.0.113.5:4000"), {"t": "host", "a": "192.168.1.20:4001"}], ca
     assert ac["cands"] == [srflx("203.0.113.5:4100"), {"t": "host", "a": "10.0.0.5:4101"}], ac
     assert cb["cands"] == [srflx("198.51.100.7:5000")], cb
+    assert ca["host_link"] == 1 and cb["host_link"] == 0, "two visitors of A's room are not a host link"
     assert len({ca["key"], cb["key"], pa["key"]}) == 3 and len({ca["pair"], cb["pair"], pa["pair"]}) == 3
     # kind4_only_when_paired: A->B delivered byte for byte with A's vip; A->OLD (no pairing) and an oversize frame
     # are dropped and counted
@@ -2327,7 +2561,13 @@ def direct_selftest(run, quiet, lines):
     a.ok("direct_stats", pairs=[good, dict(good, path="relay", direct_s=0)])
     a.ok("direct_stats", pairs=[dict(good, relay_p50=210, relay_p95=300, relay_s=95)])
     assert any(line.endswith("relay p50 210 p95 300 95 s") for line in lines[first:]), "relay numbers logged"
-    for bad in ([dict(good, relay_p50=210)], [dict(good, relay_p50=1, relay_p95=1, relay_s=-1)],
+    relay_form = dict(good, relay_p50=210, relay_p95=300, relay_s=95)
+    newest = dict(relay_form, host_link=1, peer_nat=2, direct_wins=900, relay_wins=12)
+    a.ok("direct_stats", pairs=[newest])
+    assert any(line.endswith("host 1 peer nat 2 wins 900/12") for line in lines[first:]), "pair numbers logged"
+    for bad in ([dict(relay_form, host_link=1)], [dict(newest, peer_nat=3)], [dict(newest, host_link=2)],
+                [dict(newest, direct_wins=-1)], [dict(newest, relay_wins="x")], [dict(good, relay_p50=210)],
+                [dict(good, relay_p50=1, relay_p95=1, relay_s=-1)],
                 [dict(good, relay_p50=1, relay_p95="x", relay_s=1)],
                 [dict(good, path="udp")], [dict(good, rtt_p50=-1)], [dict(good, rtt_p95=600001)],
                 [dict(good, loss_x10=1.5)], [dict(good, ip="203.0.113.5")], [good] * 9, good,
@@ -2336,10 +2576,15 @@ def direct_selftest(run, quiet, lines):
         assert not ans["ok"] and ans["error"] == BAD_REQUEST, (bad, ans)
     srv.metrics.flush(3)
     with sqlite3.connect(db) as cx:
-        rows = cx.execute("SELECT path, rtt_p50, rtt_p95, loss_x10, direct_s, fallbacks, relay_p50, relay_p95, relay_s"
-                          " FROM direct_stats").fetchall()
-        assert rows == [("direct", 40, 90, 12, 300, 1, None, None, None), ("relay", 40, 90, 12, 0, 1, None, None, None),
-                        ("direct", 40, 90, 12, 300, 1, 210, 300, 95)], rows
+        rows = cx.execute("SELECT path, rtt_p50, rtt_p95, loss_x10, direct_s, fallbacks, relay_p50, relay_p95, relay_s,"
+                          " host_link, peer_nat, direct_wins, relay_wins FROM direct_stats").fetchall()
+        none4 = (None, None, None, None)
+        assert rows == [("direct", 40, 90, 12, 300, 1, None, None, None) + none4,
+                        ("relay", 40, 90, 12, 0, 1, None, None, None) + none4,
+                        ("direct", 40, 90, 12, 300, 1, 210, 300, 95) + none4,
+                        ("direct", 40, 90, 12, 300, 1, 210, 300, 95, 1, 2, 900, 12)], rows
+        assert [r[0] for r in cx.execute("SELECT nat FROM sessions WHERE online_id='DIR_A'")] == [1]
+        assert [r[0] for r in cx.execute("SELECT nat FROM sessions WHERE online_id='DIR_B'")] == [None], "no nat sent"
         kinds = [r[0] for r in cx.execute("SELECT kind FROM events WHERE kind LIKE 'direct%'")]
         assert "direct_pair" in kinds and "direct_drop" in kinds, kinds
         assert not cx.execute("SELECT COUNT(*) FROM events WHERE kind LIKE 'direct%' AND detail IS NOT NULL"
@@ -2363,7 +2608,7 @@ def direct_selftest(run, quiet, lines):
     srv.unpair(frozenset((object(), object())))
     a, b = TestClient(srv.port), TestClient(srv.port)
     ans = a.ok("login", online_id="ND_A", proto=3, caps=caps)
-    assert ans["direct"] == {"on": False, "stun": ["stun.example.org:3478"]}, ans
+    assert ans["direct"] == {"on": False, "stun": ["stun.example.org:3478"], "hedge": True}, ans
     b.ok("login", online_id="ND_B", proto=3, caps=caps)
     hide = a.ok("create", max_slot=4, ints=GAME_INTS)["room"]
     b.ok("join", room_id=hide["id"])
@@ -2373,6 +2618,26 @@ def direct_selftest(run, quiet, lines):
     assert not srv.pairs and not direct_events(a, b)
     for cl in (a, b):
         cl.close()
+    srv.running = False
+    th.join(timeout=5)
+    # --no-hedge: the direct path works, datagrams are not sent twice
+    srv = Server("127.0.0.1", 0, None, logger=quiet, no_hedge=True)
+    th = run(srv)
+    a = TestClient(srv.port)
+    assert a.ok("login", online_id="NH_A", proto=3, caps=caps)["direct"] == {"on": True, "stun": DEFAULT_STUN,
+                                                                            "hedge": False}
+    a.close()
+    srv.running = False
+    th.join(timeout=5)
+    # beta config "hedge": false turns it off for the next logins, without a restart or a client release
+    cfg_hedge = os.path.join(tmp, "beta_hedge.json")
+    with open(cfg_hedge, "w", encoding="utf-8") as f:
+        json.dump({"starts": "2026-01-01T00:00:00Z", "ends": "2099-01-01T00:00:00Z", "public": True, "hedge": False}, f)
+    srv = Server("127.0.0.1", 0, None, logger=quiet, beta_path=cfg_hedge)
+    th = run(srv)
+    a = TestClient(srv.port)
+    assert a.ok("login", online_id="BH_A", proto=3, caps=caps)["direct"]["hedge"] is False
+    a.close()
     srv.running = False
     th.join(timeout=5)
     # beta config "direct": false -> off; the reload that turns it on pairs the waiting offers, and off drops them
@@ -2496,7 +2761,43 @@ INSERT INTO direct_stats VALUES (1, 'direct', 225, 1299, 0, 2580, 0);
     assert row() == [(200, 3, 48, 310, 950, 650)], row()
     dump = "\n".join(str(r) for r in q("SELECT * FROM sessions"))
     assert "127.0.0.1" not in dump and "1.2.3.4" not in dump, "no address stored"
+    # frame_numbers: optional, all three or none; an older client's form leaves them NULL
+    frames = q("SELECT frames, slow_frames, frame_max_ms FROM sessions WHERE online_id='LINK_A'")
+    assert frames == [(None, None, None)], frames
+    a.ok("link_stats", **dict(good, frames=5400, slow_frames=7, frame_max_ms=420))
+    srv.metrics.flush(3)
+    frames = q("SELECT frames, slow_frames, frame_max_ms FROM sessions WHERE online_id='LINK_A'")
+    assert frames == [(5400, 7, 420)], frames
+    for form in (dict(good, frames=1), dict(good, frames=-1, slow_frames=0, frame_max_ms=0),
+                 dict(good, frames=1, slow_frames="x", frame_max_ms=0)):
+        ans = a.req("link_stats", **form)
+        assert not ans["ok"] and ans["error"] == BAD_REQUEST, (form, ans)
+    # end_reasons: "bye" before the socket closes is a quit; a socket that just closes stays "closed"
+    a.ok("bye")
     a.close()
+    gone = TestClient(srv.port)
+    gone.ok("login", online_id="LINK_GONE", proto=2)
+    gone.close()
+    deadline = time.monotonic() + 3
+    while any(c.online_id in ("LINK_A", "LINK_GONE") for c in list(srv.conns.values())):
+        assert time.monotonic() < deadline, "sessions still open"
+        time.sleep(0.02)
+    srv.metrics.flush(3)
+    assert q("SELECT online_id, end_reason FROM sessions WHERE online_id LIKE 'LINK_%' ORDER BY id") == [
+        ("LINK_A", "quit"), ("LINK_GONE", "closed")]
+    # prev_lost: only the runtime's own reasons reach the events; anything else is ignored, and never logged
+    hostile = "x\n[fake log line]"
+    back = TestClient(srv.port)
+    back.ok("login", online_id="LINK_BACK", proto=2, prev_lost="server silent")
+    worse = TestClient(srv.port)
+    worse.ok("login", online_id="LINK_BAD", proto=2, prev_lost=hostile)
+    other = TestClient(srv.port)
+    other.ok("login", online_id="LINK_NUM", proto=2, prev_lost=7)
+    srv.metrics.flush(3)
+    assert q("SELECT detail FROM events WHERE kind='client_lost'") == [("server silent",)]
+    assert not any("fake log line" in line for line in lines), "a client string reached the log"
+    for cl in (back, worse, other):
+        cl.close()
     srv.running = False
     th.join(timeout=5)
 
@@ -2658,6 +2959,7 @@ def beta_selftest(run, quiet, lines):
     st, body = http_req(srv.ws_port, "GET", "/beta")
     assert st == 200 and body["open"] is True and (body["starts"], body["ends"]) == (starts, ends), (st, body)
     assert body["min_proto"] == 2 and body["now"].endswith("Z"), body
+    assert body["metrics"] is False, "this server has no --db: a review must see that at once"
     now[0] = t_start - 60
     st, body = http_req(srv.ws_port, "GET", "/beta")
     assert body["open"] is False, body
@@ -2802,8 +3104,12 @@ def main():
     ap.add_argument("--db", help="SQLite file for beta metrics (sessions, rooms, events); none = no metrics")
     ap.add_argument("--log", help="also append every log line to this file (the console keeps them too)")
     ap.add_argument("--status", help="write the public lobby summary (players, rooms) to this JSON file every 2 s")
+    ap.add_argument("--drain-file", help="while this file exists nobody new enters a room, and the server stops once "
+                                         "no room has 2 or more members (restart it without cutting a game)")
     ap.add_argument("--no-direct", action="store_true",
                     help="no direct-path pairing: every client stays on the relay (login answers direct.on false)")
+    ap.add_argument("--no-hedge", action="store_true",
+                    help="clients with a direct path send each game datagram only once (login answers direct.hedge false)")
     ap.add_argument("--stun", type=lambda v: [x for x in v.split(",") if x], default=None, metavar="HOST:PORT,...",
                     help="STUN servers sent to clients for the direct path (default %s)" % ",".join(DEFAULT_STUN))
     ap.add_argument("--selftest", action="store_true")
@@ -2816,7 +3122,7 @@ def main():
     srv = Server(args.host, args.port, args.ws_port, args.ws_path, args.max_rooms, args.idle, args.stats_every,
                  args.delay_ms, args.max_per_addr, signal_timeout=args.signal_timeout, loss=args.loss, logger=alog,
                  beta_path=args.beta, db_path=args.db, impair=args.impair, status_path=args.status,
-                 no_direct=args.no_direct, stun=args.stun)
+                 no_direct=args.no_direct, no_hedge=args.no_hedge, stun=args.stun, drain_path=args.drain_file)
     if disable_quick_edit():
         alog("console QuickEdit turned off: a click in this window no longer pauses the server")
     alog("infrastructure server: tcp %s:%d, ws %s:%d%s" % (args.host, srv.port, args.host, srv.ws_port, args.ws_path))

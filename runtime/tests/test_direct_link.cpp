@@ -65,9 +65,9 @@ LinkOptions loopback_opts() {
 struct Pair {
     Link a, b;
     Got ga, gb;
+    LinkOptions oa = loopback_opts(), ob = loopback_opts();
     bool start(uint8_t key_a_seed = 1, uint8_t key_b_seed = 1, RelayFn ra = nullptr, RelayFn rb = nullptr) {
-        if (!a.start(loopback_opts(), into(ga), std::move(ra)) || !b.start(loopback_opts(), into(gb), std::move(rb)))
-            return false;
+        if (!a.start(oa, into(ga), std::move(ra)) || !b.start(ob, into(gb), std::move(rb))) return false;
         uint8_t ka[32], kb[32];
         for (int i = 0; i < 32; i++) ka[i] = static_cast<uint8_t>(key_a_seed + i), kb[i] = static_cast<uint8_t>(key_b_seed + i);
         const auto ca = a.local_candidates(500), cb = b.local_candidates(500);
@@ -187,11 +187,11 @@ int main() {
               "relay route: a slower direct path sends by relay within 20 s, still Up");
         CHECK(wait_until([&] { return p.a.stats_json()[0].value("relay_s", 0) >= 1; }, 3000), "relay route: relay_s");
         const auto e = p.a.stats_json()[0];
-        bool keys = e.size() == 9;
+        bool keys = e.size() == 13;
         for (const char* k : {"path", "rtt_p50", "rtt_p95", "loss_x10", "direct_s", "fallbacks", "relay_p50",
-                              "relay_p95", "relay_s"})
+                              "relay_p95", "relay_s", "host_link", "peer_nat", "direct_wins", "relay_wins"})
             keys = keys && e.contains(k);
-        CHECK(keys, "relay route: the path kind and the 8 numbers");
+        CHECK(keys, "relay route: the path kind and the 12 numbers");
         p.a.set_impair("");
         CHECK(wait_until([&] { return p.a.send_dgram(kVipB, 1, 2, x, 3); }, 40000),
               "relay route: direct again within 40 s once it is faster");
@@ -241,9 +241,72 @@ int main() {
             right = c.addr.ip == 0xC6336401 && c.addr.port == 4444;
         }
         CHECK(srflx == 1 && right, "stun: only the asked server's answer with our txid sets the srflx candidate");
+        CHECK(l.nat_kind() == 0, "nat: one answer tells nothing");
         l.stop();
         psp_sock_close(server);
         psp_sock_close(other);
+    }
+    {   // nat_kind: two STUN servers saw the same mapping (1), or a different one each (2)
+        for (const uint16_t second_port : {uint16_t{5000}, uint16_t{5001}}) {
+            uint16_t p1 = 0, p2 = 0;
+            const int s1 = udp_socket(&p1), s2 = udp_socket(&p2);
+            Link l;
+            Got g;
+            LinkOptions o;
+            o.stun = {"127.0.0.1:" + std::to_string(p1), "127.0.0.1:" + std::to_string(p2)};
+            CHECK(l.start(o, into(g), nullptr), "nat: start");
+            auto answer = [](int fd, uint16_t port) {
+                uint8_t buf[512];
+                sockaddr_in from{};
+                socklen_t fl = sizeof from;
+                if (::recvfrom(fd, reinterpret_cast<char*>(buf), sizeof buf, 0, reinterpret_cast<sockaddr*>(&from), &fl) == 20)
+                    send_to(fd, stun_answer(buf + 8, 0xC6336401, port), from);
+            };
+            std::thread a1(answer, s1, uint16_t{5000}), a2(answer, s2, second_port);
+            l.local_candidates(1500);
+            a1.join();
+            a2.join();
+            CHECK(l.nat_kind() == (second_port == 5000 ? 1 : 2), "nat: same mapping 1, different mapping 2");
+            l.stop();
+            psp_sock_close(s1);
+            psp_sock_close(s2);
+        }
+    }
+    {   // hedge: both routes carry each datagram, the game sees it once, and each route's wins add up
+        Pair p;
+        std::atomic<int> copies{0};
+        p.oa.hedge = [&](uint32_t, std::vector<uint8_t> sealed) {
+            copies++;
+            p.b.on_relayed(kVipA, sealed.data(), sealed.size());
+        };
+        CHECK(p.start(), "hedge: start");
+        CHECK(wait_until([&] { return p.a.is_up(kVipB) && p.b.is_up(kVipA); }, 1000), "hedge: Up");
+        for (uint8_t i = 0; i < 50; i++) {
+            CHECK(p.a.send_dgram(kVipB, 3658, 3659, &i, 1), "hedge: sent");
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        CHECK(wait_until([&] { return p.gb.size() == 50; }, 2000), "hedge: 50 delivered");
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        CHECK(p.gb.size() == 50 && copies == 50, "hedge: once each, and 50 copies by the relay");
+        const auto e = p.b.stats_json()[0];
+        CHECK(e.value("direct_wins", 0) + e.value("relay_wins", 0) == 50, "hedge: the wins add up to the datagrams");
+        CHECK(p.a.stats_json()[0].value("direct_wins", 0) == 0, "hedge: nothing went the other way");
+        p.a.stop();
+        p.b.stop();
+    }
+    {   // pair_numbers: what the server told us about the peer comes back in its stats entry, no address
+        Pair p;
+        CHECK(p.start(), "pair numbers: start");
+        const uint8_t key[32] = {9};
+        p.a.add_peer(kVipA, 0x0A500009, 77, key, {}, 1, 2);
+        const auto stats = p.a.stats_json();
+        bool found = false;
+        for (const auto& e : stats)
+            found = found || (e.value("host_link", -1) == 1 && e.value("peer_nat", -1) == 2 &&
+                              e.contains("direct_wins") && e.contains("relay_wins"));
+        CHECK(found, "pair numbers: host_link, peer_nat and the wins in the entry");
+        p.a.stop();
+        p.b.stop();
     }
     if (failures) {
         std::printf("%d failure(s)\n", failures);

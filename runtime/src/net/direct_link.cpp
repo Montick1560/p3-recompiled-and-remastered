@@ -128,7 +128,6 @@ bool Link::start(const LinkOptions& opt, DeliverFn deliver, RelayFn relay) {
     finished_.clear();
     running_ = true;
     thread_ = std::thread([this] { run(); });
-    thread_id_ = thread_.get_id();
     return true;
 }
 
@@ -181,6 +180,8 @@ std::vector<Cand> Link::local_candidates(int wait_ms) {
     stun_cv_.wait_for(l, std::chrono::milliseconds(wait_ms), [this] {
         return !running_ || std::all_of(stun_asks_.begin(), stun_asks_.end(), [](const StunAsk& a) { return a.answered; });
     });
+    const auto answered = std::count_if(stun_asks_.begin(), stun_asks_.end(), [](const StunAsk& a) { return a.answered; });
+    nat_kind_ = answered < 2 ? 0 : srflx_.size() == 1 ? 1 : 2;
     stun_asks_.clear();  // a late answer is ignored
     std::vector<Cand> out;
     for (const Addr& a : srflx_) out.push_back({a, CandType::Srflx});
@@ -194,12 +195,16 @@ std::vector<Cand> Link::local_candidates(int wait_ms) {
 }
 
 void Link::add_peer(uint32_t my_vip, uint32_t peer_vip, uint32_t pair_id, const uint8_t key[32],
-                    std::vector<Cand> cands) {
+                    std::vector<Cand> cands, int host_link, int peer_nat) {
     Keys keys = derive_keys(key, my_vip, peer_vip);
     std::lock_guard<std::mutex> l(mu_);
     if (running_) {
-        if (peers_.count(peer_vip)) finished_.push_back(entry(peers_[peer_vip].path->stats()));
-        peers_[peer_vip] = Peer{std::make_unique<Path>(pair_id, keys, std::move(cands), now_ms(), rng_)};
+        if (peers_.count(peer_vip)) finished_.push_back(entry(peers_[peer_vip]));
+        Peer peer;
+        peer.path = std::make_unique<Path>(pair_id, keys, std::move(cands), now_ms(), rng_);
+        peer.host_link = host_link;
+        peer.peer_nat = peer_nat;
+        peers_[peer_vip] = std::move(peer);
     }
     keys.wipe();
 }
@@ -211,7 +216,7 @@ void Link::drop_peer(uint32_t peer_vip) {
     std::vector<Out> outs;
     it->second.path->close(now_ms(), &outs);
     for (const Out& o : outs) sendto_now(o);
-    finished_.push_back(entry(it->second.path->stats()));
+    finished_.push_back(entry(it->second));
     if (it->second.logged == PathState::Up)
         std::fprintf(stderr, "[INFRA] direct: vip %08x back to relay (dropped)\n", static_cast<unsigned>(peer_vip));
     peers_.erase(it);
@@ -239,17 +244,24 @@ Link::Route Link::route(uint32_t peer_vip) const {
 }
 
 bool Link::send_dgram(uint32_t peer_vip, uint16_t dst, uint16_t src, const uint8_t* data, size_t len) {
-    std::lock_guard<std::mutex> l(mu_);
-    auto it = peers_.find(peer_vip);
-    if (!running_ || it == peers_.end()) return false;
-    std::vector<uint8_t> body(4 + len);
-    body[0] = static_cast<uint8_t>(dst), body[1] = static_cast<uint8_t>(dst >> 8);
-    body[2] = static_cast<uint8_t>(src), body[3] = static_cast<uint8_t>(src >> 8);
-    if (len) std::memcpy(body.data() + 4, data, len);
-    std::vector<Out> outs;
-    const int64_t now = now_ms();
-    if (!it->second.path->send(Type::Dgram, body.data(), body.size(), now, &outs)) return false;
-    transmit(outs, now);
+    std::vector<std::vector<uint8_t>> copies;
+    RelayFn hedge;
+    {
+        std::lock_guard<std::mutex> l(mu_);
+        auto it = peers_.find(peer_vip);
+        if (!running_ || it == peers_.end()) return false;
+        std::vector<uint8_t> body(4 + len);
+        body[0] = static_cast<uint8_t>(dst), body[1] = static_cast<uint8_t>(dst >> 8);
+        body[2] = static_cast<uint8_t>(src), body[3] = static_cast<uint8_t>(src >> 8);
+        if (len) std::memcpy(body.data() + 4, data, len);
+        std::vector<Out> outs;
+        const int64_t now = now_ms();
+        hedge = opt_.hedge;
+        if (!it->second.path->send(Type::Dgram, body.data(), body.size(), now, &outs, hedge ? &copies : nullptr))
+            return false;
+        transmit(outs, now);
+    }
+    for (auto& c : copies) hedge(peer_vip, std::move(c));
     return true;
 }
 
@@ -276,8 +288,10 @@ void Link::set_impair(const std::string& text) {
     impair_ = v;
 }
 
-nlohmann::json Link::entry(const PathStats& s) const {
+nlohmann::json Link::entry(const Peer& p) const {
+    const PathStats s = p.path->stats();
     const uint64_t lost = s.keepalives > s.keepalive_acks ? s.keepalives - s.keepalive_acks : 0;
+    const auto capped = [](uint64_t n) { return static_cast<int>(std::min<uint64_t>(n, 600000)); };
     return {{"path", s.up_ms > 0 ? "direct" : "relay"},
             {"rtt_p50", std::max(0, s.rtt_p50)},
             {"rtt_p95", std::max(0, s.rtt_p95)},
@@ -286,14 +300,18 @@ nlohmann::json Link::entry(const PathStats& s) const {
             {"fallbacks", s.fallbacks},
             {"relay_p50", std::max(0, s.relay_p50)},
             {"relay_p95", std::max(0, s.relay_p95)},
-            {"relay_s", static_cast<int>(std::min<int64_t>(s.relay_ms / 1000, 600000))}};
+            {"relay_s", static_cast<int>(std::min<int64_t>(s.relay_ms / 1000, 600000))},
+            {"host_link", p.host_link},
+            {"peer_nat", p.peer_nat},
+            {"direct_wins", capped(s.direct_wins)},
+            {"relay_wins", capped(s.relay_wins)}};
 }
 
 nlohmann::json Link::stats_json() const {
     std::lock_guard<std::mutex> l(mu_);
     nlohmann::json a = nlohmann::json::array();
     for (const auto& e : finished_) a.push_back(e);
-    for (const auto& [vip, p] : peers_) a.push_back(entry(p.path->stats()));
+    for (const auto& [vip, p] : peers_) a.push_back(entry(p));
     while (a.size() > kMaxStatsPairs) a.erase(a.begin());  // the newest pairs
     return a;
 }
@@ -404,6 +422,7 @@ void Link::relay_all(Relayed& rel) {
 }
 
 void Link::run() {
+    thread_id_ = std::this_thread::get_id();  // before anything here can reach stop()
     std::vector<Delivery> got;
     Relayed rel;
     std::vector<std::vector<uint8_t>> challenges;
