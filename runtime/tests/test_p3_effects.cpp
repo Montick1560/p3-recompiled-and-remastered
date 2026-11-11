@@ -27,6 +27,11 @@ int main() {
     CHECK(paced("GSTONE_LONG_STx"), "ring stone");
     CHECK(paced("NGSTONE_ICE_EDx"), "ring stone end");
     CHECK(paced("DIRECT_1_002_1x"), "wheel-cycle direct effect");
+    // The cyclops' thrown rock (Caza al ciclope II): its flight brakes per call, so unpaced it fell 184 units short
+    // of the 270 it flies at 30 fps (same 2.5 s in the air)
+    CHECK(paced("EFF_EMDL_060x"), "cyclops rock");
+    CHECK(!paced("EFF_EMDL_061x"), "another effect model");
+    CHECK(!paced("EFF_EMDL_006x"), "another effect model (prefix)");
     // Projectiles and the rest move by the frame time: smooth and right unpaced
     CHECK(!paced("APON_LONGARROWx"), "long arrow");
     CHECK(!paced("_WEAPON_BOWGUNx"), "bowgun");
