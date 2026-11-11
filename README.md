@@ -552,6 +552,8 @@ This port stands on the work of the PSP and Patapon communities:
 - WondaOxigen: GXXTool3 (Patapon texture formats).
 - Nemoumbra: PataponAllocators and PacEngine (the game's memory allocators and script engine).
 - Madwig: author of the Patapon 3 "Depths of Infinity" (DxD) edition this port targets.
+- RintanCasi🌸: the project font (`games/patapon3/assets/fonts/p4kakupop-pro.ttf`), used by the in-game
+  achievement cards, toasts and on-screen keyboard, and by the launcher.
 - [Patapon 3 HD Texture Pack](https://github.com/Lin-zl522/Patapon-3-HD-Texture-Pack)
   (downloaded separately; `PSPRECOMP_TEXTURES`): WallSoGB (Patapon3Textures lead),
   Shockturtle, owocek, efonte (AI upscaling), Keamble, Hozzzd, KnotSora, Lin, Olimp666,

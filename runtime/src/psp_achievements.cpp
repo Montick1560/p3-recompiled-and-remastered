@@ -21,7 +21,7 @@ int fact_index(const PspAchievementSource& src, const std::string& name) {
     return -1;
 }
 
-bool parse_leaf(const nlohmann::json& j, const PspAchievementSource& src, PspAchLeaf* out, std::string* why) {
+bool parse_leaf(const nlohmann::ordered_json& j, const PspAchievementSource& src, PspAchLeaf* out, std::string* why) {
     if (!j.is_object() || !j.contains("fact") || !j["fact"].is_string()) { *why = "a leaf without fact"; return false; }
     const std::string name = j["fact"].get<std::string>();
     const int f = fact_index(src, name);
@@ -37,7 +37,49 @@ bool parse_leaf(const nlohmann::json& j, const PspAchievementSource& src, PspAch
     return true;
 }
 
+// "#RRGGBB" -> 0xRRGGBB; false for anything else.
+bool parse_rgb(const nlohmann::ordered_json& j, uint32_t* out) {
+    if (!j.is_string()) return false;
+    const std::string s = j.get<std::string>();
+    if (s.size() != 7 || s[0] != '#') return false;
+    uint32_t v = 0;
+    for (size_t i = 1; i < 7; i++) {
+        const char ch = s[i];
+        const int d = ch >= '0' && ch <= '9' ? ch - '0' : ch >= 'a' && ch <= 'f' ? ch - 'a' + 10
+                    : ch >= 'A' && ch <= 'F' ? ch - 'A' + 10 : -1;
+        if (d < 0) return false;
+        v = v << 4 | static_cast<uint32_t>(d);
+    }
+    *out = v;
+    return true;
+}
+
+void parse_rarities(const nlohmann::ordered_json& j, PspAchCatalogue& c) {
+    if (j.contains("rarities") && j["rarities"].is_object())
+        for (const auto& [key, t] : j["rarities"].items()) {
+            PspAchRarity r{key, "", "", 0, 0};
+            if (!t.is_object() || !parse_rgb(t.value("color", nlohmann::ordered_json()), &r.rgb)) {
+                c.log.push_back("[ACH] rarity " + key + ": color is not #RRGGBB; left out");
+                continue;
+            }
+            const nlohmann::ordered_json ms = t.value("ms", nlohmann::ordered_json(4000));
+            r.ms = std::clamp(ms.is_number_integer() ? ms.get<int>() : 4000, 2000, 10000);
+            if (t.contains("name") && t["name"].is_object()) {
+                r.name_es = t["name"].value("es", key);
+                r.name_en = t["name"].value("en", key);
+            }
+            c.rarities.push_back(r);
+        }
+    if (c.rarities.empty()) c.rarities.push_back({"comun", "Común", "Common", 0x231815u, 4000});
+}
+
 }  // namespace
+
+const PspAchRarity& psp_ach_rarity(const PspAchCatalogue& c, const std::string& key) {
+    for (const PspAchRarity& r : c.rarities)
+        if (r.key == key) return r;
+    return c.rarities.front();
+}
 
 int64_t psp_ach_read(const PspFact& f, const uint8_t* rdram, uint32_t base) {
     if (f.count > 0) {
@@ -56,12 +98,14 @@ int64_t psp_ach_read(const PspFact& f, const uint8_t* rdram, uint32_t base) {
 PspAchCatalogue psp_ach_compile(const std::string& json, const PspAchievementSource& src,
                                 const std::vector<std::string>& earned) {
     PspAchCatalogue c;
-    const nlohmann::json j = nlohmann::json::parse(json, nullptr, false);
+    const nlohmann::ordered_json j = nlohmann::ordered_json::parse(json, nullptr, false);
     if (j.is_discarded() || !j.is_object() || j.value("version", 0) != 1 || !j.contains("achievements") ||
         !j["achievements"].is_array()) {
         c.log.push_back("[ACH] achievements.json is not a version 1 catalogue: achievements off");
+        parse_rarities(nlohmann::ordered_json::object(), c);
         return c;
     }
+    parse_rarities(j, c);
     for (const auto& a : j["achievements"]) {
         if (c.entries.size() >= kMaxEntries) { c.log.push_back("[ACH] more than 255 achievements: the rest ignored"); break; }
         if (!a.is_object() || !a.contains("id") || !a["id"].is_string()) continue;
@@ -73,20 +117,26 @@ PspAchCatalogue psp_ach_compile(const std::string& json, const PspAchievementSou
             e.name_es = a["name"].value("es", "");
             e.name_en = a["name"].value("en", "");
         }
+        if (a.contains("desc") && a["desc"].is_object()) {
+            e.desc_es = a["desc"].value("es", "");
+            e.desc_en = a["desc"].value("en", "");
+        }
+        const nlohmann::ordered_json rarity = a.value("rarity", nlohmann::ordered_json());
+        e.rarity = psp_ach_rarity(c, rarity.is_string() ? rarity.get<std::string>() : "").key;
         e.has_when = a.contains("when");
         const uint16_t index = static_cast<uint16_t>(c.entries.size());
         c.entries.push_back(e);
         if (!e.has_when || std::find(earned.begin(), earned.end(), e.id) != earned.end()) continue;
-        const nlohmann::json& w = a["when"];
+        const nlohmann::ordered_json& w = a["when"];
         std::vector<PspAchLeaf> leaves;
         std::string why;
         bool ok = true, any = false;
         if (w.is_object() && (w.contains("all") || w.contains("any"))) {
             any = w.contains("any");
-            const nlohmann::json& list = any ? w["any"] : w["all"];
+            const nlohmann::ordered_json& list = any ? w["any"] : w["all"];
             if (!list.is_array() || list.empty()) { ok = false; why = "empty all/any"; }
             for (size_t i = 0; ok && i < list.size(); i++) {
-                const nlohmann::json& l = list[i];
+                const nlohmann::ordered_json& l = list[i];
                 if (l.is_object() && (l.contains("all") || l.contains("any"))) { ok = false; why = "nested all/any"; break; }
                 PspAchLeaf leaf{};
                 ok = parse_leaf(l, src, &leaf, &why);

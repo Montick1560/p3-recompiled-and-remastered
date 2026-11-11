@@ -390,7 +390,10 @@ set_source_files_properties(third_party/xbrz/xbrz.cpp PROPERTIES COMPILE_OPTIONS
 # image assets (assets/, e.g. the P3 ping icon) next to the exe; the launcher reads the JSON files.
 # Copied whenever the source file changes, not only when the exe relinks.
 set(_game_data_out "")
-foreach(_f game_options.json achievements.json assets/ping_signal.png)
+# Every file under assets/ (achievement images, fonts, icons); a new asset file needs a re-configure.
+file(GLOB_RECURSE _game_assets RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/../games/${PSPRECOMP_GAME}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../games/${PSPRECOMP_GAME}/assets/*")
+foreach(_f game_options.json achievements.json ${_game_assets})
     set(_src "${CMAKE_CURRENT_SOURCE_DIR}/../games/${PSPRECOMP_GAME}/${_f}")
     if(EXISTS "${_src}")
         get_filename_component(_dst_dir "${CMAKE_CURRENT_BINARY_DIR}/${_f}" DIRECTORY)
@@ -1128,6 +1131,12 @@ add_executable(test_ge_list_blend tests/test_ge_list_blend.cpp)
 target_include_directories(test_ge_list_blend PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(test_ge_list_blend PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
 add_test(NAME ge_list_blend_tests COMMAND test_ge_list_blend)
+
+# Display-list stall rule (PPSSPP GPUCommon parity): 28-bit compare, stop at pc == stall.
+add_executable(test_ge_stall tests/test_ge_stall.cpp)
+target_include_directories(test_ge_stall PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_options(test_ge_stall PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter)
+add_test(NAME ge_stall_tests COMMAND test_ge_stall)
 
 # xBRZ texture upscaling (PSPRECOMP_TEX_UPSCALE): factor parse, RGBA round trip, size limits.
 add_executable(test_tex_upscale tests/test_tex_upscale.cpp src/psp_tex_upscale.cpp third_party/xbrz/xbrz.cpp)

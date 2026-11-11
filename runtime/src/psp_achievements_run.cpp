@@ -30,13 +30,14 @@ size_t g_source_count = 0;
 struct Run {
     const PspAchievementSource* src = nullptr;
     PspAchCatalogue cat;
-    std::string file, save, lang;
+    std::string file, save, lang, img_dir;  // img_dir: <exe>/assets/achievements/
     bool toasts = true;
     void (*post)(const ToastText&) = nullptr;
     PspAchRing<16> ring;   // batches; one per check that granted something
     std::atomic<bool> stop{false};
     std::thread worker;
     int countdown = kCheckEvery;
+    int preview_step = 0;  // F7 preview, event thread only
 };
 // Published before the hook is installed. Never deleted: at shutdown a game thread may still be inside
 // on_vblank after the hook is removed (a few KB left to the process exit).
@@ -49,6 +50,11 @@ bool slurp(const std::string& path, std::string* out) {
     s << f.rdbuf();
     *out = s.str();
     return true;
+}
+
+bool file_exists(const std::string& path) {
+    std::error_code ec;
+    return std::filesystem::is_regular_file(std::filesystem::u8path(path), ec);
 }
 
 // Game thread, every vblank: one decrement and one compare on 59 of 60.
@@ -67,7 +73,7 @@ void on_vblank(uint8_t* rdram) {
 // Worker: everything earned since the last pass, in one file write and one batch of toasts.
 void drain(Run& r) {
     std::vector<std::pair<std::string, PspEarned>> add;
-    std::vector<std::pair<std::string, std::string>> icon_name;
+    std::vector<ToastIn> cards;
     PspAchBatch b;
     const std::string date = psp_ach_iso_utc(std::time(nullptr));
     while (r.ring.pop(&b)) {
@@ -75,7 +81,8 @@ void drain(Run& r) {
         for (uint16_t i = 0; i < b.n; i++) {
             const PspAchEntry& e = r.cat.entries[b.index[i]];
             add.push_back({e.id, {date, r.save, hero, r.src->release}});
-            icon_name.push_back({e.icon, r.lang == "en" ? e.name_en : e.name_es});
+            const bool en = r.lang == "en";
+            cards.push_back({e.id, en ? e.name_en : e.name_es, en ? e.desc_en : e.desc_es, &psp_ach_rarity(r.cat, e.rarity)});
         }
     }
     if (add.empty()) return;
@@ -83,7 +90,7 @@ void drain(Run& r) {
     if (!psp_ach_store_add(r.file, add, &err)) std::fprintf(stderr, "[ACH] %s\n", err.c_str());
     for (const auto& a : add) std::fprintf(stderr, "[ACH] earned %s\n", a.first.c_str());
     if (r.toasts && r.post)
-        for (const ToastText& t : psp_toasts_for(icon_name, r.lang.c_str())) r.post(t);
+        for (const ToastText& t : psp_ach_toasts(cards, r.img_dir, r.lang.c_str(), file_exists)) r.post(t);
 }
 
 void worker_main(Run* r) {
@@ -132,6 +139,7 @@ bool psp_achievements_start(const PspAchRunOptions& opt) {
     r->cat = psp_ach_compile(text, *src, earned);
     for (const std::string& l : r->cat.log) std::fprintf(stderr, "%s\n", l.c_str());
     r->file = file;
+    r->img_dir = opt.exe_dir + "/assets/achievements/";
     const std::string slot = env("PSPRECOMP_SAVE_SLOT");
     r->save = slot.size() > 1 && slot[0] == '_' ? slot.substr(1) : slot;
     r->lang = env("PSPRECOMP_UI_LANG") == "en" ? "en" : "es";
@@ -142,6 +150,15 @@ bool psp_achievements_start(const PspAchRunOptions& opt) {
     r->worker = std::thread(worker_main, r);
     g_run.store(r, std::memory_order_release);
     psp_vblank_hook_set(on_vblank);
+    return true;
+}
+
+bool psp_achievements_preview() {
+    Run* r = g_run.load(std::memory_order_acquire);
+    if (!r || !r->post || env("PSPRECOMP_ACH_PREVIEW") != "1") return false;
+    for (const ToastText& t : psp_ach_toasts(psp_ach_preview(r->cat, r->preview_step++, r->lang.c_str()), r->img_dir,
+                                             r->lang.c_str(), file_exists))
+        r->post(t);
     return true;
 }
 

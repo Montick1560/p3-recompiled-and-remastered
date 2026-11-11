@@ -11,6 +11,8 @@ namespace {
 
 std::atomic<int64_t> g_last_present_us{0};  // 0: no frame yet in this session
 std::atomic<int> g_frames{0}, g_slow_frames{0}, g_frame_max_ms{0};
+std::atomic<int> g_over_20{0}, g_over_40{0};
+std::atomic<int> g_fps_target{0}, g_render_scale{0}, g_gpu_class{0};
 
 // Nearest rank: the element at index ceil(p * n) - 1 of the sorted values (p in percent).
 int nearest_rank(const std::vector<int>& sorted, int p) {
@@ -28,6 +30,10 @@ void frame_presented(int64_t now_us) {
     if (g_frames.load(std::memory_order_relaxed) < kLinkNumberMax) g_frames.fetch_add(1, std::memory_order_relaxed);
     if (ms >= kSlowFrameMs && g_slow_frames.load(std::memory_order_relaxed) < kLinkNumberMax)
         g_slow_frames.fetch_add(1, std::memory_order_relaxed);
+    if (ms >= 20 && g_over_20.load(std::memory_order_relaxed) < kLinkNumberMax)
+        g_over_20.fetch_add(1, std::memory_order_relaxed);
+    if (ms >= 40 && g_over_40.load(std::memory_order_relaxed) < kLinkNumberMax)
+        g_over_40.fetch_add(1, std::memory_order_relaxed);
     if (ms > g_frame_max_ms.load(std::memory_order_relaxed)) g_frame_max_ms.store(ms, std::memory_order_relaxed);
 }
 
@@ -70,13 +76,30 @@ void LinkStats::reset() {
     rtts_.clear();
     pings_ = slow_ = max_gap_ = 0;
     g_last_present_us = 0;
-    g_frames = g_slow_frames = g_frame_max_ms = 0;
+    g_frames = g_slow_frames = g_frame_max_ms = g_over_20 = g_over_40 = 0;
 }
 
 nlohmann::json to_json(const LinkSummary& s) {
     return {{"pings", s.pings},     {"slow_pings", s.slow_pings},   {"rtt_p50", s.rtt_p50},
             {"rtt_p95", s.rtt_p95}, {"rtt_max", s.rtt_max},         {"max_rx_gap_ms", s.max_rx_gap_ms},
             {"frames", s.frames},   {"slow_frames", s.slow_frames}, {"frame_max_ms", s.frame_max_ms}};
+}
+
+void set_pc_profile(int render_scale, int gpu_class) {
+    g_render_scale = render_scale;
+    g_gpu_class = gpu_class;
+}
+
+void set_fps_target(int fps) { g_fps_target = fps; }
+
+FramePace frame_pace() {
+    return {g_over_20.load(std::memory_order_relaxed), g_over_40.load(std::memory_order_relaxed), g_fps_target.load(),
+            g_render_scale.load(), g_gpu_class.load()};
+}
+
+nlohmann::json to_json(const FramePace& p) {
+    return {{"frames_over_20", p.frames_over_20}, {"frames_over_40", p.frames_over_40}, {"fps_target", p.fps_target},
+            {"render_scale", p.render_scale},     {"gpu_class", p.gpu_class}};
 }
 
 }  // namespace infra

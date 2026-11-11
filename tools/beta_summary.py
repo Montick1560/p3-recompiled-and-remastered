@@ -76,6 +76,9 @@ def percent(part, whole):
     return "%d %%" % round(100 * part / whole) if whole else "-"
 
 
+GPU_NAMES = {0: "gráfica desconocida", 1: "gráfica integrada", 2: "gráfica dedicada", 3: "sin gráfica (software)"}
+
+
 def connections(c, have):
     """What u18 clients report about each link: the numbers that decide whether the relay still matters. Rows of
     (what, value) for the "Conexiones" table; files older than those columns give none."""
@@ -100,6 +103,14 @@ def connections(c, have):
         direct_wins, relay_wins, percent(relay_wins, direct_wins + relay_wins))))
     frames, slow, worst = c.execute("SELECT SUM(frames), SUM(slow_frames), MAX(frame_max_ms) FROM sessions").fetchone()
     rows.append(("Imágenes de 100 ms o más", "%d de %d (la peor, %d ms)" % (slow or 0, frames or 0, worst or 0)))
+    if "gpu_class" in {r[1] for r in c.execute("PRAGMA table_info(sessions)")}:
+        # late = missed the rate the player asked for: >= 20 ms at 60 fps, >= 40 ms at 30 fps
+        for gpu, fps, n, late, total in c.execute(
+                "SELECT gpu_class, fps_target, COUNT(*), SUM(CASE fps_target WHEN 60 THEN frames_over_20 "
+                "ELSE frames_over_40 END), SUM(frames) FROM sessions WHERE fps_target IN (30, 60) "
+                "GROUP BY gpu_class, fps_target ORDER BY gpu_class, fps_target").fetchall():
+            rows.append(("Ritmo: %s, %d fps" % (GPU_NAMES.get(gpu, "gráfica ?"), fps),
+                         "%d sesiones, %s de imágenes tarde" % (n, percent(late or 0, total or 0))))
     for why, n in c.execute("SELECT detail, COUNT(*) FROM events WHERE kind='client_lost' GROUP BY detail "
                             "ORDER BY 2 DESC").fetchall():
         rows.append(("Conexión perdida: " + why, n))
@@ -363,6 +374,19 @@ def selftest():
     assert conn["Imágenes de 100 ms o más"] == "4 de 5000 (la peor, 420 ms)", conn
     assert conn["Conexión perdida: server silent"] == 2, conn
     assert "<h2>Conexiones</h2>" in page
+    assert not any(k.startswith("Ritmo") for k in conn), "no pace rows before the frame_pace columns"
+    # pace: frames late for the rate asked for, per GPU class and rate
+    c = sqlite3.connect(db)
+    for col in ("frames_over_20", "frames_over_40", "fps_target", "render_scale", "gpu_class"):
+        c.execute("ALTER TABLE sessions ADD COLUMN %s INT" % col)
+    c.execute("UPDATE sessions SET frames_over_20=500, frames_over_40=10, fps_target=60, gpu_class=1 WHERE id=1")
+    c.execute("UPDATE sessions SET frames=1000, frames_over_20=900, frames_over_40=50, fps_target=30, gpu_class=2 "
+              "WHERE id=2")
+    c.commit()
+    c.close()
+    conn = summarize(db, now=parse_utc("2026-10-24T06:00:00Z"))[1]["connections"]
+    assert conn["Ritmo: gráfica integrada, 60 fps"] == "1 sesiones, 10 % de imágenes tarde", conn
+    assert conn["Ritmo: gráfica dedicada, 30 fps"] == "1 sesiones, 5 % de imágenes tarde", conn
     # a file with only the queue (the report service alone) still summarizes
     q = os.path.join(tmp, "solo_cola.db")
     c = sqlite3.connect(q)

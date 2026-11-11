@@ -19,3 +19,8 @@ void psp_achievements_register(const PspAchievementSource* sources, size_t n);
 bool psp_achievements_start(const PspAchRunOptions& opt);
 // Uninstalls the hook, lets the worker write what is queued, joins it. Safe to call when not started.
 void psp_achievements_stop();
+
+// F7 with PSPRECOMP_ACH_PREVIEW=1: posts the next preview card (psp_ach_preview) on the caller's thread, so the
+// card designs can be watched in game without earning anything. False (nothing posted) when the variable is
+// unset or achievements are off.
+bool psp_achievements_preview();

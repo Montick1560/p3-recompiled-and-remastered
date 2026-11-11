@@ -42,6 +42,7 @@ const CoreKey kCore[] = {
     {"display", "texture_upscale", "PSPRECOMP_TEX_UPSCALE", Kind::Enum, "off", 0, 0, "off,xbrz2,xbrz3,xbrz4"},
     {"display", "antialiasing", "PSPRECOMP_AA", Kind::Enum, "off", 0, 0, "off,fxaa,smaa"},
     {"display", "renderer", "PSPRECOMP_GL_API", Kind::Enum, "auto", 0, 0, "auto,desktop,es"},
+    {"display", "vsync", "PSPRECOMP_VSYNC", Kind::Enum, "auto", 0, 0, "auto,on,off"},
     {"display", "hd_textures", "PSPRECOMP_TEXTURES", Kind::Bool, "true", 0, 0, nullptr},
     {"display", "texture_pack", nullptr, Kind::Path, "textures/INFN00001", 0, 0, nullptr},
     {"online", "server", "PSPRECOMP_ADHOC_SERVER", Kind::String, "127.0.0.1", 0, 0, nullptr},

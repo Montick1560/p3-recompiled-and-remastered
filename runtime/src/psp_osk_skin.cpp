@@ -2,7 +2,10 @@
 
 #include "json.hpp"
 
+#include <algorithm>
 #include <cctype>
+#include <cstring>
+#include <filesystem>
 
 bool osk_parse_color(const std::string& s, OskColor* out) {
     if ((s.size() != 7 && s.size() != 9) || s[0] != '#') return false;
@@ -42,4 +45,40 @@ OskSkin osk_skin_parse(const std::string& json, const std::string& skin_dir, std
         s.font = abs || skin_dir.empty() ? f : skin_dir + "/" + f;
     }
     return s;
+}
+
+std::string psp_ui_font_path(const std::string& exe_dir) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    std::vector<fs::path> ttf;
+    for (fs::directory_iterator it(fs::u8path(exe_dir) / "assets" / "fonts", ec), end; !ec && it != end; it.increment(ec))
+        if (it->is_regular_file(ec) && it->path().extension() == ".ttf") ttf.push_back(it->path());
+    if (ttf.empty()) return "";
+    return std::min_element(ttf.begin(), ttf.end(), [](const fs::path& a, const fs::path& b) {
+        return a.filename() < b.filename();
+    })->u8string();
+}
+
+bool psp_glyph_parts(int cp, GlyphParts* out) {
+    if (cp == 0xA1 || cp == 0xBF) {
+        *out = {cp == 0xA1 ? '!' : '?', 0, true};
+        return true;
+    }
+    // Latin-1 letters by row: the accent of each column, then the base letters in code point order.
+    static const struct { int first; const char* bases; int mark; } kRows[] = {
+        {0xC0, "AAAAA", 0}, {0xC8, "EEEE", 0}, {0xCC, "IIII", 0}, {0xD2, "OOOOO", 0}, {0xD9, "UUUU", 0},
+        {0xE0, "aaaaa", 0}, {0xE8, "eeee", 0}, {0xEC, "iiii", 0}, {0xF2, "ooooo", 0}, {0xF9, "uuuu", 0}};
+    static const int kAccents[] = {'`', 0xB4, '^', '~', 0xA8};  // grave, acute, circumflex, tilde, diaeresis
+    for (const auto& r : kRows) {
+        const int n = static_cast<int>(std::strlen(r.bases));
+        if (cp < r.first || cp >= r.first + n) continue;
+        const int col = cp - r.first;
+        // E/I/U rows have no tilde: their 4th column is the diaeresis.
+        const int mark = n == 4 && col == 3 ? 0xA8 : kAccents[col];
+        *out = {r.bases[col], mark, false};
+        return true;
+    }
+    if (cp == 0xD1 || cp == 0xF1) { *out = {cp == 0xD1 ? 'N' : 'n', '~', false}; return true; }
+    if (cp == 0xFF) { *out = {'y', 0xA8, false}; return true; }
+    return false;
 }

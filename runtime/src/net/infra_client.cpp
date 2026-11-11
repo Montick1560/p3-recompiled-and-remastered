@@ -483,6 +483,13 @@ bool Client::report_link(Done done, int timeout_ms) {
                 if (done) done(j);
             },
             timeout_ms);
+    if (!pace_refused_) {  // its own op, so a server without it still stores link_stats
+        nlohmann::json pace = to_json(frame_pace());
+        pace["op"] = "frame_pace";
+        request(std::move(pace), [this](const nlohmann::json& j) {
+            if (!j.value("ok", false) && j.value("error", 0u) == kErrBadRequest) pace_refused_ = true;
+        }, timeout_ms);
+    }
     return true;
 }
 

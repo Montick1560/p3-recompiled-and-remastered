@@ -2,7 +2,7 @@
 // sceUtilityOsk (psp_osk_session.h). Main (GL) thread only. The key grid comes
 // from psp_osk_keyboard.h; colours, radius, gap and the optional font from a
 // skin JSON (psp_osk_skin.h, PSPRECOMP_OSK_SKIN). Text is rasterized with
-// stb_truetype from a system font; PSPRECOMP_OSK_FONT=<.ttf> overrides the
+// stb_truetype from the project font (<exe>/assets/fonts/) or a system font; PSPRECOMP_OSK_FONT=<.ttf> overrides the
 // font file. Code points the main font lacks (the hint's Ⓐ Ⓑ Ⓧ Ⓨ, ⌫, ⇧) are
 // drawn with a symbol fallback font when one exists on the host.
 #include "psp_osk_overlay.h"
@@ -10,6 +10,7 @@
 #include "psp_icon_strip.h"
 #include "psp_osk_session.h"
 #include "psp_osk_skin.h"
+#include "psp_texrep_png.h"
 
 #include <SDL.h>
 #include <glad/glad.h>
@@ -21,6 +22,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <string>
@@ -42,15 +46,10 @@ struct Font {
 
 // Loads one font file into `f`; leaves `f.ok` false when it cannot be read.
 bool load_font(Font& f, const std::string& path) {
-    FILE* fp = std::fopen(path.c_str(), "rb");
-    if (!fp) return false;
-    std::fseek(fp, 0, SEEK_END);
-    const long n = std::ftell(fp);
-    std::fseek(fp, 0, SEEK_SET);
-    f.data.resize(n > 0 ? static_cast<size_t>(n) : 0);
-    const size_t got = n > 0 ? std::fread(f.data.data(), 1, f.data.size(), fp) : 0;
-    std::fclose(fp);
-    if (got == f.data.size() && got > 0 &&
+    std::ifstream in(std::filesystem::u8path(path), std::ios::binary);  // UTF-8 paths (accented folders)
+    if (!in) return false;
+    f.data.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    if (!f.data.empty() &&
         stbtt_InitFont(&f.info, f.data.data(), stbtt_GetFontOffsetForIndex(f.data.data(), 0))) {
         f.ok = true;
     }
@@ -65,6 +64,11 @@ Font& font() {
         std::vector<std::string> paths;
         if (!skin().font.empty()) paths.push_back(skin().font);
         if (const char* e = std::getenv("PSPRECOMP_OSK_FONT")) paths.push_back(e);
+        if (char* base = SDL_GetBasePath()) {  // the project font shipped in <exe>/assets/fonts/
+            const std::string ui = psp_ui_font_path(base);
+            SDL_free(base);
+            if (!ui.empty()) paths.push_back(ui);
+        }
         paths.push_back("C:/Windows/Fonts/segoeui.ttf");
         paths.push_back("C:/Windows/Fonts/arial.ttf");
         paths.push_back("/System/Library/Fonts/Supplemental/Arial.ttf");
@@ -159,49 +163,77 @@ TextImage rasterize(const std::string& utf8, float px) {
     const int base = static_cast<int>(std::lround(ascent * scale));
     const std::vector<int> cps = codepoints(utf8);
 
-    // Each code point is drawn with the main font, or with the fallback when the
-    // main font has no glyph for it. Fallback glyphs share the main baseline.
-    std::vector<stbtt_fontinfo*> infos(cps.size(), &f.info);
-    std::vector<float> scales(cps.size(), scale);
-    for (size_t k = 0; k < cps.size(); k++) {
-        if (stbtt_FindGlyphIndex(&f.info, cps[k]) != 0) continue;
-        if (fb.ok && stbtt_FindGlyphIndex(&fb.info, cps[k]) != 0) { infos[k] = &fb.info; scales[k] = fb_scale; }
-        else if (em.ok && stbtt_FindGlyphIndex(&em.info, cps[k]) != 0) { infos[k] = &em.info; scales[k] = em_scale; }
-        else if (fb.ok) { infos[k] = &fb.info; scales[k] = fb_scale; }  // as before: the symbol font's notdef
-    }
-
-    // Pen positions and glyph boxes first: a glyph may reach left of its pen (the
-    // hook of "j") or past the line box (fallback symbols), so the bitmap covers
-    // the union of the line box and every glyph box.
-    struct Glyph { int x, y, w, h; };
-    std::vector<Glyph> glyphs(cps.size());
-    int min_x = 0, min_y = 0, max_x = 0, max_y = static_cast<int>(std::ceil((ascent - descent) * scale));
+    // Each code point is drawn with the main font; a letter it lacks is composed from its own base letter and
+    // spacing accent (psp_glyph_parts: the project font has "´" and "e" but no "é"), else drawn with the fallback
+    // font. Every part shares the main baseline.
+    struct Part { stbtt_fontinfo* info; float scale; int cp, x, y, w, h; bool flip; };
+    std::vector<Part> parts;
+    auto has = [](Font& ft, int cp) { return ft.ok && stbtt_FindGlyphIndex(&ft.info, cp) != 0; };
+    auto place = [&](stbtt_fontinfo* in, float sc, int cp, float pen) {
+        int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        stbtt_GetCodepointBitmapBox(in, cp, sc, sc, &x0, &y0, &x1, &y1);
+        return Part{in, sc, cp, static_cast<int>(std::lround(pen)) + x0, base + y0, x1 - x0, y1 - y0, false};
+    };
+    const int mark_gap = std::max(1, static_cast<int>(std::lround(px * 0.08f)));
     float x = 0.0f;
     for (size_t k = 0; k < cps.size(); k++) {
-        int adv = 0, lsb = 0, x0 = 0, y0 = 0, x1 = 0, y1 = 0;
-        stbtt_GetCodepointHMetrics(infos[k], cps[k], &adv, &lsb);
-        stbtt_GetCodepointBitmapBox(infos[k], cps[k], scales[k], scales[k], &x0, &y0, &x1, &y1);
-        glyphs[k] = {static_cast<int>(std::lround(x)) + x0, base + y0, x1 - x0, y1 - y0};
-        if (glyphs[k].w > 0 && glyphs[k].h > 0) {
-            min_x = std::min(min_x, glyphs[k].x);
-            min_y = std::min(min_y, glyphs[k].y);
-            max_x = std::max(max_x, glyphs[k].x + glyphs[k].w);
-            max_y = std::max(max_y, glyphs[k].y + glyphs[k].h);
+        stbtt_fontinfo* in = &f.info;
+        float sc = scale;
+        int cp = cps[k];
+        GlyphParts gp{0, 0, false};
+        bool composed = false;
+        if (!has(f, cp)) {
+            if (psp_glyph_parts(cp, &gp) && has(f, gp.base) && (gp.mark == 0 || has(f, gp.mark))) composed = true;
+            else if (has(fb, cp)) { in = &fb.info; sc = fb_scale; }
+            else if (has(em, cp)) { in = &em.info; sc = em_scale; }
+            else if (fb.ok) { in = &fb.info; sc = fb_scale; }  // as before: the symbol font's notdef
         }
-        x += adv * scales[k];
-        if (k + 1 < cps.size() && infos[k] == infos[k + 1])
-            x += stbtt_GetCodepointKernAdvance(infos[k], cps[k], cps[k + 1]) * scales[k];
+        if (composed) cp = gp.base;
+        Part body = place(in, sc, cp, x);
+        if (composed && gp.flip) {  // hangs from about three quarters of the cap height down past the baseline
+            body.flip = true;
+            body.y = base + static_cast<int>(std::lround((body.y - base) * 0.72f));
+        }
+        parts.push_back(body);
+        if (composed && gp.mark) {  // centred over the letter, clear of it
+            Part m = place(in, sc, gp.mark, x);
+            m.x = body.x + (body.w - m.w) / 2;
+            if (m.y + m.h > body.y - mark_gap) m.y = body.y - mark_gap - m.h;
+            parts.push_back(m);
+        }
+        int adv = 0, lsb = 0;
+        stbtt_GetCodepointHMetrics(in, cp, &adv, &lsb);
+        x += adv * sc;
+        if (k + 1 < cps.size() && in == &f.info && has(f, cps[k + 1]))
+            x += stbtt_GetCodepointKernAdvance(in, cp, cps[k + 1]) * sc;
     }
-    max_x = std::max(max_x, static_cast<int>(std::ceil(x)));
+
+    // The bitmap covers the union of the line box and every part (a glyph may reach left of its pen, like the hook
+    // of "j", or above the line, like the accent of "É").
+    int min_x = 0, min_y = 0, max_x = static_cast<int>(std::ceil(x)), max_y = static_cast<int>(std::ceil((ascent - descent) * scale));
+    for (const Part& q : parts) {
+        if (q.w <= 0 || q.h <= 0) continue;
+        min_x = std::min(min_x, q.x);
+        min_y = std::min(min_y, q.y);
+        max_x = std::max(max_x, q.x + q.w);
+        max_y = std::max(max_y, q.y + q.h);
+    }
     img.w = max_x - min_x + 2;
     img.h = max_y - min_y + 2;
     img.a.assign(static_cast<size_t>(img.w) * img.h, 0);
-    for (size_t k = 0; k < cps.size(); k++) {
-        const Glyph& g = glyphs[k];
-        if (g.w <= 0 || g.h <= 0) continue;
-        const int gx = g.x - min_x + 1, gy = g.y - min_y + 1;
-        stbtt_MakeCodepointBitmap(infos[k], &img.a[static_cast<size_t>(gy) * img.w + gx], g.w, g.h, img.w,
-                                  scales[k], scales[k], cps[k]);
+    std::vector<unsigned char> tmp;
+    for (const Part& q : parts) {  // each part on its own, then max-blended: parts may overlap (the dot of "í")
+        if (q.w <= 0 || q.h <= 0) continue;
+        tmp.assign(static_cast<size_t>(q.w) * q.h, 0);
+        stbtt_MakeCodepointBitmap(q.info, tmp.data(), q.w, q.h, q.w, q.scale, q.scale, q.cp);
+        const int ox = q.x - min_x + 1, oy = q.y - min_y + 1;
+        for (int r = 0; r < q.h; r++)
+            for (int c = 0; c < q.w; c++) {
+                const unsigned char v = q.flip ? tmp[static_cast<size_t>(q.h - 1 - r) * q.w + (q.w - 1 - c)]
+                                               : tmp[static_cast<size_t>(r) * q.w + c];
+                unsigned char& d = img.a[static_cast<size_t>(oy + r) * img.w + ox + c];
+                d = std::max(d, v);
+            }
     }
     return img;
 }
@@ -558,32 +590,151 @@ bool psp_menu_prompt_overlay_draw(int win_w, int win_h, int rx, int ry, int rw, 
 }
 
 namespace {
-struct ToastImages { TextImage title, name; };
-struct ToastShown { GLuint title = 0, name = 0; int tw = 0, th = 0, nw = 0, nh = 0; int64_t start_ms = -1; };
+// A toast as the worker prepared it: text bitmaps and, for an achievement card, the decoded image.
+struct ToastImages {
+    TextImage title, name, desc;
+    int iw = 0, ih = 0;
+    std::vector<uint8_t> rgba;  // card image, RGBA8; empty = medallion without image
+    uint32_t rgb = 0;           // 0 = plain toast
+    int64_t ms = kToastMs;
+};
+struct ToastTex { GLuint tex = 0; int w = 0, h = 0; };
+struct ToastShown {
+    ToastTex title, name, desc, image;
+    uint32_t rgb = 0;
+    int64_t ms = kToastMs, start_ms = -1;
+};
 std::mutex g_toast_mu;
 std::deque<ToastImages> g_toast_in;          // posted, not uploaded yet (guarded by g_toast_mu)
 std::atomic<int> g_toast_posted{0};          // > 0: g_toast_in has something
 std::atomic<int> g_toast_rh{720};            // last game image height, for the raster size
 
-GLuint upload(const TextImage& img) {
-    GLuint t = 0;
-    glGenTextures(1, &t);
-    glBindTexture(GL_TEXTURE_2D, t);
+void tex_params(GLint min_filter) {
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, min_filter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+}
+
+ToastTex upload(const TextImage& img) {
+    ToastTex t{0, img.w, img.h};
+    glGenTextures(1, &t.tex);
+    glBindTexture(GL_TEXTURE_2D, t.tex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, img.w > 0 ? img.w : 1, img.h > 0 ? img.h : 1, 0, GL_RED,
                  GL_UNSIGNED_BYTE, img.a.empty() ? nullptr : img.a.data());
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    tex_params(GL_LINEAR);
     return t;
+}
+
+// The 512 px image is drawn at ~100 px: mipmapped so it does not shimmer.
+ToastTex upload_image(const ToastImages& im) {
+    ToastTex t{0, im.iw, im.ih};
+    if (im.rgba.empty()) return t;
+    glGenTextures(1, &t.tex);
+    glBindTexture(GL_TEXTURE_2D, t.tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, im.iw, im.ih, 0, GL_RGBA, GL_UNSIGNED_BYTE, im.rgba.data());
+    glGenerateMipmap(GL_TEXTURE_2D);
+    tex_params(GL_LINEAR_MIPMAP_LINEAR);
+    return t;
+}
+
+void free_toast(ToastShown& s) {
+    for (ToastTex* t : {&s.title, &s.name, &s.desc, &s.image})
+        if (t->tex) glDeleteTextures(1, &t->tex);
+}
+
+// Reads and decodes `path` (PNG or JPEG) into `im`; false when it cannot.
+bool load_image(const std::string& path, ToastImages& im) {
+    std::ifstream in(std::filesystem::u8path(path), std::ios::binary);
+    if (!in) return false;
+    const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    return ge_texrep_decode_png(bytes.data(), bytes.size(), &im.iw, &im.ih, &im.rgba);
+}
+
+void colour(uint32_t rgb, float a, float out[4]) {
+    out[0] = ((rgb >> 16) & 0xFF) / 255.0f;
+    out[1] = ((rgb >> 8) & 0xFF) / 255.0f;
+    out[2] = (rgb & 0xFF) / 255.0f;
+    out[3] = a;
+}
+
+// Card colours (spec 2026-11-08 section 3).
+constexpr uint32_t kCream = 0xFCEBD4u, kRule = 0x1A120Cu, kBody = 0x2B1D14u, kShadow = 0x120C08u;
+
+// The achievement card (option B): cream card, tier-colour ribbon across the top, medallion with the image
+// centred on the card's left edge, name in the tier colour, black rule, description. Sizes in u = rh / 720.
+void draw_card(int win_w, int win_h, float gx, float gy, int rw, int rh, const ToastShown& s, int64_t elapsed) {
+    const ToastPose p = psp_toast_pose(elapsed, s.ms);
+    if (p.alpha <= 0.0f) return;
+    const float u = rh / 720.0f;
+    const float d = 128.0f * u;  // medallion diameter
+    const float pad_l = d * 0.5f + 26.0f * u, pad_r = 26.0f * u, pad_t = 30.0f * u, pad_b = 18.0f * u;
+    const float gap = 10.0f * u, rule_h = 3.0f * u, overhang = 12.0f * u;
+    const float text_w = static_cast<float>(std::max({s.name.w, s.desc.w, s.title.w}));
+    const float cw = std::max(rw * 0.30f, pad_l + text_w + pad_r);
+    const float ch = std::max(pad_t + s.name.h + gap + rule_h + gap + s.desc.h + pad_b, d * 0.92f);
+    const float margin = rh * 0.03f, ribbon_h = s.title.h + 8.0f * u, ribbon_up = ribbon_h * 0.45f;
+    const float cx = gx + rw - margin - overhang - cw;
+    const float cy = gy + margin + ribbon_up + p.drop * (ch + margin + ribbon_up);
+    float c[4];
+    colour(kShadow, 0.55f * p.alpha, c);
+    rect(win_w, win_h, cx, cy + 6.0f * u, cw, ch, c, 0, 22.0f * u);
+    colour(kCream, p.alpha, c);
+    rect(win_w, win_h, cx, cy, cw, ch, c, 0, 22.0f * u);
+    if (p.ribbon > 0.0f) {  // unfurls left to right
+        colour(s.rgb, p.alpha, c);
+        rect(win_w, win_h, cx, cy - ribbon_up, (cw + overhang) * p.ribbon, ribbon_h, c, 0, 6.0f * u);
+        // The text is cut at the ribbon's unfurled end (scissor in bottom-left window pixels).
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(static_cast<GLint>(cx), static_cast<GLint>(win_h - (cy - ribbon_up + ribbon_h)),
+                  static_cast<GLsizei>(std::ceil((cw + overhang) * p.ribbon)), static_cast<GLsizei>(std::ceil(ribbon_h)));
+        colour(kCream, p.alpha, c);
+        rect(win_w, win_h, cx + pad_l, cy - ribbon_up + (ribbon_h - s.title.h) * 0.5f, static_cast<float>(s.title.w),
+             static_cast<float>(s.title.h), c, s.title.tex);
+        glDisable(GL_SCISSOR_TEST);
+    }
+    float y = cy + pad_t;
+    colour(s.rgb, p.alpha, c);
+    rect(win_w, win_h, cx + pad_l, y, static_cast<float>(s.name.w), static_cast<float>(s.name.h), c, s.name.tex);
+    y += s.name.h + gap;
+    colour(kRule, p.alpha, c);
+    if (p.rule > 0.0f) rect(win_w, win_h, cx, y, cw * p.rule, rule_h, c, 0);
+    y += rule_h + gap;
+    colour(kBody, p.alpha, c);
+    if (s.desc.w > 0)
+        rect(win_w, win_h, cx + pad_l, y, static_cast<float>(s.desc.w), static_cast<float>(s.desc.h), c, s.desc.tex);
+    if (p.medal > 0.0f) {  // pops in about its centre, on top of the ribbon
+        const float mx = cx, my = cy + ch * 0.5f, md = d * p.medal;
+        auto disc = [&](float dd, const float col[4], GLuint tex) {
+            rect(win_w, win_h, mx - dd * 0.5f, my - dd * 0.5f, dd, dd, col, tex, dd * 0.5f, tex != 0);
+        };
+        colour(s.rgb, p.alpha, c);
+        disc(md, c, 0);
+        colour(kCream, p.alpha, c);
+        disc(md * 0.90f, c, 0);
+        colour(0xFFFFFFu, p.alpha, c);
+        if (s.image.tex) disc(md * 0.805f, c, s.image.tex);
+    }
 }
 }  // namespace
 
 void psp_toast_post(const ToastText& t) {
     const int rh = g_toast_rh.load(std::memory_order_relaxed);
-    ToastImages im{rasterize(t.title, rh * 0.036f), rasterize(t.name, rh * 0.050f)};
+    ToastImages im;
+    im.rgb = t.rgb;
+    im.ms = t.ms;
+    im.title = rasterize(t.title, rh * 0.036f);
+    im.name = rasterize(t.name, rh * 0.050f);
+    if (t.rgb != 0) {
+        im.desc = rasterize(t.desc, rh * 0.030f);
+        if (!load_image(t.image, im)) {
+            const std::string fallback = std::filesystem::u8path(t.image).parent_path().u8string() + "/_default.jpg";
+            std::fprintf(stderr, "[ACH] image %s unreadable; using _default.jpg\n", t.image.c_str());
+            if (!load_image(fallback, im)) im.rgba.clear();
+        }
+    }
     std::lock_guard<std::mutex> lock(g_toast_mu);
     g_toast_in.push_back(std::move(im));
     g_toast_posted.fetch_add(1, std::memory_order_release);
@@ -600,33 +751,20 @@ bool psp_toast_overlay_draw(int win_w, int win_h, int rx, int ry, int rw, int rh
             g_toast_posted.store(0, std::memory_order_relaxed);
         }
         for (const ToastImages& im : in)
-            shown.push_back({upload(im.title), upload(im.name), im.title.w, im.title.h, im.name.w, im.name.h, -1});
+            shown.push_back({upload(im.title), upload(im.name), upload(im.desc), upload_image(im), im.rgb, im.ms, -1});
     }
     if (shown.empty() || win_w <= 0 || win_h <= 0 || rw <= 0 || rh <= 0) return false;
     const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
     if (shown.front().start_ms < 0) shown.front().start_ms = now;
-    if (now - shown.front().start_ms >= kToastMs) {
-        glDeleteTextures(1, &shown.front().title);
-        glDeleteTextures(1, &shown.front().name);
+    if (now - shown.front().start_ms >= shown.front().ms) {
+        free_toast(shown.front());
         shown.pop_front();
         if (shown.empty()) return false;
         shown.front().start_ms = now;
     }
     const ToastShown& s = shown.front();
-    const float a = psp_toast_alpha(now - s.start_ms);
-    static const PromptColors col = menu_prompt_colors(std::getenv("PSPRECOMP_UI_COLORS"));
-    auto faded = [a](const float c[4], float out[4]) { out[0] = c[0]; out[1] = c[1]; out[2] = c[2]; out[3] = c[3] * a; };
-    float panel[4], accent[4], hint[4], text[4];
-    faded(col.panel, panel);
-    faded(col.accent, accent);
-    faded(col.hint, hint);
-    faded(col.text, text);
     const float gx = static_cast<float>(rx), gy = static_cast<float>(win_h - (ry + rh));
-    const float pad = rh * 0.022f, margin = rh * 0.03f;
-    const float pw = std::max(rw * 0.30f, std::max(static_cast<float>(s.tw), static_cast<float>(s.nw)) + pad * 3.0f);
-    const float ph = s.th + s.nh + pad * 2.5f;
-    const float px = gx + rw - pw - margin, py = gy + margin;
     Gl& g = gl();
     glUseProgram(g.prog);
     glBindVertexArray(g.vao);
@@ -637,11 +775,28 @@ bool psp_toast_overlay_draw(int win_w, int win_h, int rx, int ry, int rw, int rh
     glEnable(GL_BLEND);
     glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     glBlendEquation(GL_FUNC_ADD);
-    rect(win_w, win_h, px, py, pw, ph, panel, 0, pad * 0.6f);
-    rect(win_w, win_h, px, py, rh * 0.008f, ph, accent, 0);
-    rect(win_w, win_h, px + pad * 1.5f, py + pad, static_cast<float>(s.tw), static_cast<float>(s.th), hint, s.title);
-    rect(win_w, win_h, px + pad * 1.5f, py + pad * 1.5f + s.th, static_cast<float>(s.nw), static_cast<float>(s.nh),
-         text, s.name);
+    if (s.rgb != 0) {
+        draw_card(win_w, win_h, gx, gy, rw, rh, s, now - s.start_ms);
+    } else {
+        const float a = psp_toast_alpha(now - s.start_ms, s.ms);
+        static const PromptColors col = menu_prompt_colors(std::getenv("PSPRECOMP_UI_COLORS"));
+        auto faded = [a](const float c[4], float out[4]) { out[0] = c[0]; out[1] = c[1]; out[2] = c[2]; out[3] = c[3] * a; };
+        float panel[4], accent[4], hint[4], text[4];
+        faded(col.panel, panel);
+        faded(col.accent, accent);
+        faded(col.hint, hint);
+        faded(col.text, text);
+        const float pad = rh * 0.022f, margin = rh * 0.03f;
+        const float pw = std::max(rw * 0.30f, static_cast<float>(std::max(s.title.w, s.name.w)) + pad * 3.0f);
+        const float ph = s.title.h + s.name.h + pad * 2.5f;
+        const float px = gx + rw - pw - margin, py = gy + margin;
+        rect(win_w, win_h, px, py, pw, ph, panel, 0, pad * 0.6f);
+        rect(win_w, win_h, px, py, rh * 0.008f, ph, accent, 0);
+        rect(win_w, win_h, px + pad * 1.5f, py + pad, static_cast<float>(s.title.w), static_cast<float>(s.title.h), hint,
+             s.title.tex);
+        rect(win_w, win_h, px + pad * 1.5f, py + pad * 1.5f + s.title.h, static_cast<float>(s.name.w),
+             static_cast<float>(s.name.h), text, s.name.tex);
+    }
     glDisable(GL_BLEND);
     glBindVertexArray(0);
     glUseProgram(0);

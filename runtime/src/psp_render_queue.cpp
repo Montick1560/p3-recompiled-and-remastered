@@ -1,6 +1,7 @@
 #include "psp_render_queue.h"
 #include "psp_runtime.h"
 #include "psp_ge.h"
+#include "psp_ge_stall.h"
 #include "psp_ge_draw.h"
 #include "psp_scheduler.h"
 #include "hle/psp_hle.h"
@@ -231,7 +232,9 @@ void render_queue_process() {
                 if (queued.uid == processed.uid) {
                     queued.current_pc = processed.current_pc;
                     queued.processed = processed.processed;
-                    queued.stalled = processed.stalled;
+                    // An UpdateStallAddr that came while the lock was released moved the stall: draw again.
+                    queued.stalled = processed.stalled &&
+                        ge_stall_still_current(processed.stall_addr, queued.stall_addr);
                     queued.begun = true;
                     break;
                 }

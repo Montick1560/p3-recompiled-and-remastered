@@ -62,6 +62,14 @@ static void online_status() {
     CHECK(p3_online_status({P3Place::Hideout, 35, 10, false, u""}).is_null(), "a class out of range is not a class");
     const auto s = p3_online_status({P3Place::Mission, 2, 35, false, std::u16string(1, char16_t(0xD800))});
     CHECK(!s.dump().empty(), "a torn name still makes valid JSON");
+    // Own multiplayer status (tweet) as a code word for the rooms page; 0 sends nothing.
+    const auto a = p3_online_status({P3Place::Mission, 2, 35, false, u"Torre", 4});
+    CHECK(a == (nlohmann::json{{"class", "Yarida"}, {"level", 35}, {"mission", "Torre"}, {"activity", "chests"}}),
+          "activity: opening chests");
+    const char* words[] = {"ready", "event", "tips", "chests", "results", "loading"};
+    for (uint8_t c = 1; c <= 6; c++)
+        CHECK(p3_online_status({P3Place::Mission, 0, 0, false, u"T", c})["activity"] == words[c - 1], "code words");
+    CHECK(!p3_online_status({P3Place::Mission, 0, 0, false, u"T", 0}).contains("activity"), "no activity");
 }
 
 int main() {

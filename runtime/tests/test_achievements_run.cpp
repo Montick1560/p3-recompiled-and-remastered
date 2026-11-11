@@ -54,7 +54,7 @@ static void prepare(int entries, const char* release = "test-1") {
     for (int i = 0; i < entries; i++)
         cat += (i ? "," : "") + std::string(R"({"id":"m)") + std::to_string(i) + R"(","icon":"🥁","name":{"es":"Misión )" +
                std::to_string(i) + R"(","en":"Mission )" + std::to_string(i) +
-               R"("},"when":{"fact":"missions","op":">=","value":)" + std::to_string(i + 1) + "}}";
+               R"("},"desc":{"es":"Gana )" + std::to_string(i + 1) + R"(","en":"Win"},"when":{"fact":"missions","op":">=","value":)" + std::to_string(i + 1) + "}}";
     cat += "]}";
     write(g_dir / "exe" / "achievements.json", cat);
     write(g_dir / "exe" / "release.json", std::string(R"({"id":")") + release + R"("})");
@@ -89,7 +89,10 @@ static void grant_reaches_file_and_toast() {
     CHECK(e.size() == 1 && e.count("m0"), "m0 earned after two checks");
     CHECK(e.at("m0").release == "test-1" && e.at("m0").save == "DATA04" && e.at("m0").hero == "Edson", "fields");
     CHECK(e.at("m0").date.size() == 20 && e.at("m0").date.back() == 'Z', "ISO date");
-    CHECK(g_toasts.size() == 1 && g_toasts[0].title == "Logro desbloqueado" && g_toasts[0].name == "🥁 Misión 0", "toast");
+    CHECK(g_toasts.size() == 1 && g_toasts[0].title == "¡Logro Común!" && g_toasts[0].name == "Misión 0" &&
+          g_toasts[0].desc == "Gana 1" && g_toasts[0].rgb == 0x231815u, "card toast in the built-in tier");
+    CHECK(g_toasts.size() == 1 &&
+          fs::path(g_toasts[0].image) == g_dir / "exe" / "assets" / "achievements" / "_default.jpg", "default image");
 }
 
 static void earned_at_start_is_not_pending() {
@@ -109,7 +112,7 @@ static void a_big_batch_is_one_write_and_one_toast() {
     vblanks(120);
     psp_achievements_stop();
     CHECK(earned().size() == 12, "all 12 recorded");
-    CHECK(g_toasts.size() == 1 && g_toasts[0].name == "🏆 12 logros", "one summary toast");
+    CHECK(g_toasts.size() == 1 && g_toasts[0].title == "¡12 logros!", "one summary toast");
 }
 
 static void toasts_off_still_records() {
@@ -149,6 +152,21 @@ static void off_without_file_or_with_kill_switch() {
     psp_achievements_stop();  // safe when not started
 }
 
+static void preview_key() {
+    prepare(1);
+    setenv_("PSPRECOMP_ACH_PREVIEW", "");
+    CHECK(psp_achievements_start(opts()), "starts");
+    CHECK(!psp_achievements_preview() && g_toasts.empty(), "off without PSPRECOMP_ACH_PREVIEW=1");
+    setenv_("PSPRECOMP_ACH_PREVIEW", "1");
+    CHECK(psp_achievements_preview() && g_toasts.size() == 1 && g_toasts[0].name == "Misión 0", "first press: Común card");
+    CHECK(psp_achievements_preview() && g_toasts.size() == 2, "second press: the next step");
+    psp_achievements_stop();
+    earned();
+    CHECK(earned().empty(), "a preview earns nothing");
+    CHECK(!psp_achievements_preview(), "nothing while achievements are off");
+    setenv_("PSPRECOMP_ACH_PREVIEW", "");
+}
+
 int main() {
     grant_reaches_file_and_toast();
     earned_at_start_is_not_pending();
@@ -156,6 +174,7 @@ int main() {
     toasts_off_still_records();
     stop_drains_the_ring();
     off_without_file_or_with_kill_switch();
+    preview_key();
     if (failures == 0) std::printf("test_achievements_run: all passed\n");
     return failures == 0 ? 0 : 1;
 }

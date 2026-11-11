@@ -35,6 +35,15 @@ std::string psp_hw_format(const PspHwInfo& h) {
            " MB, OS " + clean(h.os) + ", GPU " + gpu + ", GL " + clean(h.gl_version) + ", display " + display;
 }
 
+int psp_gpu_class(const std::vector<PspGpuAdapter>& adapters) {
+    int c = 0;
+    for (const PspGpuAdapter& a : adapters) {
+        if (!a.software && a.vram_mb >= 2048) return 2;
+        c = !a.software ? 1 : c == 0 ? 3 : c;
+    }
+    return c;
+}
+
 std::string psp_gpu_format(const std::vector<PspGpuAdapter>& adapters) {
     std::string out = "[RT] gpu adapters: ";
     for (size_t i = 0; i < adapters.size(); i++) {

@@ -22,3 +22,12 @@ struct OskSkin {
 
 bool osk_parse_color(const std::string& s, OskColor* out);  // "#RRGGBB" or "#RRGGBBAA"
 OskSkin osk_skin_parse(const std::string& json, const std::string& skin_dir, std::vector<std::string>* log);
+
+// The project's UI font for every overlay: the first *.ttf (by file name) in <exe_dir>/assets/fonts/, or ""
+// when there is none (then the system fonts). Skin fonts and PSPRECOMP_OSK_FONT still come first.
+std::string psp_ui_font_path(const std::string& exe_dir);
+
+// A letter the UI font may lack, drawn from parts it usually has: `base` with the spacing accent `mark` above it
+// (0 = none), or `base` turned upside down (flip: the Spanish inverted marks). False for any other code point.
+struct GlyphParts { int base, mark; bool flip; };
+bool psp_glyph_parts(int cp, GlyphParts* out);

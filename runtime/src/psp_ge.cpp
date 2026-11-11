@@ -2,6 +2,7 @@
 #include "psp_exit.h"
 #include "psp_perf.h"
 #include "psp_ge.h"
+#include "psp_ge_stall.h"
 #include "psp_ge_patch.h"
 #include "psp_texrep.h"
 #include "psp_ge_vertex.h"
@@ -181,7 +182,7 @@ GeListResult ge_process_display_list(
 
     while (cmd_count < GE_MAX_COMMANDS) {
         // Stall check
-        if (stall_addr != 0 && pc >= stall_addr) {
+        if (ge_at_stall(pc, stall_addr)) {
             if (g_ge_trace) {
                 std::fprintf(stderr,
                     "[GE] Hit stall addr 0x%08X at pc 0x%08X\n",

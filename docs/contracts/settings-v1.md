@@ -31,6 +31,7 @@ texture_filter = auto       ; PSPRECOMP_TEX_FILTER: auto | nearest | linear
 texture_upscale = off       ; PSPRECOMP_TEX_UPSCALE: off | xbrz2 | xbrz3 | xbrz4 (game textures, not the HD pack)
 antialiasing = off          ; PSPRECOMP_AA: off | fxaa | smaa
 renderer = auto             ; PSPRECOMP_GL_API: auto | desktop | es
+vsync = auto                ; PSPRECOMP_VSYNC: auto | on | off
 hd_textures = true          ; PSPRECOMP_TEXTURES=<texture_pack> only when true
 texture_pack = textures/INFN00001
 osk_skin = deck             ; PSPRECOMP_OSK_SKIN=<ini folder>/skins/osk/deck.json
@@ -94,7 +95,7 @@ Launcher keys: `version` (last played release), `save_<release>` (the chosen sav
 folder), `theme` (the applied launcher theme id, default `default`; a missing or locked one shows `default` and the
 key is left alone) and `music_volume` (`0`, `10`, …, `100`, default `70`; in `core_options.json`, so Options › General shows it),
 `auto_report` (`true`/`false`, default `true`, also in Options › General: after a crash or exit 13 the launcher posts
-the same report as "Reportar problema" in the background, `what` starting with `[auto]`) and `render_scale_chosen` (`true` once the player saves a changed resolution in Opciones; while it is absent the launcher writes the detected `[display] render_scale` at each start: `4` when a DXGI hardware adapter has >= 2 GiB of dedicated video memory, else `3` when the primary monitor is under 1024 physical pixels tall, else `2`; the defaults fixture keeps `4`). Themes and achievements: `docs/contracts/achievements-v1.md`.
+the same report as "Reportar problema" in the background, `what` starting with `[auto]`) and `render_scale_chosen` (`true` once the player saves a changed resolution in Opciones; while it is absent the launcher writes the detected `[display] render_scale` at each start: `4` when a DXGI hardware adapter has >= 2 GiB of dedicated video memory, else `2`; the defaults fixture keeps `4`). Themes and achievements: `docs/contracts/achievements-v1.md`.
 
 `[controls]` remaps the PSP buttons. Each action has up to two keyboard keys, `<action>_keys`
 (comma separated SDL key names), and one gamepad button, `<action>_pad` (an SDL GameController
@@ -184,6 +185,7 @@ invalid values, future version) that both the C++ and the Rust readers are teste
 | display.texture_upscale | PSPRECOMP_TEX_UPSCALE | enum off,xbrz2,xbrz3,xbrz4 | copied |
 | display.antialiasing | PSPRECOMP_AA | enum off,fxaa,smaa | copied |
 | display.renderer | PSPRECOMP_GL_API | enum auto,desktop,es | copied (auto = OpenGL, Direct3D/ANGLE only if OpenGL cannot start) |
+| display.vsync | PSPRECOMP_VSYNC | enum auto,on,off | copied (auto = the driver's swap interval; on/off force 1/0; the game is paced by its own 59.94 Hz clock either way) |
 | display.hd_textures + display.texture_pack | PSPRECOMP_TEXTURES | bool + path | resolved pack path when true, unset when false |
 | display.osk_skin | PSPRECOMP_OSK_SKIN | name `[a-z0-9_-]+` | resolved to `<ini folder>/skins/osk/<name>.json` when valid, unset otherwise |
 | (always) | PSPRECOMP_ACHIEVEMENTS_FILE | path | <ini folder>/achievements/unlocked.json (docs/contracts/achievements-v1.md) |

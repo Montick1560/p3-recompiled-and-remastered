@@ -72,6 +72,8 @@ nlohmann::json p3_online_status(const P3Presence& p) {
         s["level"] = p.level;
     }
     if (!p.mission.empty()) s["mission"] = utf8(p.mission);
+    static const char* const kActivity[7] = {nullptr, "ready", "event", "tips", "chests", "results", "loading"};
+    if (p.activity >= 1 && p.activity <= 6) s["activity"] = kActivity[p.activity];
     return s;
 }
 

@@ -179,6 +179,9 @@ CREATE TABLE IF NOT EXISTS direct_stats(session INT, path TEXT, rtt_p50 INT, rtt
 # Relay-link numbers a client reports with link_stats (NULL until then). Added to older files in place.
 LINK_COLUMNS = ("pings", "slow_pings", "rtt_p50", "rtt_p95", "rtt_max", "max_rx_gap_ms")
 FRAME_COLUMNS = ("frames", "slow_frames", "frame_max_ms")  # a u18 client's presented frames, NULL before
+# frame_pace (client infra::FramePace): frames that missed 60 / 30 fps, the rate asked for, render scale, GPU class
+PACE_COLUMNS = ("frames_over_20", "frames_over_40", "fps_target", "render_scale", "gpu_class")
+GPU_CLASSES = 4  # 0 unknown, 1 integrated, 2 dedicated, 3 software
 LINK_MAX = 600000
 
 
@@ -201,7 +204,7 @@ class MetricsDb:
             c.execute("PRAGMA journal_mode=WAL")
             c.executescript(METRICS_SCHEMA)
             have = {r[1] for r in c.execute("PRAGMA table_info(sessions)")}
-            for col in (*LINK_COLUMNS, *FRAME_COLUMNS, "nat"):
+            for col in (*LINK_COLUMNS, *FRAME_COLUMNS, *PACE_COLUMNS, "nat"):
                 if col not in have:
                     c.execute("ALTER TABLE sessions ADD COLUMN %s INT" % col)
             have = {r[1] for r in c.execute("PRAGMA table_info(direct_stats)")}
@@ -426,6 +429,11 @@ def id_search_target(bins):
     return None
 
 
+# The game's own multiplayer status (multi_setTweet 1..6) as the client names it: what a player in an online
+# mission is doing. Any other value is dropped.
+ACTIVITIES = ("ready", "event", "tips", "chests", "results", "loading")
+
+
 def clean_status(raw):
     """What a client says about its hero for the public lobby page. It is untrusted: a bad field is dropped on its
     own, so a bad status never fails the ping that carries it."""
@@ -441,7 +449,17 @@ def clean_status(raw):
     level = raw.get("level")
     if type(level) is int and 1 <= level <= 99:
         out["level"] = level
+    if raw.get("activity") in ACTIVITIES:
+        out["activity"] = raw["activity"]
     return out
+
+
+def roster_entry(conn):
+    """A member on the public page: name and hero; the activity only when the client reported one."""
+    e = {"name": conn.online_id, "class": conn.status.get("class"), "level": conn.status.get("level")}
+    if "activity" in conn.status:
+        e["activity"] = conn.status["activity"]
+    return e
 
 
 class Member:
@@ -1286,6 +1304,17 @@ class Server:
             frames))
         return {}
 
+    def op_frame_pace(self, conn, msg):
+        # How the session's frames kept pace and what the PC was asked to do; a later report overwrites. Numbers only.
+        if set(msg) - {"id", "op"} != set(PACE_COLUMNS):
+            raise Err(BAD_REQUEST)
+        vals = [msg[k] for k in PACE_COLUMNS]
+        if not all(type(v) is int and 0 <= v <= LINK_MAX for v in vals) or msg["gpu_class"] >= GPU_CLASSES:
+            raise Err(BAD_REQUEST)
+        self.metrics.put("UPDATE sessions SET " + ", ".join("%s=?" % k for k in PACE_COLUMNS) + " WHERE id=?",
+                         tuple(vals) + (conn.sid,))
+        return {}
+
     def op_bye(self, conn, msg):
         # The client is quitting on purpose: its socket closing next is a "quit", not a lost connection.
         conn.bye = True
@@ -1545,8 +1574,7 @@ class Server:
             full = len(room.members) >= room.max_slot
             r = {"kind": "coop" if room.bins else "vs", "owner": room.owner.conn.online_id,
                  "members": len(room.members), "max_slot": room.max_slot,
-                 "roster": [{"name": m.conn.online_id, "class": m.conn.status.get("class"),
-                             "level": m.conn.status.get("level")} for m in room.members]}
+                 "roster": [roster_entry(m.conn) for m in room.members]}
             if room.bins:
                 r["state"] = ("in_vs" if any(m.conn in in_vs for m in room.members)
                               else "in_mission" if room.flag_attr & FLAG_CLOSED
@@ -2285,6 +2313,11 @@ def lobby_status_selftest(run, quiet):
     s = status(lambda s: s["rooms"][0]["members"] == 2 and s["rooms"][0]["roster"][0]["class"], "the hero of P3A")
     assert s["rooms"][0]["roster"] == [{"name": "P3A", "class": "Yarida", "level": 35},
                                        {"name": "P3C", "class": None, "level": None}], s
+    # status_roster_activity: a reported activity rides on that member's roster entry, absent otherwise
+    a.ok("ping", t=1, status={"class": "Yarida", "level": 35, "mission": "Torre", "activity": "tips"})
+    s = status(lambda s: s["rooms"][0]["roster"][0].get("activity") == "tips", "the activity of P3A")
+    assert s["rooms"][0]["roster"] == [{"name": "P3A", "class": "Yarida", "level": 35, "activity": "tips"},
+                                       {"name": "P3C", "class": None, "level": None}], s
     # status_mission_only_in_mission: an open hideout shows no mission, even with one reported
     assert "mission_name" not in s["rooms"][0], s
     # status_vs_mission_name: a VS room shows the name in any state
@@ -2307,6 +2340,10 @@ def lobby_status_selftest(run, quiet):
     assert clean_status({"class": "x" * 25, "level": "9", "mission": "m" * 65}) == {}
     assert clean_status({"level": True}) == {} and clean_status({"level": 0}) == {}
     assert clean_status({"class": "Yarida", "level": 99}) == {"class": "Yarida", "level": 99}
+    # status_activity: only the game's six tweet words pass (what the player is doing in an online mission)
+    assert clean_status({"activity": "chests"}) == {"activity": "chests"}
+    assert clean_status({"activity": "dance"}) == {} and clean_status({"activity": 4}) == {}
+    assert clean_status({"activity": "Chests"}) == {}
     assert clean_status("x") == {} and clean_status(None) == {} and clean_status([1]) == {}
     # status_control_chars: gone before they reach the file; escaping markup is the page's job
     assert clean_status({"mission": "A\u0000B\nC‮D"}) == {"mission": "ABCD"}
@@ -2771,6 +2808,18 @@ INSERT INTO direct_stats VALUES (1, 'direct', 225, 1299, 0, 2580, 0);
     for form in (dict(good, frames=1), dict(good, frames=-1, slow_frames=0, frame_max_ms=0),
                  dict(good, frames=1, slow_frames="x", frame_max_ms=0)):
         ans = a.req("link_stats", **form)
+        assert not ans["ok"] and ans["error"] == BAD_REQUEST, (form, ans)
+    # frame_pace: its own op (older servers refuse it); all five numbers or a refusal; gpu_class 0-3
+    assert q("SELECT frames_over_20, gpu_class FROM sessions WHERE online_id='LINK_A'") == [(None, None)]
+    pace = dict(frames_over_20=310, frames_over_40=12, fps_target=60, render_scale=2, gpu_class=1)
+    a.ok("frame_pace", **pace)
+    srv.metrics.flush(3)
+    got = q("SELECT frames_over_20, frames_over_40, fps_target, render_scale, gpu_class FROM sessions"
+            " WHERE online_id='LINK_A'")
+    assert got == [(310, 12, 60, 2, 1)], got
+    for form in (dict(pace, gpu_class=4), dict(pace, fps_target=-1), {k: v for k, v in pace.items() if k != "gpu_class"},
+                 dict(pace, extra=1), dict(pace, render_scale="2")):
+        ans = a.req("frame_pace", **form)
         assert not ans["ok"] and ans["error"] == BAD_REQUEST, (form, ans)
     # end_reasons: "bye" before the socket closes is a quit; a socket that just closes stays "closed"
     a.ok("bye")

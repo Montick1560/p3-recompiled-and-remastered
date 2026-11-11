@@ -42,6 +42,20 @@ private:
     int pings_ = 0, slow_ = 0, max_gap_ = 0;
 };
 
+// How the frames of this session kept pace, and what the PC was asked to do: sent as frame_pace (an older
+// server refuses the op and keeps link_stats). Counts cover the same frames as LinkSummary::frames.
+constexpr int kGpuUnknown = 0, kGpuIntegrated = 1, kGpuDedicated = 2, kGpuSoftware = 3;
+struct FramePace {
+    int frames_over_20 = 0, frames_over_40 = 0;  // frames of >= 20 ms (missed 60 fps), >= 40 ms (missed 30 fps)
+    int fps_target = 0, render_scale = 0, gpu_class = 0;  // 30 or 60; PSPRECOMP_RENDER_SCALE; kGpu*
+};
+// Once at start (runtime: scale and GPU class; game module: the frame rate it runs at); LinkStats::reset keeps them.
+void set_pc_profile(int render_scale, int gpu_class);
+void set_fps_target(int fps);
+FramePace frame_pace();
+// {"frames_over_20","frames_over_40","fps_target","render_scale","gpu_class"}, all integers.
+nlohmann::json to_json(const FramePace& p);
+
 // {"pings","slow_pings","rtt_p50","rtt_p95","rtt_max","max_rx_gap_ms","frames","slow_frames","frame_max_ms"},
 // all integers.
 nlohmann::json to_json(const LinkSummary& s);

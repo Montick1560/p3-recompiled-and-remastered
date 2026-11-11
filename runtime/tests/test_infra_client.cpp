@@ -763,6 +763,35 @@ static void link_stats_refreshed_while_connected() {
     c.disconnect();
 }
 
+static std::vector<nlohmann::json> pace_frames(FakeInfraServer& s) {
+    std::lock_guard<std::mutex> l(s.mu);
+    std::vector<nlohmann::json> v;
+    for (const auto& f : s.got)
+        if (f.kind == infra::kKindJson && f.json.value("op", "") == "frame_pace") v.push_back(f.json);
+    return v;
+}
+
+// frame_pace rides with every link_stats; a server without the op (BAD_REQUEST) is not asked again, and
+// link_stats keeps going.
+static void frame_pace_with_link_stats() {
+    FakeInfraServer s;
+    s.on_frame = [](FakeInfraServer& srv, const infra::Frame& f) {
+        if (f.json.value("op", "") == "frame_pace")
+            srv.send_json({{"id", f.json["id"]}, {"ok", false}, {"error", 0x80550D01u}});
+    };
+    s.start();
+    infra::Client::Options o = fast();
+    o.ping_interval_ms = 50;
+    o.link_report_ms = 100;
+    infra::Client c(s.address(), o);
+    CHECK(c.connect("P3A", 2000), "connect");
+    CHECK(wait_until([&] { return link_frames(s).size() >= 3; }, 3000), "three link reports");
+    c.disconnect();
+    const auto v = pace_frames(s);
+    CHECK(v.size() == 1, "frame_pace refused once, never sent again");
+    if (!v.empty()) CHECK(v[0].contains("frames_over_20") && v[0].contains("gpu_class"), "frame_pace carries the pace");
+}
+
 // A server without op_link_stats (BAD_REQUEST) is not asked again in that session.
 static void link_stats_stop_on_old_server() {
     FakeInfraServer s;
@@ -1151,6 +1180,7 @@ int main() {
     no_link_stats_without_pings();
     link_stats_refreshed_while_connected();
     link_stats_stop_on_old_server();
+    frame_pace_with_link_stats();
     link_gap_counts_from_the_ping();
     hedge_stall_keeps_session(true);
     hedge_stall_keeps_session(false);

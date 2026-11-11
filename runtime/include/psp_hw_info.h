@@ -41,5 +41,8 @@ struct PspGpuAdapter {
 // unknown fields print "?", no adapters prints "?". Always one line.
 std::string psp_gpu_format(const std::vector<PspGpuAdapter>& adapters);
 
+// 0 unknown, 1 integrated, 2 dedicated (a hardware adapter with >= 2 GB, the launcher's gpu.rs rule), 3 software.
+int psp_gpu_class(const std::vector<PspGpuAdapter>& adapters);
+
 // Every adapter from DXGI (Windows); empty elsewhere or when DXGI fails. psp_gpu_adapters.cpp.
 std::vector<PspGpuAdapter> psp_gpu_adapters();

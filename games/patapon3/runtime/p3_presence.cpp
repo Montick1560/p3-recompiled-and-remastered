@@ -3,6 +3,7 @@
 #include "p3_achievements.h"
 
 #include <cstring>
+#include <initializer_list>
 
 namespace {
 
@@ -14,6 +15,7 @@ constexpr uint32_t kHolderOffset = 0x78;       // game object -> mission holder
 constexpr uint32_t kMissionName = 0x9FC + 0x100;
 constexpr uint32_t kHeroLevel = 0xF294;        // fact "hero.level" in p3_achievements.cpp
 constexpr int kMissionMaxUnits = 64;
+constexpr uint32_t kRoster = 0x08AB9560u;      // pointer whose +0x44 -> +0x28 is our player slot (FUN_089D1744)
 
 uint32_t rd32(const uint8_t* ram, uint32_t a) {
     uint32_t v = 0;
@@ -22,6 +24,28 @@ uint32_t rd32(const uint8_t* ram, uint32_t a) {
 }
 
 bool inUserRam(uint32_t p) { return p >= kUserLo && p < kUserHi; }
+
+// rd32 along a pointer chain; 0 when a link leaves user RAM.
+uint32_t follow(const uint8_t* ram, uint32_t p, std::initializer_list<uint32_t> offs) {
+    for (uint32_t o : offs) {
+        if (!inUserRam(p)) return 0;
+        p = rd32(ram, p + o);
+    }
+    return p;
+}
+
+// Own "tweet" (multi_setTweet 0x0894C9E8 -> FUN_089D1628): holder +100 -> +0x18C table of 8 slots of 0x14 bytes,
+// code at +0x30; the game stores it only while online (holder +0x44 -> +0x24 byte, FUN_08986CB4).
+uint8_t ownTweet(const uint8_t* ram) {
+    const uint32_t holder = follow(ram, rd32(ram, kGlobal), {kHolderOffset});
+    const uint32_t online = follow(ram, holder, {0x44});
+    if (!inUserRam(online) || ram[(online + 0x24) & kMask] == 0) return 0;
+    const uint32_t table = follow(ram, holder, {100, 0x18C});
+    const uint32_t slot = follow(ram, rd32(ram, kRoster), {0x44, 0x28});
+    if (!inUserRam(table) || slot >= 8) return 0;
+    const uint32_t code = rd32(ram, table + slot * 0x14 + 0x30);
+    return code >= 1 && code <= 6 ? static_cast<uint8_t>(code) : 0;
+}
 
 P3Place placeOf(const uint8_t* ram) {
     char name[16] = {};
@@ -66,7 +90,7 @@ bool looksVersus(const std::u16string& name) {
 
 bool operator==(const P3Presence& a, const P3Presence& b) {
     return a.place == b.place && a.class_id == b.class_id && a.level == b.level && a.versus == b.versus &&
-           a.mission == b.mission;
+           a.mission == b.mission && a.activity == b.activity;
 }
 
 P3Presence p3_presence_read(const uint8_t* rdram) {
@@ -83,5 +107,6 @@ P3Presence p3_presence_read(const uint8_t* rdram) {
         p.versus = p.place == P3Place::Hideout && looksVersus(name);
         if (p.place == P3Place::Mission || p.versus) p.mission = name;
     }
+    p.activity = ownTweet(rdram);
     return p;
 }

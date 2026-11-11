@@ -311,7 +311,7 @@ font:600 1rem system-ui,sans-serif;cursor:pointer}button:disabled{opacity:.6}
 """
 
 # The public beta (no invite codes): what to download and how to start. Bump the zip name with every package.
-DOWNLOAD_URL = "https://descargas.montick.app/patapon3-beta1-u21.zip"
+DOWNLOAD_URL = "https://descargas.montick.app/patapon3-beta1-u23.zip"
 DISCORD_URL = "https://discord.gg/MQTTfEBa"
 
 SIGNUP_PAGE = """<!doctype html><html lang="es"><head><meta charset="utf-8">
@@ -444,6 +444,7 @@ h1{margin:0;font:inherit;display:inline}
 .crew li{display:flex;flex-wrap:wrap;justify-content:space-between;gap:0 12px;min-width:0}
 .who{color:var(--print);font-weight:700;overflow-wrap:anywhere;min-width:0}
 .what{font-variant-numeric:tabular-nums;white-space:nowrap}
+.doing{flex-basis:100%;font-size:.85em;opacity:.75;font-style:italic}
 .what.none{opacity:.72}
 .join{margin-top:9px}
 .join button{font:700 .82rem/1 var(--face);letter-spacing:.08em;text-transform:uppercase;color:#1a1511;background:var(--plate);
@@ -550,6 +551,8 @@ function paintRoom(r,i){
  return row
 }
 const hero=m=>[m.class,m.level?'Nv '+m.level:''].filter(Boolean).join(' · ')||'Sin datos';
+// what a player in an online mission is doing (the game's own status, multi_setTweet)
+const ACT={ready:'Listo',event:'Viendo una escena',tips:'Leyendo consejos',chests:'Abriendo cofres',results:'Viendo resultados',loading:'Cargando'};
 const JOIN_ROUTE='En el juego: Heropuerta → Ir a otro escondite → Modo Infraestructura → ID online específica. Escribe ';
 let joining='';
 function joinButton(r){
@@ -582,7 +585,9 @@ function paintDetail(d,r){
   ul.append(...r.roster.map(m=>{
    const li=document.createElement('li'),who=document.createElement('span'),what=document.createElement('span');
    who.className='who';who.textContent=m.name;what.className='what'+(m.class||m.level?'':' none');what.textContent=hero(m);
-   li.append(who,what);return li}));
+   li.append(who,what);
+   if(ACT[m.activity]){const doing=document.createElement('span');doing.className='doing';doing.textContent=ACT[m.activity];li.append(doing)}
+   return li}));
   parts.push(ul)
  }
  if(r.kind==='coop'&&r.state==='open')parts.push(joinButton(r));
@@ -627,7 +632,7 @@ async function load(){
   const list=$('list');list.replaceChildren(...rooms.map(r=>{const li=document.createElement('li');
    li.textContent=(r.kind==='vs'?'VS de ':'Cuartel de ')+r.owner+', '+r.members+' de '+r.max_slot+', '+
     (STATE[r.state]?STATE[r.state][0].toLowerCase():r.state)+(r.mission_name?', '+r.mission_name:r.kind==='vs'?', arena '+r.mission:'')+
-    (r.kind==='vs'?', nivel '+r.level:'')+((r.roster||[]).length?'. Jugadores: '+r.roster.map(m=>m.name+', '+hero(m)).join('; '):'');return li}));
+    (r.kind==='vs'?', nivel '+r.level:'')+((r.roster||[]).length?'. Jugadores: '+r.roster.map(m=>m.name+', '+hero(m)+(ACT[m.activity]?', '+ACT[m.activity]:'')).join('; '):'');return li}));
   $('live').textContent=j.players+(j.players===1?' jugador':' jugadores')+' en línea, '+rooms.length+
    (rooms.length===1?' sala':' salas')+(vs?', '+vs+' VS en curso':'')+'.';
   $('stamp').className='live';$('stamp').textContent='En vivo · '+clock(j.t);first=false
@@ -816,6 +821,11 @@ def selftest():
         assert st == 200 and "/salas.json" in text and "jugadores" in text, (st, text[:200])
         # lobby_roster: player and mission text comes from clients, so it never goes through innerHTML
         assert "roster" in text and "mission_name" in text and "Sin datos" in text, text[:200]
+        # lobby_activity: each of the game's six statuses has its Spanish label, written with textContent only
+        for label in ("Listo", "Viendo una escena", "Leyendo consejos", "Abriendo cofres", "Viendo resultados",
+                      "Cargando"):
+            assert label in text, label
+        assert "doing.textContent=" in text and "m.activity" in text, "activity label on the roster line"
         # lobby_join: open hideouts offer the id and the real menu route; the page cannot join anyone by itself
         assert "Copiar ID para entrar" in text and "ID online específica" in text, text[:200]
         for line in text.splitlines():

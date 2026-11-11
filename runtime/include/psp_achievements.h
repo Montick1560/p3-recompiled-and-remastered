@@ -51,13 +51,22 @@ struct PspAchChecks {
     std::vector<int64_t> values;     // scratch, one per source fact (sized at compile time)
 };
 
+// A rarity tier from the catalogue's "rarities" table (file order; the first one is the default).
+struct PspAchRarity {
+    std::string key, name_es, name_en;
+    uint32_t rgb;  // 0xRRGGBB
+    int ms;        // toast time, 2000..10000
+};
+
 struct PspAchEntry {
-    std::string id, icon, name_es, name_en;
+    std::string id, icon, name_es, name_en, desc_es, desc_en;
+    std::string rarity;  // always a key of PspAchCatalogue::rarities
     bool hidden = false, has_when = false;
 };
 
 struct PspAchCatalogue {
     std::vector<PspAchEntry> entries;  // every catalogue entry, in file order (index = position)
+    std::vector<PspAchRarity> rarities;  // never empty: one built-in tier when the file has none
     PspAchChecks checks;
     std::vector<std::string> log;      // "[ACH] ..." lines
 };
@@ -70,6 +79,9 @@ int64_t psp_ach_read(const PspFact& f, const uint8_t* rdram, uint32_t base);
 // empty or nested all/any is left out with one log line. At most 255 entries.
 PspAchCatalogue psp_ach_compile(const std::string& json, const PspAchievementSource& src,
                                 const std::vector<std::string>& earned);
+
+// The tier named `key`, or the first tier when there is none by that name.
+const PspAchRarity& psp_ach_rarity(const PspAchCatalogue& c, const std::string& key);
 
 // One check. Grants (writes catalogue indices into granted[0..max), removes them from checks.pending)
 // the achievements whose condition held in this valid check and the previous one. An invalid struct

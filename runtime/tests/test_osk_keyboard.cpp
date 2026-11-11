@@ -4,6 +4,8 @@
 #include "psp_osk_skin.h"
 
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -159,6 +161,34 @@ static void stick_repeat() {
     CHECK(s.update(0.8f, 0.0f, 600) == OskAction::Right, "right");
 }
 
+// The project UI font: the first .ttf by name in <exe>/assets/fonts/, else "".
+static void ui_font_path() {
+    namespace fs = std::filesystem;
+    const fs::path d = fs::temp_directory_path() / "psp_ui_font_test";
+    fs::remove_all(d);
+    CHECK(psp_ui_font_path(d.string()).empty(), "no folder = no font");
+    fs::create_directories(d / "assets" / "fonts");
+    std::ofstream(d / "assets" / "fonts" / "b.ttf") << "x";
+    std::ofstream(d / "assets" / "fonts" / "a.ttf") << "x";
+    std::ofstream(d / "assets" / "fonts" / "0.txt") << "x";
+    CHECK(fs::path(psp_ui_font_path(d.string())) == d / "assets" / "fonts" / "a.ttf", "first .ttf by name");
+    fs::remove_all(d);
+}
+
+// Letters a font lacks are drawn from its own base letter + spacing accent; inverted marks are flipped.
+static void glyph_parts() {
+    GlyphParts g{};
+    CHECK(psp_glyph_parts(0xE1, &g) && g.base == 'a' && g.mark == 0xB4 && !g.flip, "a acute = a + acute");
+    CHECK(psp_glyph_parts(0xC9, &g) && g.base == 'E' && g.mark == 0xB4, "E acute");
+    CHECK(psp_glyph_parts(0xFC, &g) && g.base == 'u' && g.mark == 0xA8, "u diaeresis");
+    CHECK(psp_glyph_parts(0xF1, &g) && g.base == 'n' && g.mark == '~', "n tilde");
+    CHECK(psp_glyph_parts(0xE0, &g) && g.base == 'a' && g.mark == '`', "a grave");
+    CHECK(psp_glyph_parts(0xEA, &g) && g.base == 'e' && g.mark == '^', "e circumflex");
+    CHECK(psp_glyph_parts(0xA1, &g) && g.base == '!' && g.mark == 0 && g.flip, "inverted exclamation");
+    CHECK(psp_glyph_parts(0xBF, &g) && g.base == '?' && g.flip, "inverted question");
+    CHECK(!psp_glyph_parts('a', &g) && !psp_glyph_parts(0x4E00, &g), "plain or unknown: none");
+}
+
 static void skins() {
     OskColor c{};
     CHECK(osk_parse_color("#1A9FFF", &c) && std::fabs(c.b - 1.0f) < 1e-6f && std::fabs(c.a - 1.0f) < 1e-6f, "#RRGGBB");
@@ -187,6 +217,7 @@ int main() {
     pad_b_goes_back();
     stick_repeat();
     skins();
+    ui_font_path();
     std::printf("%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }

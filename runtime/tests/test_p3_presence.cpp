@@ -108,7 +108,42 @@ static void ordinary_battle_is_not_versus() {
     CHECK(!p3_presence_read(r.m.data()).versus, "Batalla contra ... is a normal mission");
 }
 
+// Own multiplayer "tweet" (multi_setTweet): holder +100 -> +0x18C table, own slot from 0x08AB9560 +0x44 -> +0x28,
+// code at table + slot*0x14 + 0x30; stored only while online (holder +0x44 -> +0x24 byte).
+static void online_activity() {
+    Ram r;
+    r.overlay("OL_Mission.bin");
+    r.mission(u"Shooshookle");
+    constexpr uint32_t kOnline = 0x08C10000u, kNet = 0x08C20000u, kTable = 0x08C30000u, kRoster = 0x08C40000u,
+                       kMe = 0x08C50000u;
+    r.w32(kHolder + 0x44, kOnline);
+    r.w8(kOnline + 0x24, 1);
+    r.w32(kHolder + 100, kNet);
+    r.w32(kNet + 0x18C, kTable);
+    r.w32(0x08AB9560u, kRoster);
+    r.w32(kRoster + 0x44, kMe);
+    r.w32(kMe + 0x28, 2);
+    r.w32(kTable + 2 * 0x14 + 0x30, 4);
+    CHECK(p3_presence_read(r.m.data()).activity == 4, "own tweet: opening chests");
+    r.w32(kTable + 2 * 0x14 + 0x30, 0xFFFFFFFFu);
+    CHECK(p3_presence_read(r.m.data()).activity == 0, "no tweet yet (-1)");
+    r.w32(kTable + 2 * 0x14 + 0x30, 9);
+    CHECK(p3_presence_read(r.m.data()).activity == 0, "unknown code");
+    r.w32(kTable + 2 * 0x14 + 0x30, 3);
+    r.w8(kOnline + 0x24, 0);
+    CHECK(p3_presence_read(r.m.data()).activity == 0, "offline keeps a stale code");
+    r.w8(kOnline + 0x24, 1);
+    r.w32(kMe + 0x28, 8);
+    CHECK(p3_presence_read(r.m.data()).activity == 0, "slot out of the table");
+    r.w32(kMe + 0x28, 2);
+    r.w32(kNet + 0x18C, 0x12345678u);
+    CHECK(p3_presence_read(r.m.data()).activity == 0, "broken table pointer");
+    r.w32(kNet + 0x18C, kTable);
+    CHECK(p3_presence_read(r.m.data()).activity == 3, "tips");
+}
+
 int main() {
+    online_activity();
     title_screen_without_save();
     hideout_with_hero();
     mission_name();

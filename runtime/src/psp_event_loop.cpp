@@ -15,8 +15,10 @@
 #include "psp_menu_prompt.h"
 #include "psp_exit.h"
 #include "psp_perf.h"
+#include "psp_achievements_run.h"
 #include "psp_toast.h"
 #include "psp_hw_info.h"
+#include "net/link_stats.h"
 #include "psp_gl_api.h"
 #include "psp_window_mode.h"
 #include "psp_window_title.h"
@@ -450,6 +452,8 @@ static void handle_sdl_event(const SDL_Event& ev) {
         mark_hitch();
         return;
     }
+    // F7 (PSPRECOMP_ACH_PREVIEW=1): the next achievement card preview.
+    if (ev.type == SDL_KEYDOWN && !ev.key.repeat && ev.key.keysym.sym == SDLK_F7 && psp_achievements_preview()) return;
     if (handle_menu_prompt_event(ev)) return;
     if (handle_osk_event(ev)) return;
     if (handle_controller_event(ev)) return;
@@ -537,7 +541,9 @@ int psp_runtime_init_sdl() {
         return 1;
     }
     // GPUs before any GL call: a PC whose context fails still says what it has (exit 14 below).
-    std::fprintf(stderr, "%s\n", psp_gpu_format(psp_gpu_adapters()).c_str());
+    const std::vector<PspGpuAdapter> adapters = psp_gpu_adapters();
+    std::fprintf(stderr, "%s\n", psp_gpu_format(adapters).c_str());
+    infra::set_pc_profile(present_render_scale(std::getenv("PSPRECOMP_RENDER_SCALE")), psp_gpu_class(adapters));
     std::fflush(stderr);
     // 1b. Game controllers are optional: keyboard-only when unavailable.
     //     Already-connected pads arrive as SDL_CONTROLLERDEVICEADDED events.
@@ -582,6 +588,10 @@ int psp_runtime_init_sdl() {
     // 6. Print GL info for diagnostics, and the hardware line problem reports rely on
     std::fprintf(stderr, "[RT] GL: %s\n",
         glGetString(GL_VERSION));
+    // [display] vsync: on/off force the swap interval; auto keeps the driver's (the vblank clock paces either way).
+    if (const char* v = std::getenv("PSPRECOMP_VSYNC"); v && (!std::strcmp(v, "on") || !std::strcmp(v, "off")))
+        SDL_GL_SetSwapInterval(!std::strcmp(v, "on") ? 1 : 0);
+    std::fprintf(stderr, "[RT] swap interval: %d\n", SDL_GL_GetSwapInterval());
     {
         PspHwInfo hw;
         psp_hw_fill_system(&hw);

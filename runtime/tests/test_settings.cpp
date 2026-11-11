@@ -228,6 +228,18 @@ static void window_mode_key() {
     CHECK(!logged(r, "unknown key"), "window_mode is a known key");
 }
 
+// display.vsync -> PSPRECOMP_VSYNC (auto | on | off): auto leaves the driver's swap interval; invalid is auto.
+static void vsync_key() {
+    auto r = psp_settings_resolve("", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_VSYNC") == "auto", "vsync absent -> auto");
+    r = psp_settings_resolve("[display]\nvsync = off\n", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_VSYNC") == "off", "vsync off");
+    r = psp_settings_resolve("[display]\nvsync = on\n", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_VSYNC") == "on", "vsync on");
+    r = psp_settings_resolve("[display]\nvsync = adaptive\n", "", "C:/P", kNoEnv);
+    CHECK(val(r, "PSPRECOMP_VSYNC") == "auto" && logged(r, "display.vsync"), "invalid vsync -> auto, logged");
+}
+
 // display.renderer -> PSPRECOMP_GL_API (auto | desktop | es, psp_gl_api.h); absent or invalid is auto.
 static void renderer_key() {
     SettingsResolution r = psp_settings_resolve("", "", "C:/P", kNoEnv);
@@ -285,6 +297,7 @@ static void discord_key() {
 int main() {
     window_mode_key();
     renderer_key();
+    vsync_key();
     direct_key();
     discord_key();
     parser_rules();

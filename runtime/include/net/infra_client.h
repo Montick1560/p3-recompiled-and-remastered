@@ -220,6 +220,7 @@ private:
     LinkStats link_;
     std::multiset<int64_t> pings_out_;  // send times (now_ms) of the unanswered pings
     std::atomic<bool> link_refused_{false};
+    std::atomic<bool> pace_refused_{false};  // the server has no frame_pace op
     std::string session_, online_id_;
     std::string last_lost_;  // why the last connection was lost, until a login has told the server
     std::set<int64_t> rooms_;  // joined rooms (hideout + VS), for the room_destroyed synthesised on loss

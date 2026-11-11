@@ -1,0 +1,2 @@
+p4kakupop-pro.ttf - the project font (achievement cards, toasts, button bar and on-screen keyboard).
+Credit: RintanCasi🌸. Used in this project with permission.

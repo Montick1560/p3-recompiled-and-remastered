@@ -9,7 +9,8 @@ Official and fixed: the project defines it, every player has the same list. The 
 
 ```
 { "version": 1, "draft"?: true,
-  "achievements": [ { "id": "<[a-z0-9_]{1,64}>", "icon": "<emoji>", "hidden": bool,
+  "rarities"?: { "<key>": { "color": "#RRGGBB", "ms": int, "name": {"es", "en"} }, ... },
+  "achievements": [ { "id": "<[a-z0-9_]{1,64}>", "icon": "<emoji>", "hidden": bool, "rarity"?: "<key>",
                       "name": {"es", "en"}, "desc": {"es", "en"},
                       "when"?: { "fact", "op": ">=" | "==" | "!=", "value" } | {"all": [...]} | {"any": [...]} } ] }
 ```
@@ -22,6 +23,12 @@ Official and fixed: the project defines it, every player has the same list. The 
   never reused.
 - Optional top-level `"credits": {"es", "en"}`: one line the launcher shows at the bottom of Logros (for the
   sources a catalogue owes ideas to). The game ignores it.
+- `rarities` lists the tiers in order, lowest first; the first tier is the default. A tier whose `color` is not
+  `#RRGGBB` is left out (one `[ACH]` log line); `ms` (unlock toast time) is clamped to 2000..10000. No table =
+  one built-in tier `comun` ("Común"/"Common", `#231815`, 4000 ms).
+- A missing `rarity`, or one the table does not list, is the first tier.
+- Images: `assets/achievements/<id>.jpg` next to the catalogue, 512×512 JPEG (made from the artist's PNG by
+  `games/patapon3/scripts/achievement_images.py`); `assets/achievements/_default.jpg` stands in for an id without one.
 - Readers ignore unknown keys. Another `version` = no catalogue.
 
 ## Earned — `<portable root>/achievements/unlocked.json`

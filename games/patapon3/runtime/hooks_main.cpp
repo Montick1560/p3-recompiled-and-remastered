@@ -35,6 +35,7 @@
 #include "psp_frame_latch.h"
 #include "psp_frame_wait.h"
 #include "psp_game_module.h"
+#include "net/link_stats.h"
 #include "psp_ge_list_blend.h"
 #include "psp_half_ahead.h"
 #include "psp_half_step_tail.h"
@@ -1628,6 +1629,7 @@ void patapon3_register_hooks(uint8_t* /*rdram*/) {
         std::fprintf(stderr, "[P3] 60fps: army retreat halved, each march gets its 30 fps last half step\n");
     }
     if (g_march_trace) std::fprintf(stderr, "[MARCH] tracing the army position step (FUN_088FA9D0)\n");
+    infra::set_fps_target(psp_patch_set_active("60fps") ? 60 : 30);  // frame_pace: the rate the player asked for
     if (psp_patch_set_active("60fps")) {
         g_input_update = RECOMP_LOOKUP(kInputUpdate);
         psp_dispatch_register(kInputUpdate, input_update_30hz);

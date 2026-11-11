@@ -83,6 +83,29 @@ int main() {
         CHECK(ints, "all nine present and integers");
         CHECK(j["pings"] == 1 && j["rtt_p50"] == 40 && j["max_rx_gap_ms"] == 120, "values carried");
     }
+    {   // frame pace: frames of 20 ms or more missed 60 fps, of 40 ms or more missed 30 fps; reset clears them
+        infra::LinkStats l;
+        l.reset();
+        int64_t t = 7000000;
+        infra::frame_presented(t);
+        for (int ms : {16, 19, 20, 39, 40, 100}) infra::frame_presented(t += ms * 1000);
+        infra::FramePace p = infra::frame_pace();
+        CHECK(p.frames_over_20 == 4 && p.frames_over_40 == 2, "20/39/40/100 miss 60 fps; 40/100 miss 30 fps");
+        CHECK(l.summary().slow_frames == 1, "only 100 ms is slow");
+        infra::set_pc_profile(2, infra::kGpuIntegrated);
+        infra::set_fps_target(60);
+        p = infra::frame_pace();
+        CHECK(p.fps_target == 60 && p.render_scale == 2 && p.gpu_class == infra::kGpuIntegrated, "profile carried");
+        const nlohmann::json j = infra::to_json(p);
+        bool ints = j.is_object() && j.size() == 5;
+        for (const char* k : {"frames_over_20", "frames_over_40", "fps_target", "render_scale", "gpu_class"})
+            ints &= j.contains(k) && j[k].is_number_integer();
+        CHECK(ints, "frame_pace body: five integer keys");
+        l.reset();
+        p = infra::frame_pace();
+        CHECK(p.frames_over_20 == 0 && p.frames_over_40 == 0, "reset clears the pace counts");
+        CHECK(p.fps_target == 60 && p.gpu_class == infra::kGpuIntegrated, "reset keeps the PC profile");
+    }
     if (failures) {
         std::printf("%d failure(s)\n", failures);
         return 1;

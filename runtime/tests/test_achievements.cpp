@@ -195,6 +195,52 @@ static void budget() {
     CHECK(us < 20.0, "a check stays under 20 us");
 }
 
+static const char* kTiers = R"("rarities":{
+  "comun":{"color":"#231815","ms":4000,"name":{"es":"Común","en":"Common"}},
+  "raro":{"color":"#7E3FC7","ms":4000,"name":{"es":"Raro","en":"Rare"}},
+  "especial":{"color":"#E5601E","ms":4500,"name":{"es":"Especial","en":"Special"}},
+  "epico":{"color":"#B0177E","ms":5000,"name":{"es":"Épico","en":"Epic"}},
+  "legendario":{"color":"#4E9A2B","ms":6000,"name":{"es":"Legendario","en":"Legendary"}}},)";
+
+static void rarity_parsed() {
+    const std::string cat = std::string(R"({"version":1,)") + kTiers +
+        R"("achievements":[{"id":"e","rarity":"epico","name":{"es":"E","en":"E"},"desc":{"es":"Haz algo.","en":"Do it."}}]})";
+    PspAchCatalogue c = psp_ach_compile(cat, kSrc, {});
+    CHECK(c.rarities.size() == 5, "five tiers");
+    CHECK(c.rarities[4].key == "legendario" && c.rarities[4].rgb == 0x4E9A2Bu && c.rarities[4].ms == 6000, "tier 5");
+    CHECK(c.rarities[3].name_es == "Épico" && c.rarities[3].name_en == "Epic", "tier names");
+    CHECK(c.entries[0].rarity == "epico", "entry rarity");
+    CHECK(c.entries[0].desc_es == "Haz algo." && c.entries[0].desc_en == "Do it.", "descriptions");
+    CHECK(&psp_ach_rarity(c, "especial") == &c.rarities[2], "lookup by key");
+}
+
+static void rarity_unknown_is_first() {
+    const std::string cat = std::string(R"({"version":1,)") + kTiers +
+        R"("achievements":[{"id":"m","rarity":"mitico"},{"id":"n"}]})";
+    PspAchCatalogue c = psp_ach_compile(cat, kSrc, {});
+    CHECK(c.entries[0].rarity == "comun" && c.entries[1].rarity == "comun", "unknown or missing = first tier");
+    CHECK(psp_ach_rarity(c, "mitico").key == "comun", "lookup falls back to the first tier");
+}
+
+static void no_rarities_table() {
+    PspAchCatalogue c = psp_ach_compile(R"({"version":1,"achievements":[{"id":"x","rarity":"epico"}]})", kSrc, {});
+    CHECK(c.rarities.size() == 1 && c.rarities[0].key == "comun" && c.rarities[0].rgb == 0x231815u &&
+          c.rarities[0].ms == 4000 && c.rarities[0].name_es == "Común", "built-in Común tier");
+    CHECK(psp_ach_rarity(c, "epico").key == "comun" && c.entries[0].rarity == "comun", "everything is Común");
+}
+
+static void bad_colour() {
+    PspAchCatalogue c = psp_ach_compile(R"({"version":1,"rarities":{
+        "comun":{"color":"#231815","ms":1,"name":{"es":"Común","en":"Common"}},
+        "raro":{"color":"red","ms":4000,"name":{"es":"Raro","en":"Rare"}}},
+        "achievements":[{"id":"x","rarity":"raro"}]})", kSrc, {});
+    CHECK(c.rarities.size() == 1, "bad colour tier dropped");
+    CHECK(c.rarities[0].ms == 2000, "ms clamped to 2000..10000");
+    CHECK(std::count_if(c.log.begin(), c.log.end(), [](const std::string& l) { return l.find("[ACH] rarity raro") == 0; }) == 1,
+          "dropped tier logged once");
+    CHECK(c.entries[0].rarity == "comun", "entry of a dropped tier = first tier");
+}
+
 int main() {
     reads();
     compile_rules();
@@ -203,6 +249,10 @@ int main() {
     shrinking_and_max();
     ring();
     budget();
+    rarity_parsed();
+    rarity_unknown_is_first();
+    no_rarities_table();
+    bad_colour();
     if (failures == 0) std::printf("test_achievements: all passed\n");
     return failures == 0 ? 0 : 1;
 }

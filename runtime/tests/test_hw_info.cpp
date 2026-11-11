@@ -71,6 +71,18 @@ static void gpu_one_line() {
     CHECK(s == "[RT] gpu adapters: Radeon (TM) Graphics (driver 1.2.3.4, 512 MB, D3D 10_0)", s.c_str());
 }
 
+// The PC class sent with frame_pace: the launcher's rule (gpu.rs scale_for): a hardware adapter with 2 GB of its
+// own memory is dedicated; other hardware is integrated; only software adapters -> software; none -> unknown.
+static void gpu_class_of_pc() {
+    CHECK(psp_gpu_class({}) == 0, "no adapters -> unknown");
+    CHECK(psp_gpu_class({{"Microsoft Basic Render Driver", "", 0, "", true}}) == 3, "software only");
+    CHECK(psp_gpu_class({{"Intel HD 4000", "", 128, "11_0", false}, {"Microsoft Basic Render Driver", "", 0, "", true}})
+              == 1, "integrated beside the software adapter");
+    CHECK(psp_gpu_class({{"Intel UHD", "", 128, "12_1", false}, {"GeForce MX130", "", 2048, "12_1", false}}) == 2,
+          "a 2 GB card makes it dedicated");
+    CHECK(psp_gpu_class({{"Radeon Vega", "", 1024, "12_1", false}}) == 1, "1 GB of carve-out is integrated");
+}
+
 int main() {
     formats_every_field();
     unknown_fields_say_so();
@@ -80,6 +92,7 @@ int main() {
     gpu_unknowns_and_software();
     gpu_none();
     gpu_one_line();
+    gpu_class_of_pc();
     if (failures) {
         std::printf("%d failure(s)\n", failures);
         return 1;
