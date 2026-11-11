@@ -37,7 +37,9 @@ def name(off):
 for line in open(log, encoding='utf-8', errors='replace'):
     if line.startswith('[BT]'):
         tag, _, frames = line.partition(':')
-        names = [name(int(f[1:], 16)) for f in frames.split()]
+        # "+off" (image-relative) or, on [BT] fault lines, "exe+0xoff" / "<dll>+0xoff" / "?" (other modules kept as is).
+        names = [name(int(f[1:], 16)) if f.startswith('+') else name(int(f[6:], 16)) if f.startswith('exe+0x') else f
+                 for f in frames.split()]
         print(tag, ' <- '.join(names))
     elif line.startswith('[OVL-ARGS-IN]') or line.startswith('[FUNC-WATCH]'):
         print(line.split(' path:')[0].split('; this')[0].rstrip())

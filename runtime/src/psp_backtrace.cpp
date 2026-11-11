@@ -48,6 +48,41 @@ void psp_module_of(uintptr_t addr, char* out, size_t size) {
 #endif
 }
 
+// The faulting thread's frames for the crash filter ([BT] fault): its own RtlCaptureStackBackTrace only shows the
+// filter and the exception dispatcher. Unwinds a copy of the faulting context; a frame without unwind data (a jump to
+// address 0, a bad pointer) pops the return address a call left at Rsp. Reads only inside this thread's stack, no heap.
+void psp_fault_frames(const void* context, char* out, size_t size) {
+    if (size) out[0] = '\0';
+#ifdef _WIN32
+    CONTEXT c = *static_cast<const CONTEXT*>(context);
+    // The committed part of this thread's stack: always readable, unlike the reserved pages below StackLimit.
+    const NT_TIB* tib = reinterpret_cast<const NT_TIB*>(NtCurrentTeb());
+    const DWORD64 lo = reinterpret_cast<DWORD64>(tib->StackLimit), hi = reinterpret_cast<DWORD64>(tib->StackBase);
+    const auto on_stack = [&](DWORD64 sp) { return sp >= lo && sp + 8 <= hi; };
+    size_t used = 0;
+    for (int i = 0; i < 16; i++) {
+        char name[MAX_PATH + 32];
+        psp_module_of(static_cast<uintptr_t>(c.Rip), name, sizeof name);
+        const int n = std::snprintf(out + used, size - used, "%s%s", i ? " " : "", name);
+        if (n < 0 || used + static_cast<size_t>(n) >= size) break;
+        used += static_cast<size_t>(n);
+        if (!on_stack(c.Rsp)) break;
+        DWORD64 image = 0;
+        if (RUNTIME_FUNCTION* f = RtlLookupFunctionEntry(c.Rip, &image, nullptr)) {
+            void* handler_data = nullptr;
+            DWORD64 frame = 0;
+            RtlVirtualUnwind(UNW_FLAG_NHANDLER, image, c.Rip, f, &c, &handler_data, &frame, nullptr);
+        } else {
+            c.Rip = *reinterpret_cast<const DWORD64*>(c.Rsp);
+            c.Rsp += 8;
+        }
+        if (c.Rip == 0 || !on_stack(c.Rsp)) break;
+    }
+#else
+    (void)context;
+#endif
+}
+
 // Store watch (recomp.h MEM_W_WRITE): PSPRECOMP_STORE_WATCH=<hex value>.
 #include <atomic>
 #include <cstdlib>

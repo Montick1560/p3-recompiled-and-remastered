@@ -58,6 +58,7 @@
 #define RECOMP_BOOT_PATH "disc0:/PSP_GAME/SYSDIR/BOOT.BIN"
 #endif
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cstdio>
@@ -79,12 +80,16 @@ extern thread_local uint32_t g_last_func_addr;
 #ifdef _WIN32
 void psp_module_of(uintptr_t addr, char* out, size_t size);  // psp_backtrace.cpp
 void psp_print_host_backtrace(const char* tag);              // psp_backtrace.cpp
+void psp_fault_frames(const void* context, char* out, size_t size);  // psp_backtrace.cpp
 
 // Last-chance crash report: one grep-stable line with the exception, its
 // address as an offset into the executable (symbolize with
 // `llvm-addr2line -f -e psprecomp_runtime.exe 0x140000000+offset` or nm),
 // and the last guest function this thread dispatched.
 static LONG WINAPI psp_crash_filter(EXCEPTION_POINTERS* ep) {
+    // Once only: a fault inside this filter must not print a second [CRASH] line (the launcher reads the last one).
+    static std::atomic<bool> entered{false};
+    if (entered.exchange(true)) return EXCEPTION_CONTINUE_SEARCH;
     const EXCEPTION_RECORD* er = ep->ExceptionRecord;
     const uintptr_t addr = reinterpret_cast<uintptr_t>(er->ExceptionAddress);
     const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
@@ -101,7 +106,15 @@ static LONG WINAPI psp_crash_filter(EXCEPTION_POINTERS* ep) {
                      ? static_cast<unsigned long long>(er->ExceptionInformation[1]) : 0ull,
                  g_last_func_addr, GetCurrentThreadId());
     psp_print_host_backtrace("crash");
-    std::fflush(stderr);
+    std::fflush(stderr);  // both lines survive even if the unwind below faults
+    // Riskiest step last: the unwind reads the faulting stack. Static buffer, and skipped after a stack overflow: the
+    // filter then runs on the guard region and must not need more stack.
+    if (er->ExceptionCode != EXCEPTION_STACK_OVERFLOW) {
+        static char frames[1024];
+        psp_fault_frames(ep->ContextRecord, frames, sizeof frames);
+        std::fprintf(stderr, "[BT] fault: %s\n", frames);
+        std::fflush(stderr);
+    }
     return EXCEPTION_CONTINUE_SEARCH;
 }
 #endif

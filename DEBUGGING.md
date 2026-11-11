@@ -380,6 +380,11 @@ Windows only: `RtlCaptureStackBackTrace` (skip 1, up to 48 frames), offsets
 relative to `GetModuleHandleW(nullptr)`. On other hosts the function is a
 no-op.
 
+On a crash the filter in `main.cpp` also prints `[BT] fault: <module>+0x<offset> ...`: the
+*faulting* thread's frames (`psp_fault_frames`), unwound from the exception context, up to 16,
+each named by module (`exe+0x...`, `ntdll.dll+0x...`, `?` for no module). A jump to address 0
+shows `? exe+0x...`: the second frame is the caller. `[BT] crash:` is the filter's own stack.
+
 `tools/bt.py` symbolizes those lines with `llvm-nm -C`. It subtracts the PE
 image base `0x140000000` from each `t`/`T` symbol and maps a frame to the
 nearest symbol at or below that offset (`FUN_xxxxxxxx`,
